@@ -72,8 +72,8 @@ CREATE TABLE digital_library_usage (
     student_id       INTEGER NOT NULL,
     date             DATE NOT NULL,
 
-    in_time          TEXT NOT NULL,      -- HH:MM (24-hour)
-    out_time         TEXT NOT NULL,
+    in_time          TEXT ,      -- HH:MM (24-hour)
+    out_time         TEXT ,
 
     duration_minutes INTEGER GENERATED ALWAYS AS (
         CAST(ROUND(
