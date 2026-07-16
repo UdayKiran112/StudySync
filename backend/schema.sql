@@ -14,15 +14,15 @@ CREATE TABLE students (
     join_date       DATE NOT NULL,
     photo_path      TEXT,
     status          TEXT DEFAULT 'Active' CHECK(status IN ('Active', 'Inactive')),
-    created_at TIMESTAMP DEFAULT (datetime('now','localtime')),
-    updated_at TIMESTAMP DEFAULT (datetime('now','localtime'))
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TRIGGER trg_students_updated_at
 AFTER UPDATE ON students
 FOR EACH ROW
 BEGIN
-    UPDATE students SET updated_at = datetime('now','localtime') WHERE student_id = OLD.student_id;
+    UPDATE students SET updated_at = CURRENT_TIMESTAMP WHERE student_id = OLD.student_id;
 END;
 
 -- ===================================
@@ -210,7 +210,7 @@ CREATE INDEX idx_quiz_scores_quiz_id ON quiz_scores(quiz_id);
 -- ===================================
 CREATE TABLE sync_log (
     sync_id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    synced_at       TIMESTAMP DEFAULT (datetime('now','localtime')),
+    synced_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status          TEXT CHECK(status IN ('Success', 'Failed', 'Partial')),
     details         TEXT
 );
