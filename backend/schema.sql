@@ -162,10 +162,10 @@ ON digital_library_usage(student_id) WHERE out_time IS NULL;
 -- ===================================
 CREATE TABLE exams (
     exam_id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    exam_name       TEXT NOT NULL,
+    exam_name       TEXT NOT NULL CHECK(length(trim(exam_name)) > 0),
     exam_date       DATE,
     subject         TEXT,
-    max_marks       REAL NOT NULL
+    max_marks       REAL NOT NULL CHECK(max_marks > 0)
 );
 
 CREATE INDEX idx_exams_exam_date ON exams(exam_date);
@@ -174,7 +174,7 @@ CREATE TABLE exam_marks (
     mark_id         INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id      INTEGER NOT NULL,
     exam_id         INTEGER NOT NULL,
-    marks_obtained  REAL NOT NULL,
+    marks_obtained  REAL NOT NULL CHECK(marks_obtained >= 0),
     remarks         TEXT,
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
     FOREIGN KEY (exam_id) REFERENCES exams(exam_id) ON DELETE RESTRICT,

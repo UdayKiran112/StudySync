@@ -29,6 +29,7 @@ from routers import (
     subscriptions,
     offline_library,
     books,
+    exams,
 )
 
 @asynccontextmanager
@@ -68,6 +69,8 @@ app.include_router(digital_library.router)
 app.include_router(subscriptions.router)
 app.include_router(offline_library.router)
 app.include_router(books.router)
+app.include_router(exams.router)
+app.include_router(exams.marks_router)
 
 
 @app.get("/", tags=["Health"])
