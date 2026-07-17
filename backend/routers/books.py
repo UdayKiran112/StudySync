@@ -94,6 +94,12 @@ def update_book(
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided to update")
 
+    # `title` is nullable in the PATCH model so it can be omitted, but the
+    # database column is NOT NULL. Reject an explicit null before SQLite
+    # raises an unhandled integrity error.
+    if "title" in updates and updates["title"] is None:
+        raise HTTPException(status_code=422, detail="title cannot be null")
+
     set_clause = ", ".join(f"{field} = ?" for field in updates.keys())
     values = list(updates.values()) + [book_id]
 
