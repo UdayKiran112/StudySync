@@ -24,6 +24,7 @@ from routers import (
     digital_library,
     subscriptions,
     offline_library,
+    books,
 )
 
 app = FastAPI(
@@ -50,6 +51,7 @@ app.include_router(attendance.router)
 app.include_router(digital_library.router)
 app.include_router(subscriptions.router)
 app.include_router(offline_library.router)
+app.include_router(books.router)
 
 
 @app.get("/", tags=["Health"])
