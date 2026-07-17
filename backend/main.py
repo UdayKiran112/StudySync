@@ -18,7 +18,7 @@ and test every endpoint directly from the browser.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import students, attendance
+from routers import students, attendance, digital_library
 
 app = FastAPI(
     title="Library & Study Centre Management API",
@@ -41,6 +41,7 @@ app.add_middleware(
 # added here as it's built.
 app.include_router(students.router)
 app.include_router(attendance.router)
+app.include_router(digital_library.router)
 
 
 @app.get("/", tags=["Health"])
