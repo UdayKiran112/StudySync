@@ -189,10 +189,10 @@ CREATE INDEX idx_exam_marks_exam_id ON exam_marks(exam_id);
 -- ===================================
 CREATE TABLE quizzes (
     quiz_id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    quiz_name       TEXT NOT NULL,
+    quiz_name       TEXT NOT NULL CHECK(length(trim(quiz_name)) > 0),
     quiz_date       DATE,
     subject         TEXT,
-    max_marks       REAL NOT NULL
+    max_marks       REAL NOT NULL CHECK(max_marks > 0)
 );
 
 CREATE INDEX idx_quizzes_quiz_date ON quizzes(quiz_date);
@@ -201,7 +201,7 @@ CREATE TABLE quiz_scores (
     score_id        INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id      INTEGER NOT NULL,
     quiz_id         INTEGER NOT NULL,
-    score           REAL NOT NULL,
+    score           REAL NOT NULL CHECK(score >= 0),
     remarks         TEXT,
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
     FOREIGN KEY (quiz_id) REFERENCES quizzes(quiz_id) ON DELETE RESTRICT,
