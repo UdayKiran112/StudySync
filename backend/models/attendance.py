@@ -12,12 +12,14 @@ never accepted on input — it's computed by the database and only ever
 appears in responses.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Literal
 from datetime import date as date_type
+from models.common import RequestModel
+from models.validators import validate_hhmm
 
 
-class AttendanceCheckIn(BaseModel):
+class AttendanceCheckIn(RequestModel):
     """
     Data required to check a student in.
 
@@ -35,8 +37,13 @@ class AttendanceCheckIn(BaseModel):
         None, description="HH:MM 24-hour. Defaults to current server time."
     )
 
+    @field_validator("check_in")
+    @classmethod
+    def validate_check_in(cls, value: Optional[str]) -> Optional[str]:
+        return validate_hhmm(value)
 
-class AttendanceCheckOut(BaseModel):
+
+class AttendanceCheckOut(RequestModel):
     """
     Data required to check a student out.
 
@@ -51,6 +58,11 @@ class AttendanceCheckOut(BaseModel):
     check_out: Optional[str] = Field(
         None, description="HH:MM 24-hour. Defaults to current server time."
     )
+
+    @field_validator("check_out")
+    @classmethod
+    def validate_check_out(cls, value: Optional[str]) -> Optional[str]:
+        return validate_hhmm(value)
 
 
 class AttendanceResponse(BaseModel):

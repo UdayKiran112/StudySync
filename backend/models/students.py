@@ -9,13 +9,14 @@ generate the /docs page.
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
 from datetime import date, datetime
+from models.common import RequestModel
 
 
-class StudentCreate(BaseModel):
+class StudentCreate(RequestModel):
     """Shape of data required to create a new student."""
 
     student_id: int = Field(..., description="Unique student ID, e.g. 4351")
-    name: str
+    name: str = Field(..., min_length=1)
     gender: Optional[Literal["Male", "Female", "Other"]] = None
     date_of_birth: Optional[date] = None
     phone: Optional[str] = None
@@ -26,13 +27,13 @@ class StudentCreate(BaseModel):
     status: Literal["Active", "Inactive"] = "Active"
 
 
-class StudentUpdate(BaseModel):
+class StudentUpdate(RequestModel):
     """
     Shape of data for updating a student. All fields optional since an
     update might only change one or two fields (e.g. just status).
     """
 
-    name: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1)
     gender: Optional[Literal["Male", "Female", "Other"]] = None
     date_of_birth: Optional[date] = None
     phone: Optional[str] = None

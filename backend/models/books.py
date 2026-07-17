@@ -13,11 +13,12 @@ subscription_id.
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import date as date_type
+from models.common import RequestModel
 
 
-class BookCreate(BaseModel):
-    book_id: str = Field(..., description="Staff-assigned code, e.g. '1556' or 'P247'")
-    title: str
+class BookCreate(RequestModel):
+    book_id: str = Field(..., min_length=1, description="Staff-assigned code, e.g. '1556' or 'P247'")
+    title: str = Field(..., min_length=1)
     category: Optional[str] = Field(
         None, description="e.g. 'Polity', 'Arithmetic', 'S&T'"
     )
@@ -25,10 +26,10 @@ class BookCreate(BaseModel):
     added_date: Optional[date_type] = None
 
 
-class BookUpdate(BaseModel):
+class BookUpdate(RequestModel):
     """All fields optional — only supplied fields are changed."""
 
-    title: Optional[str] = None
+    title: Optional[str] = Field(None, min_length=1)
     category: Optional[str] = None
     author: Optional[str] = None
     added_date: Optional[date_type] = None

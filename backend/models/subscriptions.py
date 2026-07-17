@@ -12,11 +12,12 @@ matches the schema's plain TEXT PRIMARY KEY with no sequence.
 
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
+from models.common import RequestModel
 
 
-class SubscriptionCreate(BaseModel):
-    subscription_id: str = Field(..., description="Staff-assigned code, e.g. 'SUB001'")
-    name: str = Field(..., description="e.g. 'JSTOR', 'Sreedhar CCE'")
+class SubscriptionCreate(RequestModel):
+    subscription_id: str = Field(..., min_length=1, description="Staff-assigned code, e.g. 'SUB001'")
+    name: str = Field(..., min_length=1, description="e.g. 'JSTOR', 'Sreedhar CCE'")
     type: Optional[str] = Field(
         None, description="e.g. 'Online Learning', 'Video Platform'"
     )
@@ -25,7 +26,7 @@ class SubscriptionCreate(BaseModel):
     status: Literal["Active", "Expired"] = "Active"
 
 
-class SubscriptionUpdate(BaseModel):
+class SubscriptionUpdate(RequestModel):
     """All fields optional — only supplied fields are changed."""
 
     name: Optional[str] = Field(default=None, min_length=1)

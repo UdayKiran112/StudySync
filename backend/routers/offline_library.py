@@ -16,7 +16,7 @@ sqlite3.IntegrityError from the FK constraint.
 
 import sqlite3
 from datetime import date
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 
 from database import get_db_dependency
@@ -25,16 +25,23 @@ from models.offline_library import (
     OfflineLibraryUpdate,
     OfflineLibraryResponse,
 )
+from security import require_api_key
 
-router = APIRouter(prefix="/api/offline-library", tags=["Offline Library"])
+router = APIRouter(
+    prefix="/api/offline-library",
+    tags=["Offline Library"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 def _ensure_student_exists(db: sqlite3.Connection, student_id: int) -> None:
     row = db.execute(
-        "SELECT student_id FROM students WHERE student_id = ?", (student_id,)
+        "SELECT student_id, status FROM students WHERE student_id = ?", (student_id,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
+    if row["status"] != "Active":
+        raise HTTPException(status_code=400, detail=f"Student {student_id} is inactive")
 
 
 def _ensure_book_exists(db: sqlite3.Connection, book_id: str) -> None:
@@ -83,6 +90,8 @@ def list_offline_usage(
     student_id: Optional[int] = None,
     date_: Optional[date] = None,
     book_id: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     """List offline library usage records, optionally filtered by student, date, book."""
@@ -101,7 +110,8 @@ def list_offline_usage(
         query += " AND book_id = ?"
         params.append(book_id)
 
-    query += " ORDER BY date DESC, usage_id DESC"
+    query += " ORDER BY date DESC, usage_id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
 
     rows = db.execute(query, params).fetchall()
     return [dict(row) for row in rows]
@@ -144,6 +154,8 @@ def update_offline_usage(
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided to update")
+    if "date" in updates and updates["date"] is None:
+        raise HTTPException(status_code=422, detail="date cannot be null")
 
     if "book_id" in updates and updates["book_id"] is not None:
         _ensure_book_exists(db, updates["book_id"])

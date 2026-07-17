@@ -20,13 +20,18 @@ re-implementing them in Python:
 
 import sqlite3
 from datetime import date, datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 
 from database import get_db_dependency
 from models.attendance import AttendanceCheckIn, AttendanceCheckOut, AttendanceResponse
+from security import require_api_key
 
-router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
+router = APIRouter(
+    prefix="/api/attendance",
+    tags=["Attendance"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 def _current_time_hhmm() -> str:
@@ -36,10 +41,12 @@ def _current_time_hhmm() -> str:
 
 def _ensure_student_exists(db: sqlite3.Connection, student_id: int) -> None:
     row = db.execute(
-        "SELECT student_id FROM students WHERE student_id = ?", (student_id,)
+        "SELECT student_id, status FROM students WHERE student_id = ?", (student_id,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
+    if row["status"] != "Active":
+        raise HTTPException(status_code=400, detail=f"Student {student_id} is inactive")
 
 
 def _find_open_session(
@@ -181,6 +188,8 @@ def list_attendance(
     student_id: Optional[int] = None,
     date_: Optional[date] = None,
     session: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     """List attendance records, optionally filtered by student, date, session."""
@@ -199,7 +208,8 @@ def list_attendance(
         query += " AND session = ?"
         params.append(session)
 
-    query += " ORDER BY date DESC, check_in"
+    query += " ORDER BY date DESC, check_in LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
 
     rows = db.execute(query, params).fetchall()
     return [dict(row) for row in rows]

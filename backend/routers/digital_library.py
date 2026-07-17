@@ -18,7 +18,7 @@ Subscription validation, per your answer: for account_type =
 
 import sqlite3
 from datetime import date, datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 
 from database import get_db_dependency
@@ -27,8 +27,13 @@ from models.digital_library import (
     DigitalLibraryCheckOut,
     DigitalLibraryResponse,
 )
+from security import require_api_key
 
-router = APIRouter(prefix="/api/digital-library", tags=["Digital Library"])
+router = APIRouter(
+    prefix="/api/digital-library",
+    tags=["Digital Library"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 def _current_time_hhmm() -> str:
@@ -38,10 +43,12 @@ def _current_time_hhmm() -> str:
 
 def _ensure_student_exists(db: sqlite3.Connection, student_id: int) -> None:
     row = db.execute(
-        "SELECT student_id FROM students WHERE student_id = ?", (student_id,)
+        "SELECT student_id, status FROM students WHERE student_id = ?", (student_id,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
+    if row["status"] != "Active":
+        raise HTTPException(status_code=400, detail=f"Student {student_id} is inactive")
 
 
 def _find_open_session(
@@ -136,7 +143,15 @@ def check_in(
             ),
         )
     except sqlite3.IntegrityError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        if "UNIQUE constraint failed" in str(e):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Student {payload.student_id} already has an open digital "
+                    "library session. Check out first before starting another."
+                ),
+            )
+        raise HTTPException(status_code=400, detail="Invalid digital library record")
 
     row = db.execute(
         "SELECT * FROM digital_library_usage WHERE usage_id = ?",
@@ -191,6 +206,8 @@ def list_digital_library_usage(
     student_id: Optional[int] = None,
     date_: Optional[date] = None,
     account_type: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     """List digital library sessions, optionally filtered by student, date, account type."""
@@ -209,7 +226,8 @@ def list_digital_library_usage(
         query += " AND account_type = ?"
         params.append(account_type)
 
-    query += " ORDER BY date DESC, in_time DESC"
+    query += " ORDER BY date DESC, in_time DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
 
     rows = db.execute(query, params).fetchall()
     return [dict(row) for row in rows]

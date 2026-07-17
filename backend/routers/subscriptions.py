@@ -12,7 +12,7 @@ same convention as students.status.
 """
 
 import sqlite3
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 
 from database import get_db_dependency
@@ -21,8 +21,13 @@ from models.subscriptions import (
     SubscriptionUpdate,
     SubscriptionResponse,
 )
+from security import require_api_key
 
-router = APIRouter(prefix="/api/subscriptions", tags=["Subscriptions"])
+router = APIRouter(
+    prefix="/api/subscriptions",
+    tags=["Subscriptions"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 @router.post("", response_model=SubscriptionResponse, status_code=201)
@@ -67,6 +72,8 @@ def create_subscription(
 def list_subscriptions(
     status: Optional[str] = None,
     search: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     """List all subscriptions, optionally filtered by status and/or name search."""
@@ -81,7 +88,8 @@ def list_subscriptions(
         query += " AND name LIKE ?"
         params.append(f"%{search}%")
 
-    query += " ORDER BY name"
+    query += " ORDER BY name LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
 
     rows = db.execute(query, params).fetchall()
     return [dict(row) for row in rows]

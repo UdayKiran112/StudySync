@@ -9,13 +9,16 @@ get working and confirm end-to-end before building anything else.
 """
 
 import sqlite3
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 
 from database import get_db_dependency
 from models.students import StudentCreate, StudentUpdate, StudentResponse
+from security import require_api_key
 
-router = APIRouter(prefix="/api/students", tags=["Students"])
+router = APIRouter(
+    prefix="/api/students", tags=["Students"], dependencies=[Depends(require_api_key)]
+)
 
 
 @router.post("", response_model=StudentResponse, status_code=201)
@@ -61,6 +64,8 @@ def create_student(
 def list_students(
     status: Optional[str] = None,
     search: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     """
@@ -78,7 +83,8 @@ def list_students(
         query += " AND name LIKE ?"
         params.append(f"%{search}%")
 
-    query += " ORDER BY name"
+    query += " ORDER BY name LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
 
     rows = db.execute(query, params).fetchall()
     return [dict(row) for row in rows]
@@ -114,6 +120,8 @@ def update_student(
     updates = student.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided to update")
+    if "name" in updates and updates["name"] is None:
+        raise HTTPException(status_code=422, detail="name cannot be null")
 
     set_clause = ", ".join(f"{field} = ?" for field in updates.keys())
     values = list(updates.values()) + [student_id]

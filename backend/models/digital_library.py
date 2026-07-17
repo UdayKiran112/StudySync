@@ -21,23 +21,14 @@ come straight from the schema:
      comes back as a clean 422 instead of a raw sqlite3.IntegrityError.
 """
 
-import re
 from pydantic import BaseModel, Field, model_validator, field_validator
 from typing import Optional, Literal
 from datetime import date as date_type
+from models.common import RequestModel
+from models.validators import validate_hhmm
 
 
-def validate_hhmm(value: Optional[str]) -> Optional[str]:
-    if value is None:
-        return value
-
-    if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value):
-        raise ValueError("Time must be in HH:MM 24-hour format, e.g. 09:30")
-
-    return value
-
-
-class DigitalLibraryCheckIn(BaseModel):
+class DigitalLibraryCheckIn(RequestModel):
     """
     Data required to start a digital library session.
 
@@ -47,8 +38,8 @@ class DigitalLibraryCheckIn(BaseModel):
 
     student_id: int
     account_type: Literal["Library Subscription", "Own Account"]
-    subscription_id: Optional[str] = None
-    platform_name: str = Field(..., description="e.g. 'JSTOR', 'Britannica Online'")
+    subscription_id: Optional[str] = Field(None, min_length=1)
+    platform_name: str = Field(..., min_length=1, description="e.g. 'JSTOR', 'Britannica Online'")
     purpose: Optional[str] = None
     notes: Optional[str] = None
     date: Optional[date_type] = None
@@ -75,7 +66,7 @@ class DigitalLibraryCheckIn(BaseModel):
         return self
 
 
-class DigitalLibraryCheckOut(BaseModel):
+class DigitalLibraryCheckOut(RequestModel):
     """
     Data required to close out a digital library session.
 

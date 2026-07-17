@@ -12,13 +12,16 @@ stop referencing it in new offline_library_usage entries.
 """
 
 import sqlite3
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 
 from database import get_db_dependency
 from models.books import BookCreate, BookUpdate, BookResponse
+from security import require_api_key
 
-router = APIRouter(prefix="/api/books", tags=["Books"])
+router = APIRouter(
+    prefix="/api/books", tags=["Books"], dependencies=[Depends(require_api_key)]
+)
 
 
 @router.post("", response_model=BookResponse, status_code=201)
@@ -50,6 +53,8 @@ def create_book(book: BookCreate, db: sqlite3.Connection = Depends(get_db_depend
 def list_books(
     category: Optional[str] = None,
     search: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     """List all books, optionally filtered by category and/or title/author search."""
@@ -64,7 +69,8 @@ def list_books(
         query += " AND (title LIKE ? OR author LIKE ?)"
         params.extend([f"%{search}%", f"%{search}%"])
 
-    query += " ORDER BY title"
+    query += " ORDER BY title LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
 
     rows = db.execute(query, params).fetchall()
     return [dict(row) for row in rows]

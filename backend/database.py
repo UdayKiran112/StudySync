@@ -26,7 +26,43 @@ def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
     return conn
+
+
+def apply_runtime_schema_guards() -> None:
+    """Add indexes that protect existing databases from duplicate open sessions."""
+    with get_db() as conn:
+        attendance_duplicates = conn.execute(
+            """
+            SELECT student_id FROM attendance WHERE check_out IS NULL
+            GROUP BY student_id HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+        digital_duplicates = conn.execute(
+            """
+            SELECT student_id FROM digital_library_usage WHERE out_time IS NULL
+            GROUP BY student_id HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+        if attendance_duplicates or digital_duplicates:
+            raise RuntimeError(
+                "Cannot add open-session safeguards while duplicate open sessions exist. "
+                "Resolve duplicate student IDs first."
+            )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_one_open_session
+            ON attendance(student_id) WHERE check_out IS NULL
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_digital_one_open_session
+            ON digital_library_usage(student_id) WHERE out_time IS NULL
+            """
+        )
 
 
 @contextmanager

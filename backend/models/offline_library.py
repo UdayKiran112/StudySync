@@ -13,12 +13,13 @@ Unlike attendance and digital_library, there's no check-in/check-out
 flow here — a single POST creates the complete record.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import date as date_type
+from models.common import RequestModel
 
 
-class OfflineLibraryCreate(BaseModel):
+class OfflineLibraryCreate(RequestModel):
     """
     Data required to log an offline library usage entry.
 
@@ -27,14 +28,14 @@ class OfflineLibraryCreate(BaseModel):
     """
 
     student_id: int
-    book_id: Optional[str] = None
+    book_id: Optional[str] = Field(None, min_length=1)
     date: Optional[date_type] = None
 
 
-class OfflineLibraryUpdate(BaseModel):
+class OfflineLibraryUpdate(RequestModel):
     """Correction of a mistaken entry — e.g. wrong book_id or date typed in."""
 
-    book_id: Optional[str] = None
+    book_id: Optional[str] = Field(None, min_length=1)
     date: Optional[date_type] = None
 
 

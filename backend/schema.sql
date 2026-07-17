@@ -5,7 +5,7 @@ PRAGMA foreign_keys = ON;
 -- ===================================
 CREATE TABLE students (
     student_id      INTEGER PRIMARY KEY,
-    name            TEXT NOT NULL,
+    name            TEXT NOT NULL CHECK(length(trim(name)) > 0),
     gender          TEXT CHECK(gender IN ('Male', 'Female', 'Other')),
     date_of_birth   DATE,
     phone           TEXT,
@@ -33,8 +33,8 @@ CREATE TABLE attendance (
     student_id      INTEGER NOT NULL,
     date            DATE NOT NULL,
     session         TEXT NOT NULL CHECK(session IN ('Morning', 'Afternoon')),
-    check_in        TEXT,                  -- 'HH:MM' 24-hour
-    check_out       TEXT,
+    check_in        TEXT CHECK(check_in IS NULL OR (check_in GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(check_in, 1, 2) <= '23')),
+    check_out       TEXT CHECK(check_out IS NULL OR (check_out GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(check_out, 1, 2) <= '23')),
     duration_minutes INTEGER GENERATED ALWAYS AS (
         CASE
             WHEN check_in IS NOT NULL AND check_out IS NOT NULL THEN
@@ -56,11 +56,11 @@ CREATE INDEX idx_attendance_date ON attendance(date);
 -- SUBSCRIPTIONS
 -- ===================================
 CREATE TABLE subscriptions (
-    subscription_id TEXT PRIMARY KEY,
-    name            TEXT NOT NULL,
+    subscription_id TEXT PRIMARY KEY CHECK(length(trim(subscription_id)) > 0),
+    name            TEXT NOT NULL CHECK(length(trim(name)) > 0),
     type            TEXT,
-    cost            REAL,
-    validity_days   INTEGER,
+    cost            REAL CHECK(cost IS NULL OR cost >= 0),
+    validity_days   INTEGER CHECK(validity_days IS NULL OR validity_days > 0),
     status          TEXT DEFAULT 'Active' CHECK(status IN ('Active', 'Expired'))
 );
 
@@ -72,8 +72,8 @@ CREATE TABLE digital_library_usage (
     student_id       INTEGER NOT NULL,
     date             DATE NOT NULL,
 
-    in_time          TEXT ,      -- HH:MM (24-hour)
-    out_time         TEXT ,
+    in_time          TEXT NOT NULL CHECK(in_time GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(in_time, 1, 2) <= '23'),
+    out_time         TEXT CHECK(out_time IS NULL OR (out_time GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(out_time, 1, 2) <= '23')),
 
     duration_minutes INTEGER GENERATED ALWAYS AS (
         CAST(ROUND(
@@ -87,7 +87,7 @@ CREATE TABLE digital_library_usage (
 
     subscription_id  TEXT,
 
-    platform_name    TEXT NOT NULL,
+    platform_name    TEXT NOT NULL CHECK(length(trim(platform_name)) > 0),
 
     purpose          TEXT,
     notes            TEXT,
@@ -128,8 +128,8 @@ ON digital_library_usage(subscription_id);
 -- BOOKS
 -- ===================================
 CREATE TABLE books (
-    book_id         TEXT PRIMARY KEY,
-    title           TEXT NOT NULL,
+    book_id         TEXT PRIMARY KEY CHECK(length(trim(book_id)) > 0),
+    title           TEXT NOT NULL CHECK(length(trim(title)) > 0),
     category        TEXT,
     author          TEXT,
     added_date      DATE
@@ -150,6 +150,12 @@ CREATE TABLE offline_library_usage (
 CREATE INDEX idx_offline_usage_student_id ON offline_library_usage(student_id);
 CREATE INDEX idx_offline_usage_date ON offline_library_usage(date);
 CREATE INDEX idx_offline_usage_book_id ON offline_library_usage(book_id);
+
+CREATE UNIQUE INDEX idx_attendance_one_open_session
+ON attendance(student_id) WHERE check_out IS NULL;
+
+CREATE UNIQUE INDEX idx_digital_one_open_session
+ON digital_library_usage(student_id) WHERE out_time IS NULL;
 
 -- ===================================
 -- EXAMS
