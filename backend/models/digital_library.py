@@ -21,9 +21,20 @@ come straight from the schema:
      comes back as a clean 422 instead of a raw sqlite3.IntegrityError.
 """
 
-from pydantic import BaseModel, Field, model_validator
+import re
+from pydantic import BaseModel, Field, model_validator, field_validator
 from typing import Optional, Literal
 from datetime import date as date_type
+
+
+def validate_hhmm(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return value
+
+    if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value):
+        raise ValueError("Time must be in HH:MM 24-hour format, e.g. 09:30")
+
+    return value
 
 
 class DigitalLibraryCheckIn(BaseModel):
@@ -44,6 +55,11 @@ class DigitalLibraryCheckIn(BaseModel):
     in_time: Optional[str] = Field(
         None, description="HH:MM 24-hour. Defaults to current server time."
     )
+
+    @field_validator("in_time")
+    @classmethod
+    def validate_in_time(cls, value: Optional[str]) -> Optional[str]:
+        return validate_hhmm(value)
 
     @model_validator(mode="after")
     def _check_subscription_pairing(self) -> "DigitalLibraryCheckIn":
@@ -72,6 +88,11 @@ class DigitalLibraryCheckOut(BaseModel):
     out_time: Optional[str] = Field(
         None, description="HH:MM 24-hour. Defaults to current server time."
     )
+
+    @field_validator("out_time")
+    @classmethod
+    def validate_out_time(cls, value: Optional[str]) -> Optional[str]:
+        return validate_hhmm(value)
 
 
 class DigitalLibraryResponse(BaseModel):
