@@ -5,6 +5,8 @@ __pycache__/
 
 # Database 
 backend/library.db
+frontend/node_modules/
+
 
 # C extensions
 *.so
@@ -219,4 +221,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+backend/library.db
+frontend/package-lock.json
+frontend/package.json
 backend/library.db
