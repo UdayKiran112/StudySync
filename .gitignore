@@ -225,3 +225,8 @@ backend/library.db
 frontend/package-lock.json
 frontend/package.json
 backend/library.db
+backend/library.db-shm
+backend/library.db-wal
+frontend/.oxlintrc.json
+frontend/tsconfig.app.json
+frontend/tsconfig.node.json
