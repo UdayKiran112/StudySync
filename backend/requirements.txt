@@ -5,3 +5,5 @@ gspread==6.1.4
 google-auth==2.35.0
 python-multipart==0.0.12
 httpx==0.28.1
+reportlab==4.2.5
+matplotlib==3.10.8
