@@ -2,13 +2,24 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Plus, Search, Pencil, Trash2 } from "lucide-react";
-import { PageHeader, Spinner, ErrorBanner, EmptyState, Pagination } from "../../components/ui/Feedback";
+import {
+  PageHeader,
+  Spinner,
+  ErrorBanner,
+  EmptyState,
+  Pagination,
+} from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Input, Field } from "../../components/ui/Form";
 import { Button } from "../../components/ui/Button";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Modal } from "../../components/ui/Modal";
-import { useQuizzes, useCreateQuiz, useUpdateQuiz, useDeleteQuiz } from "../../api/quizzes";
+import {
+  useQuizzes,
+  useCreateQuiz,
+  useUpdateQuiz,
+  useDeleteQuiz,
+} from "../../api/quizzes";
 import { extractErrorMessage } from "../../api/client";
 import { formatDate, todayIso } from "../../lib/format";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
@@ -25,7 +36,11 @@ export function QuizzesList() {
   const [deleting, setDeleting] = useState<Quiz | undefined>(undefined);
 
   const debouncedSearch = useDebouncedValue(search);
-  const { data, isLoading, isError, error } = useQuizzes({ search: debouncedSearch || undefined, limit: LIMIT, offset });
+  const { data, isLoading, isError, error } = useQuizzes({
+    search: debouncedSearch || undefined,
+    limit: LIMIT,
+    offset,
+  });
   const deleteMutation = useDeleteQuiz();
 
   async function handleDelete() {
@@ -59,7 +74,10 @@ export function QuizzesList() {
       />
 
       <div className="relative mb-4 max-w-sm">
-        <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-light" />
+        <Search
+          size={15}
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-light"
+        />
         <Input
           value={search}
           onChange={(e) => {
@@ -87,13 +105,19 @@ export function QuizzesList() {
             </Thead>
             <tbody>
               {data.map((q) => (
-                <Tr key={q.quiz_id} onClick={() => navigate(`/quizzes/${q.quiz_id}`)}>
+                <Tr
+                  key={q.quiz_id}
+                  onClick={() => navigate(`/quizzes/${q.quiz_id}`)}
+                >
                   <Td className="font-medium">{q.quiz_name}</Td>
                   <Td className="text-slate">{q.subject ?? "—"}</Td>
                   <Td className="text-slate">{formatDate(q.quiz_date)}</Td>
                   <Td className="font-mono text-xs">{q.max_marks}</Td>
                   <Td>
-                    <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                    <div
+                      className="flex justify-end gap-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <Button
                         size="sm"
                         variant="ghost"
@@ -104,7 +128,11 @@ export function QuizzesList() {
                       >
                         <Pencil size={14} />
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setDeleting(q)}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeleting(q)}
+                      >
                         <Trash2 size={14} className="text-rust" />
                       </Button>
                     </div>
@@ -113,11 +141,20 @@ export function QuizzesList() {
               ))}
             </tbody>
           </Table>
-          <Pagination offset={offset} limit={LIMIT} count={data.length} onOffsetChange={setOffset} />
+          <Pagination
+            offset={offset}
+            limit={LIMIT}
+            count={data.length}
+            onOffsetChange={setOffset}
+          />
         </>
       )}
 
-      <QuizFormModal open={formOpen} onClose={() => setFormOpen(false)} quiz={editing} />
+      <QuizFormModal
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        quiz={editing}
+      />
 
       <ConfirmDialog
         open={Boolean(deleting)}
@@ -131,12 +168,22 @@ export function QuizzesList() {
   );
 }
 
-function QuizFormModal({ open, onClose, quiz }: { open: boolean; onClose: () => void; quiz?: Quiz }) {
+function QuizFormModal({
+  open,
+  onClose,
+  quiz,
+}: {
+  open: boolean;
+  onClose: () => void;
+  quiz?: Quiz;
+}) {
   const isEdit = Boolean(quiz);
   const [quizName, setQuizName] = useState(quiz?.quiz_name ?? "");
   const [quizDate, setQuizDate] = useState(quiz?.quiz_date ?? todayIso());
   const [subject, setSubject] = useState(quiz?.subject ?? "");
-  const [maxMarks, setMaxMarks] = useState(quiz ? String(quiz.max_marks) : "20");
+  const [maxMarks, setMaxMarks] = useState(
+    quiz ? String(quiz.max_marks) : "20",
+  );
   const [error, setError] = useState("");
 
   const createMutation = useCreateQuiz();
@@ -179,21 +226,44 @@ function QuizFormModal({ open, onClose, quiz }: { open: boolean; onClose: () => 
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={isEdit ? "Edit quiz" : "Add quiz"} width="md">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={isEdit ? "Edit quiz" : "Add quiz"}
+      width="md"
+    >
       <form onSubmit={handleSubmit} className="space-y-4">
         <Field label="Quiz name" required>
-          <Input value={quizName} onChange={(e) => setQuizName(e.target.value)} placeholder="e.g. Weekly Current Affairs Quiz" />
+          <Input
+            value={quizName}
+            onChange={(e) => setQuizName(e.target.value)}
+            placeholder="e.g. Weekly Current Affairs Quiz"
+          />
         </Field>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Subject">
-            <Input value={subject ?? ""} onChange={(e) => setSubject(e.target.value)} placeholder="e.g. Current Affairs" />
+            <Input
+              value={subject ?? ""}
+              onChange={(e) => setSubject(e.target.value)}
+              placeholder="e.g. Current Affairs"
+            />
           </Field>
           <Field label="Quiz date">
-            <Input type="date" value={quizDate ?? ""} onChange={(e) => setQuizDate(e.target.value)} />
+            <Input
+              type="date"
+              value={quizDate ?? ""}
+              onChange={(e) => setQuizDate(e.target.value)}
+            />
           </Field>
         </div>
         <Field label="Max marks" required>
-          <Input type="number" min="1" step="0.5" value={maxMarks} onChange={(e) => setMaxMarks(e.target.value)} />
+          <Input
+            type="number"
+            min="1"
+            step="0.5"
+            value={maxMarks}
+            onChange={(e) => setMaxMarks(e.target.value)}
+          />
         </Field>
         {error && <p className="text-sm text-rust">{error}</p>}
         <div className="flex justify-end gap-2 border-t border-border pt-4">

@@ -18,7 +18,9 @@ export function StudentFormModal({
   student?: Student;
 }) {
   const isEdit = Boolean(student);
-  const [studentId, setStudentId] = useState(student ? String(student.student_id) : "");
+  const [studentId, setStudentId] = useState(
+    student ? String(student.student_id) : "",
+  );
   const [name, setName] = useState(student?.name ?? "");
   const [gender, setGender] = useState<string>(student?.gender ?? "");
   const [dob, setDob] = useState(student?.date_of_birth ?? "");
@@ -87,11 +89,15 @@ export function StudentFormModal({
       open={open}
       onClose={onClose}
       title={isEdit ? "Edit student" : "Add student"}
-      subtitle={isEdit ? `Student ${student?.student_id}` : "Create a new student record"}
+      subtitle={
+        isEdit
+          ? `Student ${student?.student_id}`
+          : "Create a new student record"
+      }
       width="lg"
     >
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Student ID" required>
             <Input
               value={studentId}
@@ -110,12 +116,19 @@ export function StudentFormModal({
         </div>
 
         <Field label="Full name" required>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Student's full name" />
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Student's full name"
+          />
         </Field>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Gender">
-            <Select value={gender ?? ""} onChange={(e) => setGender(e.target.value)}>
+            <Select
+              value={gender ?? ""}
+              onChange={(e) => setGender(e.target.value)}
+            >
               <option value="">Not specified</option>
               <option value="Male">Male</option>
               <option value="Female">Female</option>
@@ -123,26 +136,47 @@ export function StudentFormModal({
             </Select>
           </Field>
           <Field label="Date of birth">
-            <Input type="date" value={dob ?? ""} onChange={(e) => setDob(e.target.value)} />
+            <Input
+              type="date"
+              value={dob ?? ""}
+              onChange={(e) => setDob(e.target.value)}
+            />
           </Field>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Phone">
-            <Input value={phone ?? ""} onChange={(e) => setPhone(e.target.value)} placeholder="Contact number" />
+            <Input
+              value={phone ?? ""}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="Contact number"
+            />
           </Field>
           <Field label="Email">
-            <Input type="email" value={email ?? ""} onChange={(e) => setEmail(e.target.value)} placeholder="Email address" />
+            <Input
+              type="email"
+              value={email ?? ""}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email address"
+            />
           </Field>
         </div>
 
         <Field label="Address">
-          <Input value={address ?? ""} onChange={(e) => setAddress(e.target.value)} placeholder="Home address" />
+          <Input
+            value={address ?? ""}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="Home address"
+          />
         </Field>
 
         {!isEdit && (
           <Field label="Join date" required>
-            <Input type="date" value={joinDate} onChange={(e) => setJoinDate(e.target.value)} />
+            <Input
+              type="date"
+              value={joinDate}
+              onChange={(e) => setJoinDate(e.target.value)}
+            />
           </Field>
         )}
 

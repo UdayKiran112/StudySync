@@ -167,7 +167,7 @@ export function DigitalLibraryPage() {
 
           {mode === "check-in" && (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Field label="Account type" required>
                   <Select
                     value={accountType}
@@ -206,7 +206,7 @@ export function DigitalLibraryPage() {
                 </Field>
               )}
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Field label="Purpose">
                   <Input
                     value={purpose}
@@ -225,7 +225,7 @@ export function DigitalLibraryPage() {
             </>
           )}
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {mode === "check-in" && (
               <Field label="Date" required>
                 <Input

@@ -1,7 +1,13 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
 import { Plus, Search, Pencil, Trash2 } from "lucide-react";
-import { PageHeader, Spinner, ErrorBanner, EmptyState, Pagination } from "../../components/ui/Feedback";
+import {
+  PageHeader,
+  Spinner,
+  ErrorBanner,
+  EmptyState,
+  Pagination,
+} from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Input } from "../../components/ui/Form";
 import { Button } from "../../components/ui/Button";
@@ -9,7 +15,12 @@ import { IdTab } from "../../components/ui/Tabs";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Modal } from "../../components/ui/Modal";
 import { Field } from "../../components/ui/Form";
-import { useBooks, useCreateBook, useUpdateBook, useDeleteBook } from "../../api/books";
+import {
+  useBooks,
+  useCreateBook,
+  useUpdateBook,
+  useDeleteBook,
+} from "../../api/books";
 import { extractErrorMessage } from "../../api/client";
 import { formatDate, todayIso } from "../../lib/format";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
@@ -25,7 +36,11 @@ export function BooksPage() {
   const [deleting, setDeleting] = useState<Book | undefined>(undefined);
 
   const debouncedSearch = useDebouncedValue(search);
-  const { data, isLoading, isError, error } = useBooks({ search: debouncedSearch || undefined, limit: LIMIT, offset });
+  const { data, isLoading, isError, error } = useBooks({
+    search: debouncedSearch || undefined,
+    limit: LIMIT,
+    offset,
+  });
   const deleteMutation = useDeleteBook();
 
   async function handleDelete() {
@@ -59,7 +74,10 @@ export function BooksPage() {
       />
 
       <div className="relative mb-4 max-w-sm">
-        <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-light" />
+        <Search
+          size={15}
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-light"
+        />
         <Input
           value={search}
           onChange={(e) => {
@@ -109,7 +127,11 @@ export function BooksPage() {
                       >
                         <Pencil size={14} />
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setDeleting(b)}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeleting(b)}
+                      >
                         <Trash2 size={14} className="text-rust" />
                       </Button>
                     </div>
@@ -118,11 +140,20 @@ export function BooksPage() {
               ))}
             </tbody>
           </Table>
-          <Pagination offset={offset} limit={LIMIT} count={data.length} onOffsetChange={setOffset} />
+          <Pagination
+            offset={offset}
+            limit={LIMIT}
+            count={data.length}
+            onOffsetChange={setOffset}
+          />
         </>
       )}
 
-      <BookFormModal open={formOpen} onClose={() => setFormOpen(false)} book={editing} />
+      <BookFormModal
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        book={editing}
+      />
 
       <ConfirmDialog
         open={Boolean(deleting)}
@@ -136,7 +167,15 @@ export function BooksPage() {
   );
 }
 
-function BookFormModal({ open, onClose, book }: { open: boolean; onClose: () => void; book?: Book }) {
+function BookFormModal({
+  open,
+  onClose,
+  book,
+}: {
+  open: boolean;
+  onClose: () => void;
+  book?: Book;
+}) {
   const isEdit = Boolean(book);
   const [bookId, setBookId] = useState(book?.book_id ?? "");
   const [title, setTitle] = useState(book?.title ?? "");
@@ -186,25 +225,46 @@ function BookFormModal({ open, onClose, book }: { open: boolean; onClose: () => 
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={isEdit ? "Edit book" : "Add book"} width="md">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={isEdit ? "Edit book" : "Add book"}
+      width="md"
+    >
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Book ID" required>
-            <Input value={bookId} onChange={(e) => setBookId(e.target.value)} disabled={isEdit} placeholder="e.g. 1556" />
+            <Input
+              value={bookId}
+              onChange={(e) => setBookId(e.target.value)}
+              disabled={isEdit}
+              placeholder="e.g. 1556"
+            />
           </Field>
           <Field label="Added date">
-            <Input type="date" value={addedDate ?? ""} onChange={(e) => setAddedDate(e.target.value)} />
+            <Input
+              type="date"
+              value={addedDate ?? ""}
+              onChange={(e) => setAddedDate(e.target.value)}
+            />
           </Field>
         </div>
         <Field label="Title" required>
           <Input value={title} onChange={(e) => setTitle(e.target.value)} />
         </Field>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Category">
-            <Input value={category ?? ""} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Polity" />
+            <Input
+              value={category ?? ""}
+              onChange={(e) => setCategory(e.target.value)}
+              placeholder="e.g. Polity"
+            />
           </Field>
           <Field label="Author">
-            <Input value={author ?? ""} onChange={(e) => setAuthor(e.target.value)} />
+            <Input
+              value={author ?? ""}
+              onChange={(e) => setAuthor(e.target.value)}
+            />
           </Field>
         </div>
         {error && <p className="text-sm text-rust">{error}</p>}

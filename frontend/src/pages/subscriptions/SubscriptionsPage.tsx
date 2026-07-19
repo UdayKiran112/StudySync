@@ -1,14 +1,29 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
 import { Plus, Search, Pencil, Trash2 } from "lucide-react";
-import { PageHeader, Spinner, ErrorBanner, EmptyState, Pagination } from "../../components/ui/Feedback";
+import {
+  PageHeader,
+  Spinner,
+  ErrorBanner,
+  EmptyState,
+  Pagination,
+} from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Input, Select, Field } from "../../components/ui/Form";
 import { Button } from "../../components/ui/Button";
-import { IdTab, StatusTab, subscriptionStatusTone } from "../../components/ui/Tabs";
+import {
+  IdTab,
+  StatusTab,
+  subscriptionStatusTone,
+} from "../../components/ui/Tabs";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Modal } from "../../components/ui/Modal";
-import { useSubscriptions, useCreateSubscription, useUpdateSubscription, useDeleteSubscription } from "../../api/subscriptions";
+import {
+  useSubscriptions,
+  useCreateSubscription,
+  useUpdateSubscription,
+  useDeleteSubscription,
+} from "../../api/subscriptions";
 import { extractErrorMessage } from "../../api/client";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import type { Subscription } from "../../api/types";
@@ -64,7 +79,10 @@ export function SubscriptionsPage() {
 
       <div className="mb-4 flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[220px]">
-          <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-light" />
+          <Search
+            size={15}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-light"
+          />
           <Input
             value={search}
             onChange={(e) => {
@@ -91,7 +109,9 @@ export function SubscriptionsPage() {
 
       {isLoading && <Spinner label="Loading subscriptions…" />}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
-      {data && data.length === 0 && <EmptyState title="No subscriptions found" />}
+      {data && data.length === 0 && (
+        <EmptyState title="No subscriptions found" />
+      )}
 
       {data && data.length > 0 && (
         <>
@@ -114,10 +134,16 @@ export function SubscriptionsPage() {
                     </div>
                   </Td>
                   <Td className="text-slate">{s.type ?? "—"}</Td>
-                  <Td className="text-slate">{s.cost != null ? `₹${s.cost}` : "—"}</Td>
-                  <Td className="text-slate">{s.validity_days != null ? `${s.validity_days} days` : "—"}</Td>
+                  <Td className="text-slate">
+                    {s.cost != null ? `₹${s.cost}` : "—"}
+                  </Td>
+                  <Td className="text-slate">
+                    {s.validity_days != null ? `${s.validity_days} days` : "—"}
+                  </Td>
                   <Td>
-                    <StatusTab tone={subscriptionStatusTone(s.status)}>{s.status}</StatusTab>
+                    <StatusTab tone={subscriptionStatusTone(s.status)}>
+                      {s.status}
+                    </StatusTab>
                   </Td>
                   <Td>
                     <div className="flex justify-end gap-1">
@@ -131,7 +157,11 @@ export function SubscriptionsPage() {
                       >
                         <Pencil size={14} />
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setDeleting(s)}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeleting(s)}
+                      >
                         <Trash2 size={14} className="text-rust" />
                       </Button>
                     </div>
@@ -140,11 +170,20 @@ export function SubscriptionsPage() {
               ))}
             </tbody>
           </Table>
-          <Pagination offset={offset} limit={LIMIT} count={data.length} onOffsetChange={setOffset} />
+          <Pagination
+            offset={offset}
+            limit={LIMIT}
+            count={data.length}
+            onOffsetChange={setOffset}
+          />
         </>
       )}
 
-      <SubscriptionFormModal open={formOpen} onClose={() => setFormOpen(false)} subscription={editing} />
+      <SubscriptionFormModal
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        subscription={editing}
+      />
 
       <ConfirmDialog
         open={Boolean(deleting)}
@@ -168,18 +207,28 @@ function SubscriptionFormModal({
   subscription?: Subscription;
 }) {
   const isEdit = Boolean(subscription);
-  const [subscriptionId, setSubscriptionId] = useState(subscription?.subscription_id ?? "");
+  const [subscriptionId, setSubscriptionId] = useState(
+    subscription?.subscription_id ?? "",
+  );
   const [name, setName] = useState(subscription?.name ?? "");
   const [type, setType] = useState(subscription?.type ?? "");
-  const [cost, setCost] = useState(subscription?.cost != null ? String(subscription.cost) : "");
-  const [validityDays, setValidityDays] = useState(
-    subscription?.validity_days != null ? String(subscription.validity_days) : ""
+  const [cost, setCost] = useState(
+    subscription?.cost != null ? String(subscription.cost) : "",
   );
-  const [status, setStatus] = useState<string>(subscription?.status ?? "Active");
+  const [validityDays, setValidityDays] = useState(
+    subscription?.validity_days != null
+      ? String(subscription.validity_days)
+      : "",
+  );
+  const [status, setStatus] = useState<string>(
+    subscription?.status ?? "Active",
+  );
   const [error, setError] = useState("");
 
   const createMutation = useCreateSubscription();
-  const updateMutation = useUpdateSubscription(subscription?.subscription_id ?? "");
+  const updateMutation = useUpdateSubscription(
+    subscription?.subscription_id ?? "",
+  );
   const pending = createMutation.isPending || updateMutation.isPending;
 
   async function handleSubmit(e: React.FormEvent) {
@@ -221,9 +270,14 @@ function SubscriptionFormModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={isEdit ? "Edit subscription" : "Add subscription"} width="md">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={isEdit ? "Edit subscription" : "Add subscription"}
+      width="md"
+    >
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Subscription ID" required>
             <Input
               value={subscriptionId}
@@ -240,17 +294,36 @@ function SubscriptionFormModal({
           </Field>
         </div>
         <Field label="Name" required>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. JSTOR" />
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. JSTOR"
+          />
         </Field>
         <Field label="Type">
-          <Input value={type ?? ""} onChange={(e) => setType(e.target.value)} placeholder="e.g. Online Learning" />
+          <Input
+            value={type ?? ""}
+            onChange={(e) => setType(e.target.value)}
+            placeholder="e.g. Online Learning"
+          />
         </Field>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Cost">
-            <Input type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} />
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={cost}
+              onChange={(e) => setCost(e.target.value)}
+            />
           </Field>
           <Field label="Validity (days)">
-            <Input type="number" min="1" value={validityDays} onChange={(e) => setValidityDays(e.target.value)} />
+            <Input
+              type="number"
+              min="1"
+              value={validityDays}
+              onChange={(e) => setValidityDays(e.target.value)}
+            />
           </Field>
         </div>
         {error && <p className="text-sm text-rust">{error}</p>}
