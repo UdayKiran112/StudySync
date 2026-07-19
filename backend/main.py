@@ -34,6 +34,7 @@ from routers import (
     dashboard,
 )
 
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     apply_runtime_schema_guards()
@@ -41,9 +42,9 @@ async def lifespan(_: FastAPI):
 
 
 allowed_origins = [
-    origin.strip()
-    for origin in os.getenv("STUDYSYNC_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
-    if origin.strip()
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://192.168.31.253:5173",
 ]
 
 app = FastAPI(

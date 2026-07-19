@@ -1,4 +1,10 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 
 interface Settings {
   baseUrl: string;
@@ -11,7 +17,8 @@ interface SettingsContextValue extends Settings {
   isConfigured: boolean;
 }
 
-const DEFAULT_BASE_URL = "http://localhost:8000";
+const DEFAULT_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const STORAGE_KEY = "studysync.settings";
 
 const SettingsContext = createContext<SettingsContextValue | null>(null);
@@ -29,7 +36,10 @@ function loadInitial(): Settings {
   } catch {
     // ignore corrupt storage
   }
-  return { baseUrl: DEFAULT_BASE_URL, apiKey: "" };
+  return {
+    baseUrl: DEFAULT_BASE_URL,
+    apiKey: import.meta.env.VITE_API_KEY ?? "",
+  };
 }
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
@@ -46,7 +56,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     isConfigured: Boolean(settings.baseUrl && settings.apiKey),
   };
 
-  return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
+  return (
+    <SettingsContext.Provider value={value}>
+      {children}
+    </SettingsContext.Provider>
+  );
 }
 
 export function useSettings() {
