@@ -11,6 +11,7 @@ import {
   ListChecks,
   Settings as SettingsIcon,
   CircleAlert,
+  BarChart3,
 } from "lucide-react";
 import { useSettings } from "../context/SettingsContext";
 import clsx from "clsx";
@@ -43,6 +44,10 @@ const NAV_SECTIONS = [
       { to: "/quizzes", icon: ListChecks, label: "Quizzes" },
     ],
   },
+  {
+    label: "Reports",
+    items: [{ to: "/analytics", icon: BarChart3, label: "Student analytics" }],
+  },
 ];
 
 export function Layout() {
@@ -56,8 +61,12 @@ export function Layout() {
             S
           </div>
           <div>
-            <p className="font-display text-base font-semibold leading-none">StudySync</p>
-            <p className="mt-1 text-[11px] uppercase tracking-widest text-paper/50">Front desk</p>
+            <p className="font-display text-base font-semibold leading-none">
+              StudySync
+            </p>
+            <p className="mt-1 text-[11px] uppercase tracking-widest text-paper/50">
+              Front desk
+            </p>
           </div>
         </div>
 
@@ -78,7 +87,7 @@ export function Layout() {
                         "flex items-center gap-2.5 rounded-md border-l-2 px-3 py-2 text-sm transition-colors",
                         isActive
                           ? "border-brass bg-white/[0.07] font-medium text-white"
-                          : "border-transparent text-paper/70 hover:bg-white/5 hover:text-white"
+                          : "border-transparent text-paper/70 hover:bg-white/5 hover:text-white",
                       )
                     }
                   >
@@ -97,29 +106,36 @@ export function Layout() {
             className={({ isActive }) =>
               clsx(
                 "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
-                isActive ? "bg-white/10 text-white" : "text-paper/70 hover:bg-white/5 hover:text-white"
+                isActive
+                  ? "bg-white/10 text-white"
+                  : "text-paper/70 hover:bg-white/5 hover:text-white",
               )
             }
           >
             <SettingsIcon size={16} />
             Settings
-            {!isConfigured && <CircleAlert size={14} className="ml-auto text-brass-light" />}
+            {!isConfigured && (
+              <CircleAlert size={14} className="ml-auto text-brass-light" />
+            )}
           </NavLink>
         </div>
       </aside>
 
       <main className="flex-1 overflow-y-auto">
         {!isConfigured && (
-          <div className="flex items-center gap-2 border-b border-brass/30 bg-brass/10 px-6 py-2.5 text-sm text-brass">
+          <div className="no-print flex items-center gap-2 border-b border-brass/30 bg-brass/10 px-6 py-2.5 text-sm text-brass">
             <CircleAlert size={15} />
             Set the API base URL and staff key in{" "}
-            <NavLink to="/settings" className="font-medium underline underline-offset-2">
+            <NavLink
+              to="/settings"
+              className="font-medium underline underline-offset-2"
+            >
               Settings
             </NavLink>{" "}
             before using StudySync.
           </div>
         )}
-        <div className="mx-auto max-w-6xl px-6 py-8">
+        <div className="mx-auto max-w-6xl px-6 py-8 print-area">
           <Outlet />
         </div>
       </main>

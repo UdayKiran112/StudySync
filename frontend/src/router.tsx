@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { createBrowserRouter } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Dashboard } from "./pages/Dashboard";
@@ -13,6 +14,21 @@ import { ExamDetail } from "./pages/exams/ExamDetail";
 import { QuizzesList } from "./pages/quizzes/QuizzesList";
 import { QuizDetail } from "./pages/quizzes/QuizDetail";
 import { SettingsPage } from "./pages/settings/SettingsPage";
+import { Spinner } from "./components/ui/Feedback";
+
+const StudentAnalyticsPage = lazy(() =>
+  import("./pages/analytics/StudentAnalyticsPage").then((m) => ({
+    default: m.StudentAnalyticsPage,
+  })),
+);
+
+function LazyAnalyticsPage() {
+  return (
+    <Suspense fallback={<Spinner label="Loading analytics…" />}>
+      <StudentAnalyticsPage />
+    </Suspense>
+  );
+}
 
 export const router = createBrowserRouter([
   {
@@ -31,6 +47,8 @@ export const router = createBrowserRouter([
       { path: "exams/:examId", element: <ExamDetail /> },
       { path: "quizzes", element: <QuizzesList /> },
       { path: "quizzes/:quizId", element: <QuizDetail /> },
+      { path: "analytics", element: <LazyAnalyticsPage /> },
+      { path: "analytics/:studentId", element: <LazyAnalyticsPage /> },
       { path: "settings", element: <SettingsPage /> },
     ],
   },

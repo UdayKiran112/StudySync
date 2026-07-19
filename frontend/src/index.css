@@ -53,3 +53,25 @@
     border-radius: 4px;
   }
 }
+
+@media print {
+  aside,
+  .no-print {
+    display: none !important;
+  }
+  main {
+    overflow: visible !important;
+  }
+  body,
+  .print-area {
+    background: #fff !important;
+  }
+  .print-area {
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .print-break-avoid {
+    break-inside: avoid;
+  }
+}

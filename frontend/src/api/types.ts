@@ -34,7 +34,9 @@ export interface StudentCreateInput {
   status?: StudentStatus;
 }
 
-export type StudentUpdateInput = Partial<Omit<StudentCreateInput, "student_id">>;
+export type StudentUpdateInput = Partial<
+  Omit<StudentCreateInput, "student_id">
+>;
 
 export interface Attendance {
   attendance_id: number;
@@ -103,7 +105,9 @@ export interface OfflineLibraryCreateInput {
   date?: string | null;
 }
 
-export type OfflineLibraryUpdateInput = Partial<Omit<OfflineLibraryCreateInput, "student_id">>;
+export type OfflineLibraryUpdateInput = Partial<
+  Omit<OfflineLibraryCreateInput, "student_id">
+>;
 
 export interface Subscription {
   subscription_id: string;
@@ -123,7 +127,9 @@ export interface SubscriptionCreateInput {
   status?: SubscriptionStatus;
 }
 
-export type SubscriptionUpdateInput = Partial<Omit<SubscriptionCreateInput, "subscription_id">>;
+export type SubscriptionUpdateInput = Partial<
+  Omit<SubscriptionCreateInput, "subscription_id">
+>;
 
 export interface Book {
   book_id: string;
@@ -174,7 +180,9 @@ export interface ExamMarkCreateInput {
   remarks?: string | null;
 }
 
-export type ExamMarkUpdateInput = Partial<Omit<ExamMarkCreateInput, "student_id">>;
+export type ExamMarkUpdateInput = Partial<
+  Omit<ExamMarkCreateInput, "student_id">
+>;
 
 export interface Quiz {
   quiz_id: number;
@@ -207,8 +215,115 @@ export interface QuizScoreCreateInput {
   remarks?: string | null;
 }
 
-export type QuizScoreUpdateInput = Partial<Omit<QuizScoreCreateInput, "student_id">>;
+export type QuizScoreUpdateInput = Partial<
+  Omit<QuizScoreCreateInput, "student_id">
+>;
 
 export interface ApiErrorBody {
   detail?: string | { msg: string; loc?: (string | number)[] }[];
+}
+
+// ---------------------------------------------------------------------
+// Student profile dashboard (mirrors backend/models/dashboard.py)
+// ---------------------------------------------------------------------
+
+export interface OfflineLibraryProfileItem {
+  usage_id: number;
+  student_id: number;
+  date: string;
+  book_id: string | null;
+  book_title: string | null;
+}
+
+export type AssessmentType = "Exam" | "Quiz" | string;
+
+export interface AssessmentAttempt {
+  assessment_id: number;
+  assessment_name: string;
+  assessment_type: AssessmentType;
+  date: string | null;
+  subject: string | null;
+  marks_obtained: number;
+  max_marks: number;
+  percentage: number;
+  remarks: string | null;
+  batch_average_percentage: number | null;
+}
+
+export interface SubjectPerformance {
+  subject: string;
+  total_assessments: number;
+  average_percentage: number | null;
+  trend: string;
+  trend_delta_percentage_points: number | null;
+}
+
+export interface BookCategoryCount {
+  category: string;
+  count: number;
+}
+
+export interface AttendanceAnalytics {
+  total_sessions: number;
+  completed_sessions: number;
+  average_duration_minutes: number | null;
+  trend: string;
+  trend_delta_minutes: number | null;
+  attendance_rate_last_30_days_percent: number | null;
+  current_streak_days: number;
+  days_since_last_visit: number | null;
+}
+
+export interface ExamAnalytics {
+  total_exams: number;
+  average_percentage: number | null;
+  trend: string;
+  trend_delta_percentage_points: number | null;
+}
+
+export interface QuizAnalytics {
+  total_quizzes: number;
+  average_percentage: number | null;
+  trend: string;
+  trend_delta_percentage_points: number | null;
+}
+
+export interface OverallAnalytics {
+  total_assessments: number;
+  average_percentage: number | null;
+  trend: string;
+  trend_delta_percentage_points: number | null;
+}
+
+export interface DigitalLibraryAnalytics {
+  total_sessions: number;
+  average_duration_minutes: number | null;
+}
+
+export interface OfflineLibraryAnalytics {
+  total_sessions: number;
+  self_study_sessions: number;
+  by_category: BookCategoryCount[];
+  estimated_total_minutes: number;
+}
+
+export interface PerformanceAnalytics {
+  overall: OverallAnalytics;
+  attendance: AttendanceAnalytics;
+  exams: ExamAnalytics;
+  quizzes: QuizAnalytics;
+  subjects: SubjectPerformance[];
+  digital_library: DigitalLibraryAnalytics;
+  offline_library: OfflineLibraryAnalytics;
+}
+
+export interface StudentDashboardResponse {
+  student: Student;
+  attendance_history: Attendance[];
+  digital_library_usage: DigitalLibraryUsage[];
+  offline_library_usage: OfflineLibraryProfileItem[];
+  exams_attempted: AssessmentAttempt[];
+  quizzes_attempted: AssessmentAttempt[];
+  score_trend: AssessmentAttempt[];
+  analytics: PerformanceAnalytics;
 }
