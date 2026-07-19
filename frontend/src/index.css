@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@theme {
+  /* Color tokens — "reading room" palette: ink shelving, brass fixtures, paper */
+  --color-ink: #1e2a38;
+  --color-ink-light: #2c3c50;
+  --color-paper: #eff2ee;
+  --color-paper-dim: #e4e8e2;
+  --color-card: #ffffff;
+  --color-brass: #a9782f;
+  --color-brass-light: #c79a4f;
+  --color-slate: #5b6472;
+  --color-slate-light: #8b93a0;
+  --color-border: #dce1dd;
+  --color-forest: #2f6f4e;
+  --color-forest-bg: #e6f0e9;
+  --color-rust: #b14a2e;
+  --color-rust-bg: #f6e8e3;
+
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+  }
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+  }
+  * {
+    border-color: var(--color-border);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-brass);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  /* Card-catalog tab: the signature clipped-corner shape used for IDs & status */
+  .tab-clip {
+    clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 100%, 0 100%);
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: var(--color-border);
+    border-radius: 4px;
+  }
+}
