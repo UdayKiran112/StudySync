@@ -18,11 +18,27 @@ export function Thead({ children }: { children: ReactNode }) {
   );
 }
 
-export function Th({ children, className }: { children: ReactNode; className?: string }) {
-  return <th className={`px-4 py-2.5 font-semibold ${className ?? ""}`}>{children}</th>;
+export function Th({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <th className={`px-4 py-2.5 font-semibold ${className ?? ""}`}>
+      {children}
+    </th>
+  );
 }
 
-export function Tr({ children, onClick }: { children: ReactNode; onClick?: () => void }) {
+export function Tr({
+  children,
+  onClick,
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+}) {
   return (
     <tr
       onClick={onClick}
@@ -33,6 +49,24 @@ export function Tr({ children, onClick }: { children: ReactNode; onClick?: () =>
   );
 }
 
-export function Td({ children, className }: { children: ReactNode; className?: string }) {
-  return <td className={`px-4 py-2.5 align-middle text-ink ${className ?? ""}`}>{children}</td>;
+export function Td({
+  children,
+  className,
+  onClick,
+  title,
+}: {
+  children: ReactNode;
+  className?: string;
+  onClick?: () => void;
+  title?: string;
+}) {
+  return (
+    <td
+      className={`px-4 py-2.5 align-middle text-ink ${className ?? ""}`}
+      onClick={onClick}
+      title={title}
+    >
+      {children}
+    </td>
+  );
 }

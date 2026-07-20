@@ -75,3 +75,23 @@ class AttendanceResponse(BaseModel):
     check_in: Optional[str] = None
     check_out: Optional[str] = None
     duration_minutes: Optional[int] = None
+
+
+class AttendanceUpdate(RequestModel):
+    """
+    Manual correction of a mistaken entry (e.g. staff typo'd a time).
+    All fields optional — only supplied fields are changed.
+    """
+
+    check_in: Optional[str] = Field(None, description="HH:MM 24-hour.")
+    check_out: Optional[str] = Field(None, description="HH:MM 24-hour.")
+
+    @field_validator("check_in")
+    @classmethod
+    def validate_check_in(cls, value: Optional[str]) -> Optional[str]:
+        return validate_hhmm(value)
+
+    @field_validator("check_out")
+    @classmethod
+    def validate_check_out(cls, value: Optional[str]) -> Optional[str]:
+        return validate_hhmm(value)

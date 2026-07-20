@@ -60,6 +60,17 @@ export function DigitalLibraryPage() {
     limit: 200,
   });
 
+  const selectedSubscription = subscriptions?.find(
+    (s) => s.subscription_id === subscriptionId,
+  );
+  // When checking in against a library subscription, the platform is
+  // whatever that subscription is called — staff shouldn't (and can't)
+  // type a different one. Only "Own account" sessions need a manual name.
+  const effectivePlatform =
+    accountType === "Library Subscription"
+      ? (selectedSubscription?.name ?? "")
+      : platform;
+
   const { data, isLoading, isError, error } = useDigitalLibraryList({
     date_: filterDate || undefined,
     limit: LIMIT,
@@ -78,12 +89,13 @@ export function DigitalLibraryPage() {
     }
     try {
       if (mode === "check-in") {
-        if (!platform.trim()) {
+        if (accountType === "Library Subscription") {
+          if (!subscriptionId) {
+            toast.error("Choose a subscription");
+            return;
+          }
+        } else if (!platform.trim()) {
           toast.error("Platform name is required");
-          return;
-        }
-        if (accountType === "Library Subscription" && !subscriptionId) {
-          toast.error("Choose a subscription");
           return;
         }
         await checkIn.mutateAsync({
@@ -91,14 +103,14 @@ export function DigitalLibraryPage() {
           account_type: accountType,
           subscription_id:
             accountType === "Library Subscription" ? subscriptionId : null,
-          platform_name: platform,
+          platform_name: effectivePlatform,
           purpose: purpose || null,
           notes: notes || null,
           date: entryDate || undefined,
           in_time: entryTime,
         });
         toast.success(
-          `Checked in ${student.name} on ${platform} at ${entryTime}`,
+          `Checked in ${student.name} on ${effectivePlatform} at ${entryTime}`,
         );
         setPlatform("");
         setPurpose("");
@@ -171,9 +183,13 @@ export function DigitalLibraryPage() {
                 <Field label="Account type" required>
                   <Select
                     value={accountType}
-                    onChange={(e) =>
-                      setAccountType(e.target.value as AccountType)
-                    }
+                    onChange={(e) => {
+                      setAccountType(e.target.value as AccountType);
+                      // Switching account type invalidates whichever of these
+                      // belonged to the other mode.
+                      setPlatform("");
+                      setSubscriptionId("");
+                    }}
                   >
                     <option value="Own Account">Own account</option>
                     <option value="Library Subscription">
@@ -181,30 +197,42 @@ export function DigitalLibraryPage() {
                     </option>
                   </Select>
                 </Field>
-                <Field label="Platform" required>
-                  <Input
-                    value={platform}
-                    onChange={(e) => setPlatform(e.target.value)}
-                    placeholder="e.g. JSTOR, Britannica Online"
-                  />
-                </Field>
-              </div>
 
-              {accountType === "Library Subscription" && (
-                <Field label="Subscription" required>
-                  <Select
-                    value={subscriptionId}
-                    onChange={(e) => setSubscriptionId(e.target.value)}
+                {accountType === "Own Account" ? (
+                  <Field label="Platform" required>
+                    <Input
+                      value={platform}
+                      onChange={(e) => setPlatform(e.target.value)}
+                      placeholder="e.g. JSTOR, Britannica Online"
+                    />
+                  </Field>
+                ) : (
+                  <Field
+                    label="Subscription"
+                    required
+                    hint={
+                      selectedSubscription
+                        ? `Platform will be recorded as "${selectedSubscription.name}"`
+                        : undefined
+                    }
                   >
-                    <option value="">Select a subscription…</option>
-                    {subscriptions?.map((s) => (
-                      <option key={s.subscription_id} value={s.subscription_id}>
-                        {s.subscription_id} — {s.name}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-              )}
+                    <Select
+                      value={subscriptionId}
+                      onChange={(e) => setSubscriptionId(e.target.value)}
+                    >
+                      <option value="">Select a subscription…</option>
+                      {subscriptions?.map((s) => (
+                        <option
+                          key={s.subscription_id}
+                          value={s.subscription_id}
+                        >
+                          {s.subscription_id} — {s.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                )}
+              </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Field label="Purpose">

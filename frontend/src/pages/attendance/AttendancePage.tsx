@@ -1,6 +1,6 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
-import { Trash2, LogIn, LogOut } from "lucide-react";
+import { Trash2, LogIn, LogOut, X } from "lucide-react";
 import {
   PageHeader,
   Spinner,
@@ -104,6 +104,11 @@ export function AttendancePage() {
     }
   }
 
+  function filterByDate(date: string) {
+    setFilterDate(date);
+    setOffset(0);
+  }
+
   const pending = checkIn.isPending || checkOut.isPending;
 
   return (
@@ -179,14 +184,11 @@ export function AttendancePage() {
         </form>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <Input
           type="date"
           value={filterDate}
-          onChange={(e) => {
-            setFilterDate(e.target.value);
-            setOffset(0);
-          }}
+          onChange={(e) => filterByDate(e.target.value)}
           className="w-44"
         />
         <Select
@@ -201,6 +203,14 @@ export function AttendancePage() {
           <option value="Morning">Morning</option>
           <option value="Afternoon">Afternoon</option>
         </Select>
+        {filterDate && (
+          <button
+            onClick={() => filterByDate("")}
+            className="flex items-center gap-1 rounded-full bg-brass/15 px-3 py-1 text-xs font-medium text-brass hover:bg-brass/25"
+          >
+            {formatDate(filterDate)} <X size={12} />
+          </button>
+        )}
       </div>
 
       {isLoading && <Spinner label="Loading attendance…" />}
@@ -225,7 +235,13 @@ export function AttendancePage() {
               {data.map((a) => (
                 <Tr key={a.attendance_id}>
                   <Td className="font-mono text-xs">{a.student_id}</Td>
-                  <Td>{formatDate(a.date)}</Td>
+                  <Td
+                    onClick={() => filterByDate(a.date)}
+                    className="cursor-pointer hover:text-brass hover:underline"
+                    title="Show only this date"
+                  >
+                    {formatDate(a.date)}
+                  </Td>
                   <Td>{a.session}</Td>
                   <Td className="font-mono text-xs">{a.check_in ?? "—"}</Td>
                   <Td className="font-mono text-xs">
