@@ -46,12 +46,21 @@ export function AttendancePage() {
   const checkOut = useCheckOut();
   const deleteMutation = useDeleteAttendance();
 
-  const { data, isLoading, isError, error } = useAttendanceList({
-    date_: filterDate || undefined,
+  // Backend takes a date range (date_from/date_to), not a single date, and
+  // no longer paginates this endpoint — it always returns everything
+  // matching the filter. A single-day filter is just date_from === date_to;
+  // paging happens client-side below with the full result set in hand.
+  const {
+    data: allData,
+    isLoading,
+    isError,
+    error,
+  } = useAttendanceList({
+    date_from: filterDate || undefined,
+    date_to: filterDate || undefined,
     session: filterSession || undefined,
-    limit: LIMIT,
-    offset,
   });
+  const data = allData?.slice(offset, offset + LIMIT);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -269,6 +278,7 @@ export function AttendancePage() {
             offset={offset}
             limit={LIMIT}
             count={data.length}
+            total={allData?.length}
             onOffsetChange={setOffset}
           />
         </>

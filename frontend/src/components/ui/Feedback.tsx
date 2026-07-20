@@ -1,5 +1,11 @@
 import type { ReactNode } from "react";
-import { Loader2, Inbox, AlertTriangle, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  Loader2,
+  Inbox,
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 import { Button } from "./Button";
 
 export function Spinner({ label = "Loading…" }: { label?: string }) {
@@ -20,13 +26,23 @@ export function ErrorBanner({ message }: { message: string }) {
   );
 }
 
-export function EmptyState({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
+export function EmptyState({
+  title,
+  description,
+  action,
+}: {
+  title: string;
+  description?: string;
+  action?: ReactNode;
+}) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border py-16 text-center">
       <Inbox size={28} className="text-slate-light" />
       <div>
         <p className="font-display text-base font-medium text-ink">{title}</p>
-        {description && <p className="mt-1 text-sm text-slate">{description}</p>}
+        {description && (
+          <p className="mt-1 text-sm text-slate">{description}</p>
+        )}
       </div>
       {action}
     </div>
@@ -47,9 +63,17 @@ export function PageHeader({
   return (
     <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
       <div>
-        {eyebrow && <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-brass">{eyebrow}</p>}
-        <h1 className="font-display text-2xl font-semibold text-ink">{title}</h1>
-        {description && <p className="mt-1 text-sm text-slate">{description}</p>}
+        {eyebrow && (
+          <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-brass">
+            {eyebrow}
+          </p>
+        )}
+        <h1 className="font-display text-2xl font-semibold text-ink">
+          {title}
+        </h1>
+        {description && (
+          <p className="mt-1 text-sm text-slate">{description}</p>
+        )}
       </div>
       {action}
     </div>
@@ -60,25 +84,43 @@ export function Pagination({
   offset,
   limit,
   count,
+  total,
   onOffsetChange,
 }: {
   offset: number;
   limit: number;
   count: number;
+  /** Pass this when the full result set is already known client-side
+   *  (e.g. an endpoint with no server-side pagination) for an exact
+   *  hasNext/hasPrev instead of the count===limit heuristic below. */
+  total?: number;
   onOffsetChange: (offset: number) => void;
 }) {
   const hasPrev = offset > 0;
-  const hasNext = count === limit;
+  const hasNext =
+    total !== undefined ? offset + limit < total : count === limit;
+  const shownTotal = total ?? offset + count;
   return (
     <div className="mt-4 flex items-center justify-between text-sm text-slate">
       <span>
         Showing {count === 0 ? 0 : offset + 1}–{offset + count}
+        {total !== undefined && ` of ${shownTotal}`}
       </span>
       <div className="flex gap-2">
-        <Button size="sm" variant="secondary" disabled={!hasPrev} onClick={() => onOffsetChange(Math.max(0, offset - limit))}>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={!hasPrev}
+          onClick={() => onOffsetChange(Math.max(0, offset - limit))}
+        >
           <ChevronLeft size={14} /> Prev
         </Button>
-        <Button size="sm" variant="secondary" disabled={!hasNext} onClick={() => onOffsetChange(offset + limit)}>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={!hasNext}
+          onClick={() => onOffsetChange(offset + limit)}
+        >
           Next <ChevronRight size={14} />
         </Button>
       </div>
