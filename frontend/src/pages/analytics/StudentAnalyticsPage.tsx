@@ -7,6 +7,7 @@ import {
   ListChecks,
   Laptop,
   BookOpen,
+  Presentation,
   Flame,
   CalendarClock,
   Search,
@@ -194,9 +195,9 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <AnalyticsStatCard
             icon={Laptop}
-            label="Digital sessions"
-            value={analytics.digital_library.total_sessions}
-            sub={<span className="text-xs text-slate">{formatDuration(analytics.digital_library.average_duration_minutes ?? null)} avg</span>}
+            label="Digital library time"
+            value={formatDuration(analytics.digital_library.total_duration_minutes)}
+            sub={<span className="text-xs text-slate">{analytics.digital_library.total_sessions} sessions</span>}
           />
           <AnalyticsStatCard
             icon={BookOpen}
@@ -206,10 +207,11 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
           />
           <AnalyticsStatCard
             icon={BookOpen}
-            label="Est. offline time"
+            label="Offline library time"
             value={formatDuration(analytics.offline_library.estimated_total_minutes)}
             sub={<span className="text-xs text-slate-light">Inferred from attendance minus digital time</span>}
           />
+          <AnalyticsStatCard icon={Presentation} label="Coaching class time" value={formatDuration(analytics.coaching.total_duration_minutes)} sub={<span className="text-xs text-slate">{analytics.coaching.total_sessions} sessions</span>} />
         </div>
 
         <div className="mt-4">

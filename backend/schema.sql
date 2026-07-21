@@ -224,19 +224,41 @@ CREATE TABLE sync_log (
 -- An enrolment deliberately has either a library student ID OR external
 -- participant details. This keeps outside visitors out of the students table
 -- while still allowing one coaching roster to show both groups together.
+CREATE TABLE instructors (
+    instructor_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL CHECK(length(trim(name)) > 0),
+    phone           TEXT,
+    specialization  TEXT,
+    notes           TEXT,
+    status          TEXT NOT NULL DEFAULT 'Active' CHECK(status IN ('Active', 'Inactive')),
+    UNIQUE(name, phone)
+);
+
+CREATE TABLE external_participants (
+    external_participant_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL CHECK(length(trim(name)) > 0),
+    village         TEXT,
+    phone           TEXT,
+    gender          TEXT CHECK(gender IS NULL OR gender IN ('Male', 'Female', 'Other')),
+    guardian_name   TEXT,
+    notes           TEXT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(name, phone)
+);
+
 CREATE TABLE coaching_classes (
     class_id        INTEGER PRIMARY KEY AUTOINCREMENT,
     title           TEXT NOT NULL CHECK(length(trim(title)) > 0),
     class_date      DATE NOT NULL,
     start_time      TEXT CHECK(start_time IS NULL OR (start_time GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(start_time, 1, 2) <= '23')),
     end_time        TEXT CHECK(end_time IS NULL OR (end_time GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(end_time, 1, 2) <= '23')),
+    duration_minutes INTEGER GENERATED ALWAYS AS (CASE WHEN start_time IS NOT NULL AND end_time IS NOT NULL THEN CAST(ROUND((julianday('2000-01-01 ' || end_time) - julianday('2000-01-01 ' || start_time)) * 24 * 60) AS INTEGER) END) STORED,
     subject         TEXT,
-    instructor      TEXT,
-    venue           TEXT,
-    capacity        INTEGER CHECK(capacity IS NULL OR capacity > 0),
+    instructor_id   INTEGER,
     notes           TEXT,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CHECK(end_time IS NULL OR start_time IS NULL OR end_time > start_time)
+    CHECK(end_time IS NULL OR start_time IS NULL OR end_time > start_time),
+    FOREIGN KEY (instructor_id) REFERENCES instructors(instructor_id) ON DELETE SET NULL
 );
 
 CREATE TABLE coaching_enrollments (
@@ -244,21 +266,15 @@ CREATE TABLE coaching_enrollments (
     class_id        INTEGER NOT NULL,
     participant_type TEXT NOT NULL CHECK(participant_type IN ('Library Student', 'External Student')),
     student_id      INTEGER,
-    external_name   TEXT,
-    village         TEXT,
-    phone           TEXT,
-    gender          TEXT CHECK(gender IS NULL OR gender IN ('Male', 'Female', 'Other')),
-    guardian_name   TEXT,
-    notes           TEXT,
-    attendance_status TEXT NOT NULL DEFAULT 'Registered'
-                      CHECK(attendance_status IN ('Registered', 'Present', 'Absent', 'Cancelled')),
+    external_participant_id INTEGER,
     enrolled_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (class_id) REFERENCES coaching_classes(class_id) ON DELETE CASCADE,
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
+    FOREIGN KEY (external_participant_id) REFERENCES external_participants(external_participant_id) ON DELETE RESTRICT,
     CHECK(
-        (participant_type = 'Library Student' AND student_id IS NOT NULL AND external_name IS NULL)
+        (participant_type = 'Library Student' AND student_id IS NOT NULL AND external_participant_id IS NULL)
         OR
-        (participant_type = 'External Student' AND student_id IS NULL AND external_name IS NOT NULL AND length(trim(external_name)) > 0)
+        (participant_type = 'External Student' AND student_id IS NULL AND external_participant_id IS NOT NULL)
     ),
     UNIQUE(class_id, student_id)
 );
@@ -266,3 +282,4 @@ CREATE TABLE coaching_enrollments (
 CREATE INDEX idx_coaching_classes_date ON coaching_classes(class_date);
 CREATE INDEX idx_coaching_enrollments_class ON coaching_enrollments(class_id);
 CREATE INDEX idx_coaching_enrollments_student ON coaching_enrollments(student_id);
+CREATE INDEX idx_coaching_enrollments_external ON coaching_enrollments(external_participant_id);

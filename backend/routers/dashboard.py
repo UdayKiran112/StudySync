@@ -160,6 +160,12 @@ def _build_dashboard_data(db: sqlite3.Connection, student_id: int) -> dict:
         """,
         (student_id,),
     ).fetchall()
+    coaching_usage = db.execute(
+        """SELECT c.class_date AS date, c.duration_minutes
+        FROM coaching_enrollments e JOIN coaching_classes c ON c.class_id = e.class_id
+        WHERE e.student_id = ? ORDER BY c.class_date DESC""",
+        (student_id,),
+    ).fetchall()
 
     exam_batch_avgs = _batch_averages(
         db, "exam_marks", "exam_id", "marks_obtained", "exams", "exam_id"
@@ -312,8 +318,12 @@ def _build_dashboard_data(db: sqlite3.Connection, student_id: int) -> dict:
             digital_minutes_by_date[row["date"]] = (
                 digital_minutes_by_date.get(row["date"], 0) + row["duration_minutes"]
             )
+    coaching_minutes_by_date: dict = {}
+    for row in coaching_usage:
+        if row["duration_minutes"] is not None:
+            coaching_minutes_by_date[row["date"]] = coaching_minutes_by_date.get(row["date"], 0) + row["duration_minutes"]
     estimated_offline_minutes = sum(
-        max(att_minutes - digital_minutes_by_date.get(d, 0), 0)
+        max(att_minutes - digital_minutes_by_date.get(d, 0) - coaching_minutes_by_date.get(d, 0), 0)
         for d, att_minutes in attendance_minutes_by_date.items()
     )
 
@@ -363,6 +373,7 @@ def _build_dashboard_data(db: sqlite3.Connection, student_id: int) -> dict:
         "subjects": subjects_performance,
         "digital_library": {
             "total_sessions": len(digital_usage),
+            "total_duration_minutes": sum(digital_durations),
             "average_duration_minutes": round(mean(digital_durations), 2)
             if digital_durations
             else None,
@@ -372,6 +383,11 @@ def _build_dashboard_data(db: sqlite3.Connection, student_id: int) -> dict:
             "self_study_sessions": self_study_sessions,
             "by_category": by_category,
             "estimated_total_minutes": estimated_offline_minutes,
+        },
+        "coaching": {
+            "total_sessions": len(coaching_usage),
+            "total_duration_minutes": sum(row["duration_minutes"] or 0 for row in coaching_usage),
+            "average_duration_minutes": round(mean([row["duration_minutes"] for row in coaching_usage if row["duration_minutes"] is not None]), 2) if any(row["duration_minutes"] is not None for row in coaching_usage) else None,
         },
     }
 

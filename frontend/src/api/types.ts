@@ -225,11 +225,12 @@ export type QuizScoreUpdateInput = Partial<
 >;
 
 export type CoachingParticipantType = "Library Student" | "External Student";
-export type CoachingAttendanceStatus = "Registered" | "Present" | "Absent" | "Cancelled";
-export interface CoachingClass { class_id: number; title: string; class_date: string; start_time: string | null; end_time: string | null; subject: string | null; instructor: string | null; venue: string | null; capacity: number | null; notes: string | null; created_at: string; }
-export type CoachingClassInput = Omit<CoachingClass, "class_id" | "created_at">;
-export interface CoachingEnrollment { enrollment_id: number; class_id: number; participant_type: CoachingParticipantType; student_id: number | null; external_name: string | null; village: string | null; phone: string | null; gender: Gender | null; guardian_name: string | null; notes: string | null; attendance_status: CoachingAttendanceStatus; enrolled_at: string; participant_name: string; }
-export interface CoachingEnrollmentInput { participant_type: CoachingParticipantType; student_id?: number | null; external_name?: string | null; village?: string | null; phone?: string | null; gender?: Gender | null; guardian_name?: string | null; notes?: string | null; }
+export interface Instructor { instructor_id: number; name: string; phone: string | null; specialization: string | null; notes: string | null; status: string; }
+export interface ExternalParticipant { external_participant_id: number; name: string; village: string | null; phone: string | null; gender: Gender | null; guardian_name: string | null; notes: string | null; created_at: string; }
+export interface CoachingClass { class_id: number; title: string; class_date: string; start_time: string | null; end_time: string | null; duration_minutes: number | null; subject: string | null; instructor_id: number | null; instructor_name: string | null; notes: string | null; created_at: string; }
+export type CoachingClassInput = Omit<CoachingClass, "class_id" | "created_at" | "instructor_name" | "duration_minutes">;
+export interface CoachingEnrollment { enrollment_id: number; class_id: number; participant_type: CoachingParticipantType; student_id: number | null; external_participant_id: number | null; village: string | null; phone: string | null; enrolled_at: string; participant_name: string; }
+export interface CoachingEnrollmentInput { participant_type: CoachingParticipantType; student_id?: number | null; external_participant_id?: number | null; }
 
 export interface ApiErrorBody {
   detail?: string | { msg: string; loc?: (string | number)[] }[];
@@ -309,6 +310,7 @@ export interface OverallAnalytics {
 
 export interface DigitalLibraryAnalytics {
   total_sessions: number;
+  total_duration_minutes: number;
   average_duration_minutes: number | null;
 }
 
@@ -318,6 +320,7 @@ export interface OfflineLibraryAnalytics {
   by_category: BookCategoryCount[];
   estimated_total_minutes: number;
 }
+export interface CoachingAnalytics { total_sessions: number; total_duration_minutes: number; average_duration_minutes: number | null; }
 
 export interface PerformanceAnalytics {
   overall: OverallAnalytics;
@@ -327,6 +330,7 @@ export interface PerformanceAnalytics {
   subjects: SubjectPerformance[];
   digital_library: DigitalLibraryAnalytics;
   offline_library: OfflineLibraryAnalytics;
+  coaching: CoachingAnalytics;
 }
 
 export interface StudentDashboardResponse {

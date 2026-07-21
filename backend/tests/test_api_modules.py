@@ -115,9 +115,13 @@ class ApiModuleTests(unittest.TestCase):
         self.assertEqual(response.json()["student"]["student_id"], 9001)
 
     def test_10_coaching_classes_module(self):
+        instructor = self.request("POST", "/api/coaching-classes/instructors", json={"name": "Test Instructor"})
+        self.assertEqual(instructor.status_code, 201)
+        external = self.request("POST", "/api/coaching-classes/external-participants", json={"name": "Outside Visitor", "village": "Kolar", "phone": "9000012345"})
+        self.assertEqual(external.status_code, 201)
         response = self.request("POST", "/api/coaching-classes", json={
             "title": "Study Skills Workshop", "class_date": "2026-06-06",
-            "start_time": "10:00", "end_time": "12:00", "capacity": 10,
+            "start_time": "10:00", "end_time": "12:00", "instructor_id": instructor.json()["instructor_id"],
         })
         self.assertEqual(response.status_code, 201)
         class_id = response.json()["class_id"]
@@ -125,8 +129,7 @@ class ApiModuleTests(unittest.TestCase):
             "participant_type": "Library Student", "student_id": 9001,
         }).status_code, 201)
         self.assertEqual(self.request("POST", f"/api/coaching-classes/{class_id}/enrollments", json={
-            "participant_type": "External Student", "external_name": "Outside Visitor",
-            "village": "Kolar", "phone": "9000012345",
+            "participant_type": "External Student", "external_participant_id": external.json()["external_participant_id"],
         }).status_code, 201)
         roster = self.request("GET", f"/api/coaching-classes/{class_id}/enrollments")
         self.assertEqual(roster.status_code, 200)

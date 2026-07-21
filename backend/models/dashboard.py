@@ -88,6 +88,7 @@ class OverallAnalytics(BaseModel):
 
 class DigitalLibraryAnalytics(BaseModel):
     total_sessions: int
+    total_duration_minutes: int
     average_duration_minutes: Optional[float] = None
 
 
@@ -104,6 +105,12 @@ class OfflineLibraryAnalytics(BaseModel):
     estimated_total_minutes: int
 
 
+class CoachingAnalytics(BaseModel):
+    total_sessions: int
+    total_duration_minutes: int
+    average_duration_minutes: Optional[float] = None
+
+
 class PerformanceAnalytics(BaseModel):
     overall: OverallAnalytics
     attendance: AttendanceAnalytics
@@ -112,6 +119,7 @@ class PerformanceAnalytics(BaseModel):
     subjects: List[SubjectPerformance]
     digital_library: DigitalLibraryAnalytics
     offline_library: OfflineLibraryAnalytics
+    coaching: CoachingAnalytics
 
 
 class StudentDashboardResponse(BaseModel):
