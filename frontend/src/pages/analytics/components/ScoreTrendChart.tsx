@@ -24,7 +24,10 @@ export function ScoreTrendChart({ data }: { data: AssessmentAttempt[] }) {
           <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: "#5b6472" }} />
           <Tooltip
             contentStyle={{ borderRadius: 6, border: "1px solid #dce1dd", fontSize: 12 }}
-            formatter={(value, key) => [`${value}%`, key === "percentage" ? "Score" : "Batch average"]}
+            formatter={(value, name) => [
+              `${value}%`,
+              name === "Score" ? "Student score" : "Batch average",
+            ]}
             labelFormatter={(_, payload) => payload?.[0]?.payload?.name ?? ""}
           />
           <Line type="monotone" dataKey="percentage" stroke="#1e2a38" strokeWidth={2} dot={{ r: 3 }} name="Score" />

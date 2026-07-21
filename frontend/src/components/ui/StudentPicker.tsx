@@ -16,6 +16,7 @@ export function StudentPicker({
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
   const debounced = useDebouncedValue(query, 400);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -29,6 +30,10 @@ export function StudentPicker({
   const results = useMemo(() => (canSearch ? (data ?? []) : []), [canSearch, data]);
 
   useEffect(() => {
+    setActiveIndex(0);
+  }, [query, open]);
+
+  useEffect(() => {
     function onClickOutside(e: MouseEvent) {
       if (
         containerRef.current &&
@@ -40,6 +45,12 @@ export function StudentPicker({
     document.addEventListener("mousedown", onClickOutside);
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
+
+  function selectStudent(student: Student) {
+    onChange(student);
+    setQuery("");
+    setOpen(false);
+  }
 
   if (value) {
     return (
@@ -74,22 +85,36 @@ export function StudentPicker({
             setOpen(true);
           }}
           onFocus={() => setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setOpen(false);
+              return;
+            }
+            if (!open || results.length === 0) return;
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              setActiveIndex((index) => Math.min(index + 1, results.length - 1));
+            } else if (event.key === "ArrowUp") {
+              event.preventDefault();
+              setActiveIndex((index) => Math.max(index - 1, 0));
+            } else if (event.key === "Enter") {
+              event.preventDefault();
+              selectStudent(results[activeIndex]);
+            }
+          }}
           placeholder="Search by name or student ID…"
           className="w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 text-sm text-ink placeholder:text-slate-light focus:border-brass focus:outline-none"
         />
       </div>
       {open && canSearch && results.length > 0 && (
         <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-md border border-border bg-card shadow-lg">
-          {results.map((s) => (
+          {results.map((s, index) => (
             <button
               type="button"
               key={s.student_id}
-              onClick={() => {
-                onChange(s);
-                setQuery("");
-                setOpen(false);
-              }}
-              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-paper-dim"
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => selectStudent(s)}
+              className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm ${index === activeIndex ? "bg-paper-dim" : "hover:bg-paper-dim"}`}
             >
               <IdTab>{s.student_id}</IdTab>
               <span>{s.name}</span>
