@@ -170,6 +170,10 @@ def check_out(
 
     404 if the student has no open session. 400 if out_time isn't later
     than in_time (schema's CHECK constraint, translated to a clean error).
+    
+    After check-out, if auto-created offline library records exist for the
+    same date, they are cleaned up since the student now has a recorded
+    digital library activity.
     """
     open_session = _find_open_session(db, payload.student_id)
     if not open_session:
@@ -193,6 +197,13 @@ def check_out(
                 f"in_time ({open_session['in_time']})"
             ),
         )
+
+    # Clean up auto-created self-study offline records for this date
+    try:
+        from routers.attendance import _cleanup_auto_filled_offline_if_needed
+        _cleanup_auto_filled_offline_if_needed(db, payload.student_id, open_session["date"])
+    except Exception:
+        pass  # Cleanup is a side effect; don't let failures block check-out
 
     row = db.execute(
         "SELECT * FROM digital_library_usage WHERE usage_id = ?",

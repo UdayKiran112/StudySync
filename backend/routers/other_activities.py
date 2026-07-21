@@ -66,9 +66,18 @@ def get_attendance(activity_id: int, db: sqlite3.Connection = Depends(get_db_dep
 
 @router.post('/{activity_id}/attendance', response_model=OtherActivityAttendanceResponse, status_code=201)
 def add_attendance(activity_id: int, p: OtherActivityAttendanceCreate, db: sqlite3.Connection = Depends(get_db_dependency)):
-    activity_row(db, activity_id)
+    activity_data = activity_row(db, activity_id)
     c = db.execute('INSERT INTO other_activities_attendance(activity_id, participant_type, student_id, external_participant_id) VALUES(?,?,?,?)',
                    (activity_id, p.participant_type, p.student_id, p.external_participant_id))
+    
+    # Clean up auto-created self-study offline records if this is a library student
+    if p.student_id:
+        try:
+            from routers.attendance import _cleanup_auto_filled_offline_if_needed
+            _cleanup_auto_filled_offline_if_needed(db, p.student_id, activity_data['session_date'])
+        except Exception:
+            pass  # Cleanup is a side effect; don't let failures block attendance
+    
     return dict(attendance_row(db, c.lastrowid))
 
 @router.delete('/{activity_id}/attendance/{attendance_id}', status_code=204)

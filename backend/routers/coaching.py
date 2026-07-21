@@ -51,4 +51,15 @@ def roster(class_id:int,db:sqlite3.Connection=Depends(get_db_dependency)):
     class_row(db,class_id);return [dict(x) for x in db.execute("""SELECT e.*,COALESCE(s.name,p.name) participant_name,p.village,p.phone FROM coaching_enrollments e LEFT JOIN students s ON s.student_id=e.student_id LEFT JOIN external_participants p ON p.external_participant_id=e.external_participant_id WHERE e.class_id=? ORDER BY participant_name""",(class_id,)).fetchall()]
 @router.post('/{class_id}/enrollments',response_model=CoachingEnrollmentResponse,status_code=201)
 def enroll(class_id:int,p:CoachingEnrollmentCreate,db:sqlite3.Connection=Depends(get_db_dependency)):
-    class_row(db,class_id); c=db.execute('INSERT INTO coaching_enrollments(class_id,participant_type,student_id,external_participant_id) VALUES(?,?,?,?)',(class_id,*p.model_dump().values()));return dict(roster_row(db,c.lastrowid))
+    class_row_data = class_row(db,class_id)
+    c=db.execute('INSERT INTO coaching_enrollments(class_id,participant_type,student_id,external_participant_id) VALUES(?,?,?,?)',(class_id,*p.model_dump().values()))
+    
+    # Clean up auto-created self-study offline records if this is a library student
+    if p.student_id:
+        try:
+            from routers.attendance import _cleanup_auto_filled_offline_if_needed
+            _cleanup_auto_filled_offline_if_needed(db, p.student_id, class_row_data['class_date'])
+        except Exception:
+            pass  # Cleanup is a side effect; don't let failures block enrollment
+    
+    return dict(roster_row(db,c.lastrowid))

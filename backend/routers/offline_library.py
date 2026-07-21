@@ -62,6 +62,9 @@ def create_offline_usage(
     404 if the student doesn't exist. If book_id is provided, 404 if that
     book isn't in the catalog. book_id may be omitted entirely for
     self-material reading — no further detail is captured in that case.
+    
+    If this entry has a book_id (not a self-study entry) and auto-created
+    self-study records exist for this date, they will be cleaned up.
     """
     _ensure_student_exists(db, payload.student_id)
 
@@ -77,6 +80,14 @@ def create_offline_usage(
         """,
         (payload.student_id, record_date, payload.book_id),
     )
+
+    # If this is a manual book entry (not self-study), clean up auto-created records
+    if payload.book_id is not None:
+        try:
+            from routers.attendance import _cleanup_auto_filled_offline_if_needed
+            _cleanup_auto_filled_offline_if_needed(db, payload.student_id, record_date)
+        except Exception:
+            pass  # Cleanup is a side effect; don't let failures block creation
 
     row = db.execute(
         "SELECT * FROM offline_library_usage WHERE usage_id = ?",
