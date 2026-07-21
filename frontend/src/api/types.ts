@@ -322,6 +322,37 @@ export interface OfflineLibraryAnalytics {
 }
 export interface CoachingAnalytics { total_sessions: number; total_duration_minutes: number; average_duration_minutes: number | null; }
 
+export type ParticipantType = "Library Student" | "External Student";
+export interface OtherActivity {
+  activity_id: number;
+  session_name: string;
+  speaker_name: string;
+  session_date: string;
+  session_type: string;
+  notes: string | null;
+  created_at: string;
+}
+
+export type OtherActivityInput = Omit<OtherActivity, "activity_id" | "created_at">;
+
+export interface OtherActivityAttendance {
+  attendance_id: number;
+  activity_id: number;
+  participant_type: ParticipantType;
+  student_id: number | null;
+  external_participant_id: number | null;
+  attended_at: string;
+  participant_name: string;
+  village: string | null;
+  phone: string | null;
+}
+
+export interface OtherActivityAttendanceInput {
+  participant_type: ParticipantType;
+  student_id?: number | null;
+  external_participant_id?: number | null;
+}
+
 export interface PerformanceAnalytics {
   overall: OverallAnalytics;
   attendance: AttendanceAnalytics;

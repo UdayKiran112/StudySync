@@ -11,6 +11,7 @@ import {
   GraduationCap,
   ListChecks,
   Presentation,
+  Mic,
   Settings as SettingsIcon,
   CircleAlert,
   BarChart3,
@@ -52,6 +53,10 @@ const NAV_SECTIONS = [
   {
     label: "Coaching",
     items: [{ to: "/coaching-classes", icon: Presentation, label: "Coaching classes" }],
+  },
+  {
+    label: "Activities",
+    items: [{ to: "/other-activities", icon: Mic, label: "Other activities" }],
   },
   {
     label: "Reports",

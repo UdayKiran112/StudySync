@@ -16,6 +16,8 @@ import { QuizDetail } from "./pages/quizzes/QuizDetail";
 import { SettingsPage } from "./pages/settings/SettingsPage";
 import { CoachingClassesPage } from "./pages/coaching/CoachingClassesPage";
 import { CoachingClassDetail } from "./pages/coaching/CoachingClassDetail";
+import { OtherActivitiesPage } from "./pages/other-activities/OtherActivitiesPage";
+import { OtherActivityDetail } from "./pages/other-activities/OtherActivityDetail";
 import { Spinner } from "./components/ui/Feedback";
 
 const StudentAnalyticsPage = lazy(() =>
@@ -54,6 +56,8 @@ export const router = createBrowserRouter([
       { path: "settings", element: <SettingsPage /> },
       { path: "coaching-classes", element: <CoachingClassesPage /> },
       { path: "coaching-classes/:classId", element: <CoachingClassDetail /> },
+      { path: "other-activities", element: <OtherActivitiesPage /> },
+      { path: "other-activities/:activityId", element: <OtherActivityDetail /> },
     ],
   },
 ]);

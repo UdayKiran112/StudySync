@@ -37,6 +37,7 @@ from routers import (
     quizzes,
     dashboard,
     coaching,
+    other_activities,
 )
 
 
@@ -126,6 +127,7 @@ app.include_router(quizzes.router)
 app.include_router(quizzes.scores_router)
 app.include_router(dashboard.router)
 app.include_router(coaching.router)
+app.include_router(other_activities.router)
 
 
 @app.get("/", tags=["Health"])
