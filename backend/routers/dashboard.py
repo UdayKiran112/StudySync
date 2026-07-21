@@ -161,8 +161,9 @@ def _build_dashboard_data(db: sqlite3.Connection, student_id: int) -> dict:
         (student_id,),
     ).fetchall()
     coaching_usage = db.execute(
-        """SELECT c.class_date AS date, c.duration_minutes
+        """SELECT c.class_date AS date, c.duration_minutes, c.subject, i.name AS instructor_name
         FROM coaching_enrollments e JOIN coaching_classes c ON c.class_id = e.class_id
+        LEFT JOIN instructors i ON i.instructor_id = c.instructor_id
         WHERE e.student_id = ? ORDER BY c.class_date DESC""",
         (student_id,),
     ).fetchall()
@@ -405,6 +406,7 @@ def _build_dashboard_data(db: sqlite3.Connection, student_id: int) -> dict:
             }
             for row in offline_usage
         ],
+        "coaching_usage": [dict(row) for row in coaching_usage],
         "exams_attempted": exams,
         "quizzes_attempted": quizzes,
         "score_trend": score_trend,

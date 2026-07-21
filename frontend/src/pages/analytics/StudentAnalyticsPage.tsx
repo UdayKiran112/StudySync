@@ -28,6 +28,7 @@ import { SubjectPerformanceTable } from "./components/SubjectPerformanceTable";
 import { CategoryBreakdownChart } from "./components/CategoryBreakdownChart";
 import { AssessmentAttemptsTable } from "./components/AssessmentAttemptsTable";
 import { ExportMenu } from "./components/ExportMenu";
+import { EngagementInsights } from "./components/EngagementInsights";
 
 export function StudentAnalyticsPage() {
   const { studentId } = useParams();
@@ -100,6 +101,8 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
           <ExportMenu dashboard={dashboard} />
         </div>
       </div>
+
+      <EngagementInsights dashboard={dashboard} />
 
       {/* Top-line summary */}
       <section>

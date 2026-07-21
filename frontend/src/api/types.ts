@@ -321,6 +321,7 @@ export interface OfflineLibraryAnalytics {
   estimated_total_minutes: number;
 }
 export interface CoachingAnalytics { total_sessions: number; total_duration_minutes: number; average_duration_minutes: number | null; }
+export interface CoachingUsageItem { date: string; duration_minutes: number | null; subject: string | null; instructor_name: string | null; }
 
 export type ParticipantType = "Library Student" | "External Student";
 export interface OtherActivity {
@@ -369,6 +370,7 @@ export interface StudentDashboardResponse {
   attendance_history: Attendance[];
   digital_library_usage: DigitalLibraryUsage[];
   offline_library_usage: OfflineLibraryProfileItem[];
+  coaching_usage: CoachingUsageItem[];
   exams_attempted: AssessmentAttempt[];
   quizzes_attempted: AssessmentAttempt[];
   score_trend: AssessmentAttempt[];

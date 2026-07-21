@@ -111,6 +111,13 @@ class CoachingAnalytics(BaseModel):
     average_duration_minutes: Optional[float] = None
 
 
+class CoachingUsageItem(BaseModel):
+    date: date_type
+    duration_minutes: Optional[int] = None
+    subject: Optional[str] = None
+    instructor_name: Optional[str] = None
+
+
 class PerformanceAnalytics(BaseModel):
     overall: OverallAnalytics
     attendance: AttendanceAnalytics
@@ -127,6 +134,7 @@ class StudentDashboardResponse(BaseModel):
     attendance_history: List[AttendanceResponse]
     digital_library_usage: List[DigitalLibraryResponse]
     offline_library_usage: List[OfflineLibraryProfileItem]
+    coaching_usage: List[CoachingUsageItem]
     exams_attempted: List[AssessmentAttempt]
     quizzes_attempted: List[AssessmentAttempt]
     score_trend: List[AssessmentAttempt]
