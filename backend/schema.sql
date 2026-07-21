@@ -217,3 +217,52 @@ CREATE TABLE sync_log (
     status          TEXT CHECK(status IN ('Success', 'Failed', 'Partial')),
     details         TEXT
 );
+
+-- ===================================
+-- COACHING CLASSES
+-- ===================================
+-- An enrolment deliberately has either a library student ID OR external
+-- participant details. This keeps outside visitors out of the students table
+-- while still allowing one coaching roster to show both groups together.
+CREATE TABLE coaching_classes (
+    class_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    title           TEXT NOT NULL CHECK(length(trim(title)) > 0),
+    class_date      DATE NOT NULL,
+    start_time      TEXT CHECK(start_time IS NULL OR (start_time GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(start_time, 1, 2) <= '23')),
+    end_time        TEXT CHECK(end_time IS NULL OR (end_time GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(end_time, 1, 2) <= '23')),
+    subject         TEXT,
+    instructor      TEXT,
+    venue           TEXT,
+    capacity        INTEGER CHECK(capacity IS NULL OR capacity > 0),
+    notes           TEXT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CHECK(end_time IS NULL OR start_time IS NULL OR end_time > start_time)
+);
+
+CREATE TABLE coaching_enrollments (
+    enrollment_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    class_id        INTEGER NOT NULL,
+    participant_type TEXT NOT NULL CHECK(participant_type IN ('Library Student', 'External Student')),
+    student_id      INTEGER,
+    external_name   TEXT,
+    village         TEXT,
+    phone           TEXT,
+    gender          TEXT CHECK(gender IS NULL OR gender IN ('Male', 'Female', 'Other')),
+    guardian_name   TEXT,
+    notes           TEXT,
+    attendance_status TEXT NOT NULL DEFAULT 'Registered'
+                      CHECK(attendance_status IN ('Registered', 'Present', 'Absent', 'Cancelled')),
+    enrolled_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (class_id) REFERENCES coaching_classes(class_id) ON DELETE CASCADE,
+    FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
+    CHECK(
+        (participant_type = 'Library Student' AND student_id IS NOT NULL AND external_name IS NULL)
+        OR
+        (participant_type = 'External Student' AND student_id IS NULL AND external_name IS NOT NULL AND length(trim(external_name)) > 0)
+    ),
+    UNIQUE(class_id, student_id)
+);
+
+CREATE INDEX idx_coaching_classes_date ON coaching_classes(class_date);
+CREATE INDEX idx_coaching_enrollments_class ON coaching_enrollments(class_id);
+CREATE INDEX idx_coaching_enrollments_student ON coaching_enrollments(student_id);

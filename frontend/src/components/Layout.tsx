@@ -10,6 +10,7 @@ import {
   Layers,
   GraduationCap,
   ListChecks,
+  Presentation,
   Settings as SettingsIcon,
   CircleAlert,
   BarChart3,
@@ -47,6 +48,10 @@ const NAV_SECTIONS = [
       { to: "/exams", icon: GraduationCap, label: "Exams" },
       { to: "/quizzes", icon: ListChecks, label: "Quizzes" },
     ],
+  },
+  {
+    label: "Coaching",
+    items: [{ to: "/coaching-classes", icon: Presentation, label: "Coaching classes" }],
   },
   {
     label: "Reports",

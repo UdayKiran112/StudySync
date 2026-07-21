@@ -1,0 +1,12 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiClient } from "./client";
+import type { CoachingClass, CoachingClassInput, CoachingEnrollment, CoachingEnrollmentInput, CoachingAttendanceStatus } from "./types";
+
+const keys = { all: ["coaching-classes"] as const, roster: (id: number) => ["coaching-classes", id, "enrollments"] as const };
+export function useCoachingClasses() { return useQuery({ queryKey: keys.all, queryFn: async () => (await apiClient.get<CoachingClass[]>("/api/coaching-classes", { params: { limit: 200 } })).data }); }
+export function useCreateCoachingClass() { const qc = useQueryClient(); return useMutation({ mutationFn: async (input: CoachingClassInput) => (await apiClient.post<CoachingClass>("/api/coaching-classes", input)).data, onSuccess: () => qc.invalidateQueries({ queryKey: keys.all }) }); }
+export function useDeleteCoachingClass() { const qc = useQueryClient(); return useMutation({ mutationFn: (id: number) => apiClient.delete(`/api/coaching-classes/${id}`), onSuccess: () => qc.invalidateQueries({ queryKey: keys.all }) }); }
+export function useCoachingEnrollments(classId: number | undefined) { return useQuery({ queryKey: keys.roster(classId ?? -1), queryFn: async () => (await apiClient.get<CoachingEnrollment[]>(`/api/coaching-classes/${classId}/enrollments`)).data, enabled: classId !== undefined }); }
+export function useAddCoachingEnrollment(classId: number) { const qc = useQueryClient(); return useMutation({ mutationFn: async (input: CoachingEnrollmentInput) => (await apiClient.post<CoachingEnrollment>(`/api/coaching-classes/${classId}/enrollments`, input)).data, onSuccess: () => qc.invalidateQueries({ queryKey: keys.roster(classId) }) }); }
+export function useUpdateCoachingEnrollment(classId: number) { const qc = useQueryClient(); return useMutation({ mutationFn: async ({ id, attendance_status }: { id: number; attendance_status: CoachingAttendanceStatus }) => (await apiClient.patch<CoachingEnrollment>(`/api/coaching-classes/enrollments/${id}`, { attendance_status })).data, onSuccess: () => qc.invalidateQueries({ queryKey: keys.roster(classId) }) }); }
+export function useDeleteCoachingEnrollment(classId: number) { const qc = useQueryClient(); return useMutation({ mutationFn: (id: number) => apiClient.delete(`/api/coaching-classes/enrollments/${id}`), onSuccess: () => qc.invalidateQueries({ queryKey: keys.roster(classId) }) }); }

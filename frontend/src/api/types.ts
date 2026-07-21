@@ -224,6 +224,13 @@ export type QuizScoreUpdateInput = Partial<
   Omit<QuizScoreCreateInput, "student_id">
 >;
 
+export type CoachingParticipantType = "Library Student" | "External Student";
+export type CoachingAttendanceStatus = "Registered" | "Present" | "Absent" | "Cancelled";
+export interface CoachingClass { class_id: number; title: string; class_date: string; start_time: string | null; end_time: string | null; subject: string | null; instructor: string | null; venue: string | null; capacity: number | null; notes: string | null; created_at: string; }
+export type CoachingClassInput = Omit<CoachingClass, "class_id" | "created_at">;
+export interface CoachingEnrollment { enrollment_id: number; class_id: number; participant_type: CoachingParticipantType; student_id: number | null; external_name: string | null; village: string | null; phone: string | null; gender: Gender | null; guardian_name: string | null; notes: string | null; attendance_status: CoachingAttendanceStatus; enrolled_at: string; participant_name: string; }
+export interface CoachingEnrollmentInput { participant_type: CoachingParticipantType; student_id?: number | null; external_name?: string | null; village?: string | null; phone?: string | null; gender?: Gender | null; guardian_name?: string | null; notes?: string | null; }
+
 export interface ApiErrorBody {
   detail?: string | { msg: string; loc?: (string | number)[] }[];
 }

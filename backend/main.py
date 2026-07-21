@@ -36,6 +36,7 @@ from routers import (
     exams,
     quizzes,
     dashboard,
+    coaching,
 )
 
 
@@ -124,6 +125,7 @@ app.include_router(exams.marks_router)
 app.include_router(quizzes.router)
 app.include_router(quizzes.scores_router)
 app.include_router(dashboard.router)
+app.include_router(coaching.router)
 
 
 @app.get("/", tags=["Health"])
