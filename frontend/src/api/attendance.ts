@@ -4,6 +4,7 @@ import type {
   Attendance,
   AttendanceCheckInInput,
   AttendanceCheckOutInput,
+  AttendanceUpdateInput,
 } from "./types";
 
 /**
@@ -42,6 +43,7 @@ export function useAttendanceList(params: AttendanceListParams) {
 export function useCheckIn() {
   const qc = useQueryClient();
   return useMutation({
+    // session is no longer sent — the backend derives it from check_in.
     mutationFn: async (input: AttendanceCheckInInput) => {
       const { data } = await apiClient.post<Attendance>(
         "/api/attendance/check-in",
@@ -56,10 +58,27 @@ export function useCheckIn() {
 export function useCheckOut() {
   const qc = useQueryClient();
   return useMutation({
+    // session/date are gone too — the backend finds this student's one
+    // currently-open session on its own (at most one can ever be open).
     mutationFn: async (input: AttendanceCheckOutInput) => {
-      // Backend now exposes this as PATCH, not POST.
       const { data } = await apiClient.patch<Attendance>(
         "/api/attendance/check-out",
+        input,
+      );
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.all }),
+  });
+}
+
+/** Correct a mistaken check_in/check_out time. session and
+ *  duration_minutes are recomputed server-side, not sent here. */
+export function useUpdateAttendance(attendanceId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: AttendanceUpdateInput) => {
+      const { data } = await apiClient.patch<Attendance>(
+        `/api/attendance/${attendanceId}`,
         input,
       );
       return data;

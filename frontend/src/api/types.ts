@@ -2,7 +2,7 @@
 
 export type Gender = "Male" | "Female" | "Other";
 export type StudentStatus = "Active" | "Inactive";
-export type Session = "Morning" | "Afternoon";
+export type Session = "Morning" | "Afternoon" | "Full Day";
 export type AccountType = "Library Subscription" | "Own Account";
 export type SubscriptionStatus = "Active" | "Expired";
 
@@ -42,6 +42,7 @@ export interface Attendance {
   attendance_id: number;
   student_id: number;
   date: string;
+  /** Auto-detected server-side from check_in/check_out — never chosen by staff. */
   session: Session;
   check_in: string | null;
   check_out: string | null;
@@ -50,15 +51,19 @@ export interface Attendance {
 
 export interface AttendanceCheckInInput {
   student_id: number;
-  session: Session;
   date?: string | null;
   check_in?: string | null;
 }
 
 export interface AttendanceCheckOutInput {
   student_id: number;
-  session: Session;
-  date?: string | null;
+  check_out?: string | null;
+}
+
+/** Manual correction of a mistaken entry — session/duration are
+ *  recomputed server-side whenever check_in or check_out changes. */
+export interface AttendanceUpdateInput {
+  check_in?: string | null;
   check_out?: string | null;
 }
 

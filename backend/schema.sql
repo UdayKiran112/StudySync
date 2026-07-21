@@ -32,18 +32,15 @@ CREATE TABLE attendance (
     attendance_id   INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id      INTEGER NOT NULL,
     date            DATE NOT NULL,
-    session         TEXT NOT NULL CHECK(session IN ('Morning', 'Afternoon')),
+    session         TEXT NOT NULL CHECK(session IN ('Morning', 'Afternoon', 'Full Day')),
     check_in        TEXT CHECK(check_in IS NULL OR (check_in GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(check_in, 1, 2) <= '23')),
     check_out       TEXT CHECK(check_out IS NULL OR (check_out GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(check_out, 1, 2) <= '23')),
-    duration_minutes INTEGER GENERATED ALWAYS AS (
-        CASE
-            WHEN check_in IS NOT NULL AND check_out IS NOT NULL THEN
-                CAST(ROUND(
-                    (julianday('2000-01-01 ' || check_out) - julianday('2000-01-01 ' || check_in)) * 24 * 60
-                ) AS INTEGER)
-            ELSE NULL
-        END
-    ) STORED,
+    -- No longer GENERATED: duration must account for the 1-2 PM lunch
+    -- exclusion and Morning->Full Day reclassification, which is
+    -- conditional application logic, not a pure SQL expression of
+    -- check_in/check_out alone. Computed and written by the app at
+    -- check-out time (and at manual correction).
+    duration_minutes INTEGER,
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
     UNIQUE(student_id, date, session),
     CHECK (check_out IS NULL OR check_in IS NULL OR check_out > check_in)
