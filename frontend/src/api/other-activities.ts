@@ -8,6 +8,7 @@ export function useOtherActivities() {
   return useQuery({
     queryKey: keys.all,
     queryFn: async () => (await apiClient.get<OtherActivity[]>("/api/other-activities", { params: { limit: 200 } })).data,
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -24,6 +25,7 @@ export function useGetOtherActivity(activityId: number | undefined) {
     queryKey: keys.detail(activityId ?? -1),
     queryFn: async () => (await apiClient.get<OtherActivity>(`/api/other-activities/${activityId}`)).data,
     enabled: activityId !== undefined,
+    staleTime: 5 * 60 * 1000,
   });
 }
 

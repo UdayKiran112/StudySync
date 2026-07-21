@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { CalendarPlus } from "lucide-react";
 import { Button } from "../../components/ui/Button";
-import { Field, Input, Select } from "../../components/ui/Form";
+import { Field, Input } from "../../components/ui/Form";
 import { Modal } from "../../components/ui/Modal";
 import { EmptyState, PageHeader, Spinner } from "../../components/ui/Feedback";
 import { formatDate, todayIso } from "../../lib/format";
@@ -62,6 +62,9 @@ function SessionForm({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [speakerName, setSpeakerName] = useState("");
   const [date, setDate] = useState(todayIso());
   const [sessionType, setSessionType] = useState("");
+  const reset = () => { setSessionName(""); setSpeakerName(""); setDate(todayIso()); setSessionType(""); };
+  const handleClose = () => { reset(); onClose(); };
+  useEffect(() => { if (!open) reset(); }, [open]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,18 +77,14 @@ function SessionForm({ open, onClose }: { open: boolean; onClose: () => void }) 
         notes: null,
       });
       toast.success("Session created");
-      onClose();
-      setSessionName("");
-      setSpeakerName("");
-      setDate(todayIso());
-      setSessionType("");
+      handleClose();
     } catch {
       toast.error("Could not create session");
     }
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Add New Session">
+    <Modal open={open} onClose={handleClose} title="Add New Session">
       <form onSubmit={submit} className="space-y-4">
         <Field label="Session name" required>
           <Input required value={sessionName} onChange={(e) => setSessionName(e.target.value)} />
@@ -102,7 +101,7 @@ function SessionForm({ open, onClose }: { open: boolean; onClose: () => void }) 
           </Field>
         </div>
         <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
+          <Button type="button" variant="ghost" onClick={handleClose}>
             Cancel
           </Button>
           <Button type="submit" disabled={create.isPending || !sessionName || !speakerName || !sessionType}>

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Search, X } from "lucide-react";
 import { useStudentSearch } from "../../api/students";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
@@ -16,18 +16,24 @@ export function StudentPicker({
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
-  const debounced = useDebouncedValue(query, 250);
+  const debounced = useDebouncedValue(query, 400);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const search = debounced.trim();
+  const canSearch = search.length >= 2;
   const { data } = useStudentSearch({
-    search: debounced || undefined,
+    search: canSearch ? search : undefined,
     status: activeOnly ? "Active" : undefined,
     limit: 8,
   });
+  const results = useMemo(() => (canSearch ? (data ?? []) : []), [canSearch, data]);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
         setOpen(false);
       }
     }
@@ -39,7 +45,9 @@ export function StudentPicker({
     return (
       <div className="flex items-center gap-2 rounded-md border border-border bg-paper-dim px-3 py-2">
         <IdTab>{value.student_id}</IdTab>
-        <span className="flex-1 text-sm font-medium text-ink">{value.name}</span>
+        <span className="flex-1 text-sm font-medium text-ink">
+          {value.name}
+        </span>
         <button
           type="button"
           onClick={() => onChange(null)}
@@ -55,7 +63,10 @@ export function StudentPicker({
   return (
     <div className="relative" ref={containerRef}>
       <div className="relative">
-        <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-light" />
+        <Search
+          size={14}
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-light"
+        />
         <input
           value={query}
           onChange={(e) => {
@@ -67,9 +78,9 @@ export function StudentPicker({
           className="w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 text-sm text-ink placeholder:text-slate-light focus:border-brass focus:outline-none"
         />
       </div>
-      {open && data && data.length > 0 && (
+      {open && canSearch && results.length > 0 && (
         <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-md border border-border bg-card shadow-lg">
-          {data.map((s) => (
+          {results.map((s) => (
             <button
               type="button"
               key={s.student_id}
@@ -86,9 +97,17 @@ export function StudentPicker({
           ))}
         </div>
       )}
-      {open && query && data && data.length === 0 && (
+      {open && query && !canSearch && (
         <div className="absolute z-10 mt-1 w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-slate shadow-lg">
-          No matching students
+          Type at least 2 characters to search.
+        </div>
+      )}
+      {open && canSearch && data && data.length === 0 && (
+        <div className="absolute z-10 mt-1 w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-slate shadow-lg">
+          <p className="font-medium text-ink">No student found.</p>
+          <p className="mt-1 text-xs">
+            Try searching by student ID, name, phone number, or village.
+          </p>
         </div>
       )}
     </div>

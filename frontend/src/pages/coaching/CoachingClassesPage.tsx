@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import { CalendarPlus, Download, UserPlus } from "lucide-react";
+import { CalendarPlus } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Field, Input, Select } from "../../components/ui/Form";
 import { Modal } from "../../components/ui/Modal";
@@ -44,6 +44,9 @@ function SessionForm({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [start,setStart]=useState(""); 
   const [end,setEnd]=useState(""); 
   const [instructor,setInstructor]=useState(""); 
+  const reset = () => { setTitle(""); setDate(todayIso()); setSubject(""); setStart(""); setEnd(""); setInstructor(""); };
+  const handleClose = () => { reset(); onClose(); };
+  useEffect(() => { if (!open) reset(); }, [open]);
   const submit=async(e:React.FormEvent)=>{
     e.preventDefault();
     try{
@@ -57,12 +60,12 @@ function SessionForm({ open, onClose }: { open: boolean; onClose: () => void }) 
         notes:null
       });
       toast.success("Session created");
-      onClose();
+      handleClose();
     }catch{
       toast.error("Could not create session")
     }
   }; 
-  return <Modal open={open} onClose={onClose} title="Add New Session">
+  return <Modal open={open} onClose={handleClose} title="Add New Session">
     <form onSubmit={submit} className="space-y-4">
       <Field label="Session title" required>
         <Input required value={title} onChange={e=>setTitle(e.target.value)}/>
@@ -88,7 +91,7 @@ function SessionForm({ open, onClose }: { open: boolean; onClose: () => void }) 
         </Select>
       </Field>
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button type="button" variant="ghost" onClick={handleClose}>Cancel</Button>
         <Button type="submit">Save session</Button>
       </div>
     </form>
@@ -99,8 +102,11 @@ function InstructorForm({open,onClose}:{open:boolean;onClose:()=>void}){
   const [name,setName]=useState("");
   const [phone,setPhone]=useState("");
   const [specialization,setSpecialization]=useState("");
-  return <Modal open={open} onClose={onClose} title="Add Instructor">
-    <form onSubmit={async e=>{e.preventDefault();await create.mutateAsync({name,phone:phone||null,specialization:specialization||null,notes:null});toast.success("Instructor added");onClose()}} className="space-y-4">
+  const reset = () => { setName(""); setPhone(""); setSpecialization(""); };
+  const handleClose = () => { reset(); onClose(); };
+  useEffect(() => { if (!open) reset(); }, [open]);
+  return <Modal open={open} onClose={handleClose} title="Add Instructor">
+    <form onSubmit={async e=>{e.preventDefault();try { await create.mutateAsync({name,phone:phone||null,specialization:specialization||null,notes:null});toast.success("Instructor added");handleClose(); } catch { toast.error("Could not add instructor"); }}} className="space-y-4">
       <Field label="Instructor name" required>
         <Input required value={name} onChange={e=>setName(e.target.value)}/>
       </Field>
@@ -111,7 +117,7 @@ function InstructorForm({open,onClose}:{open:boolean;onClose:()=>void}){
         <Input value={specialization} onChange={e=>setSpecialization(e.target.value)}/>
       </Field>
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button type="button" variant="ghost" onClick={handleClose}>Cancel</Button>
         <Button type="submit">Add Instructor</Button>
       </div>
     </form>
@@ -122,8 +128,11 @@ function ExternalForm({open,onClose}:{open:boolean;onClose:()=>void}){
   const [name,setName]=useState("");
   const [village,setVillage]=useState("");
   const [phone,setPhone]=useState("");
-  return <Modal open={open} onClose={onClose} title="Add External Student">
-    <form onSubmit={async e=>{e.preventDefault();await create.mutateAsync({name,village,phone:phone||null,gender:null,guardian_name:null,notes:null});toast.success("External student added");onClose()}} className="space-y-4">
+  const reset = () => { setName(""); setVillage(""); setPhone(""); };
+  const handleClose = () => { reset(); onClose(); };
+  useEffect(() => { if (!open) reset(); }, [open]);
+  return <Modal open={open} onClose={handleClose} title="Add External Student">
+    <form onSubmit={async e=>{e.preventDefault();try { await create.mutateAsync({name,village,phone:phone||null,gender:null,guardian_name:null,notes:null});toast.success("External student added");handleClose(); } catch { toast.error("Could not add external student"); }}} className="space-y-4">
       <Field label="Student name" required>
         <Input required value={name} onChange={e=>setName(e.target.value)}/>
       </Field>
@@ -134,7 +143,7 @@ function ExternalForm({open,onClose}:{open:boolean;onClose:()=>void}){
         <Input value={phone} onChange={e=>setPhone(e.target.value)}/>
       </Field>
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button type="button" variant="ghost" onClick={handleClose}>Cancel</Button>
         <Button type="submit">Add External Student</Button>
       </div>
     </form>

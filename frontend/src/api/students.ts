@@ -16,7 +16,7 @@ const keys = {
   detail: (id: number) => ["students", "detail", id] as const,
 };
 
-export function useStudents(params: StudentListParams) {
+export function useStudents(params: StudentListParams, enabled = true) {
   return useQuery({
     queryKey: keys.list(params),
     queryFn: async () => {
@@ -25,6 +25,8 @@ export function useStudents(params: StudentListParams) {
       });
       return data;
     },
+    staleTime: 5 * 60 * 1000,
+    enabled,
   });
 }
 
@@ -58,12 +60,13 @@ export function useStudentSearch(params: StudentListParams) {
       }
     },
     enabled: isIdLookup,
+    staleTime: 5 * 60 * 1000,
   });
 
   const nameSearch = useStudents({
     ...params,
     search: isIdLookup ? undefined : params.search,
-  });
+  }, Boolean(trimmed));
 
   return isIdLookup ? idLookup : nameSearch;
 }

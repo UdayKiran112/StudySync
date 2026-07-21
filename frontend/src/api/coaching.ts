@@ -3,11 +3,13 @@ import { apiClient } from "./client";
 import type { CoachingClass, CoachingClassInput, CoachingEnrollment, CoachingEnrollmentInput, Instructor, ExternalParticipant } from "./types";
 
 const keys = { all: ["coaching-classes"] as const, roster: (id: number) => ["coaching-classes", id, "enrollments"] as const };
-export function useCoachingClasses() { return useQuery({ queryKey: keys.all, queryFn: async () => (await apiClient.get<CoachingClass[]>("/api/coaching-classes", { params: { limit: 200 } })).data }); }
+const fiveMinutes = 5 * 60 * 1000;
+export function useCoachingClasses() { return useQuery({ queryKey: keys.all, queryFn: async () => (await apiClient.get<CoachingClass[]>("/api/coaching-classes", { params: { limit: 200 } })).data, staleTime: fiveMinutes }); }
 export function useCreateCoachingClass() { const qc = useQueryClient(); return useMutation({ mutationFn: async (input: CoachingClassInput) => (await apiClient.post<CoachingClass>("/api/coaching-classes", input)).data, onSuccess: () => qc.invalidateQueries({ queryKey: keys.all }) }); }
-export function useInstructors() { return useQuery({ queryKey: ["coaching-instructors"], queryFn: async () => (await apiClient.get<Instructor[]>("/api/coaching-classes/instructors")).data }); }
+export function useInstructors() { return useQuery({ queryKey: ["coaching-instructors"], queryFn: async () => (await apiClient.get<Instructor[]>("/api/coaching-classes/instructors")).data, staleTime: fiveMinutes }); }
 export function useCreateInstructor() { const qc=useQueryClient(); return useMutation({mutationFn: async(input: Pick<Instructor,"name"|"phone"|"specialization"|"notes">)=>(await apiClient.post<Instructor>("/api/coaching-classes/instructors",input)).data,onSuccess:()=>qc.invalidateQueries({queryKey:["coaching-instructors"]})}); }
-export function useExternalParticipants(search?: string) { return useQuery({ queryKey: ["external-participants",search], queryFn: async () => (await apiClient.get<ExternalParticipant[]>("/api/coaching-classes/external-participants",{params:{search}})).data }); }
+/** Loaded once per cache window; pickers filter this collection entirely in the browser. */
+export function useExternalParticipants() { return useQuery({ queryKey: ["external-participants"], queryFn: async () => (await apiClient.get<ExternalParticipant[]>("/api/coaching-classes/external-participants")).data, staleTime: fiveMinutes }); }
 export function useCreateExternalParticipant() { const qc=useQueryClient(); return useMutation({mutationFn: async(input: Omit<ExternalParticipant,"external_participant_id"|"created_at">)=>(await apiClient.post<ExternalParticipant>("/api/coaching-classes/external-participants",input)).data,onSuccess:()=>qc.invalidateQueries({queryKey:["external-participants"]})}); }
 export function useDeleteCoachingClass() { const qc = useQueryClient(); return useMutation({ mutationFn: (id: number) => apiClient.delete(`/api/coaching-classes/${id}`), onSuccess: () => qc.invalidateQueries({ queryKey: keys.all }) }); }
 export function useCoachingEnrollments(classId: number | undefined) { return useQuery({ queryKey: keys.roster(classId ?? -1), queryFn: async () => (await apiClient.get<CoachingEnrollment[]>(`/api/coaching-classes/${classId}/enrollments`)).data, enabled: classId !== undefined }); }

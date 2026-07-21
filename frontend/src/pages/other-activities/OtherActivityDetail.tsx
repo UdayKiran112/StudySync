@@ -5,15 +5,15 @@ import { ArrowLeft, Download, UserPlus, Trash2, BarChart3 } from "lucide-react";
 import { Spinner, ErrorBanner, EmptyState, PageHeader } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Button } from "../../components/ui/Button";
-import { Field, Input, Select } from "../../components/ui/Form";
+import { Field, Select } from "../../components/ui/Form";
 import { Modal } from "../../components/ui/Modal";
 import { StudentPicker } from "../../components/ui/StudentPicker";
+import { ExternalStudentPicker } from "../../components/ui/ExternalStudentPicker";
 import { useOtherActivities, useOtherActivityAttendance, useAddOtherActivityAttendance, useDeleteOtherActivityAttendance, useDeleteOtherActivity } from "../../api/other-activities";
-import { useExternalParticipants } from "../../api/coaching";
 import { extractErrorMessage } from "../../api/client";
 import { formatDate } from "../../lib/format";
 import { downloadCsv } from "../../lib/csvExport";
-import type { OtherActivity } from "../../api/types";
+import type { ExternalParticipant, Student } from "../../api/types";
 
 export function OtherActivityDetail() {
   const { activityId } = useParams();
@@ -184,10 +184,8 @@ function RemoveParticipantButton({ attendanceId, activityId, participantName }: 
 function ParticipantForm({ open, onClose, activityId }: { open: boolean; onClose: () => void; activityId: number }) {
   const add = useAddOtherActivityAttendance(activityId);
   const [type, setType] = useState("Library Student");
-  const [student, setStudent] = useState<any | null>(null);
-  const [search, setSearch] = useState("");
-  const { data: external } = useExternalParticipants(search);
-  const [picked, setPicked] = useState<any>();
+  const [student, setStudent] = useState<Student | null>(null);
+  const [picked, setPicked] = useState<ExternalParticipant | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -207,8 +205,7 @@ function ParticipantForm({ open, onClose, activityId }: { open: boolean; onClose
       toast.success("Participant added");
       onClose();
       setStudent(null);
-      setPicked(undefined);
-      setSearch("");
+      setPicked(null);
     } catch (err) {
       toast.error(extractErrorMessage(err));
     }
@@ -228,11 +225,11 @@ function ParticipantForm({ open, onClose, activityId }: { open: boolean; onClose
           <Field label="Student" required>
             <StudentPicker value={student} onChange={setStudent} activeOnly={false} />
           </Field>
-        ) : (
-          <>
-            <Field label="Search external students">
-              <Input placeholder="Search by name, village, or phone" value={search} onChange={(e) => setSearch(e.target.value)} />
-            </Field>
+        ) : (<>
+          <Field label="External student" required>
+            <ExternalStudentPicker value={picked} onChange={setPicked} />
+          </Field>
+          {/*
             <Field label="External student" required>
               <Select
                 value={picked?.external_participant_id ?? ""}
@@ -246,8 +243,8 @@ function ParticipantForm({ open, onClose, activityId }: { open: boolean; onClose
                 ))}
               </Select>
             </Field>
-          </>
-        )}
+          */}
+        </>)}
 
         <div className="flex justify-end gap-2 border-t border-border pt-4">
           <Button type="button" variant="ghost" onClick={onClose}>
