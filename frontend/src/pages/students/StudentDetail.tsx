@@ -8,6 +8,10 @@ import {
   Cake,
   CalendarDays,
   BarChart3,
+  Users,
+  GraduationCap,
+  Target,
+  Compass,
 } from "lucide-react";
 import { Spinner, ErrorBanner } from "../../components/ui/Feedback";
 import { StatusTab, studentStatusTone, IdTab } from "../../components/ui/Tabs";
@@ -87,6 +91,22 @@ export function StudentDetail() {
             icon={Cake}
             label="Date of birth"
             value={formatDate(student.date_of_birth)}
+          />
+          <InfoItem
+            icon={Users}
+            label="Father's name"
+            value={student.father_name}
+          />
+          <InfoItem
+            icon={GraduationCap}
+            label="Qualification"
+            value={student.qualification}
+          />
+          <InfoItem icon={Target} label="Goal" value={student.goal} />
+          <InfoItem
+            icon={Compass}
+            label="Preparing for"
+            value={student.preparing_for}
           />
         </div>
       </div>

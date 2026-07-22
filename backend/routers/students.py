@@ -36,7 +36,9 @@ def renew_student(student_id: int, db: sqlite3.Connection = Depends(get_db_depen
         (date.today().isoformat(), student_id),
     )
     return dict(
-        db.execute("SELECT * FROM students WHERE student_id = ?", (student_id,)).fetchone()
+        db.execute(
+            "SELECT * FROM students WHERE student_id = ?", (student_id,)
+        ).fetchone()
     )
 
 
@@ -56,8 +58,9 @@ def create_student(
     db.execute(
         """
         INSERT INTO students (student_id, name, gender, date_of_birth, phone, email,
+                               father_name, qualification, goal, preparing_for,
                                address, join_date, photo_path, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             student.student_id,
@@ -66,6 +69,10 @@ def create_student(
             student.date_of_birth,
             student.phone,
             student.email,
+            student.father_name,
+            student.qualification,
+            student.goal,
+            student.preparing_for,
             student.address,
             student.join_date,
             student.photo_path,
@@ -156,7 +163,7 @@ def student_summary(
     present = db.execute(
         f"""SELECT COUNT(DISTINCT attendance.student_id) AS present
         FROM attendance JOIN students ON students.student_id = attendance.student_id
-        {where}{' AND' if where else ' WHERE'} attendance.date = date('now')""",
+        {where}{" AND" if where else " WHERE"} attendance.date = date('now')""",
         params,
     ).fetchone()
     gender_rows = db.execute(
@@ -166,7 +173,7 @@ def student_summary(
     ).fetchall()
     monthly_rows = db.execute(
         f"""SELECT strftime('%Y-%m', join_date) AS month, COUNT(*) AS count
-        FROM students{where}{' AND' if where else ' WHERE'} date(join_date) >= date('now', '-5 months', 'start of month')
+        FROM students{where}{" AND" if where else " WHERE"} date(join_date) >= date('now', '-5 months', 'start of month')
         GROUP BY month ORDER BY month""",
         params,
     ).fetchall()

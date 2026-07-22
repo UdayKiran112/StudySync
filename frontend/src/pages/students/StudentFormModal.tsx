@@ -26,6 +26,14 @@ export function StudentFormModal({
   const [dob, setDob] = useState(student?.date_of_birth ?? "");
   const [phone, setPhone] = useState(student?.phone ?? "");
   const [email, setEmail] = useState(student?.email ?? "");
+  const [fatherName, setFatherName] = useState(student?.father_name ?? "");
+  const [qualification, setQualification] = useState(
+    student?.qualification ?? "",
+  );
+  const [goal, setGoal] = useState(student?.goal ?? "");
+  const [preparingFor, setPreparingFor] = useState(
+    student?.preparing_for ?? "",
+  );
   const [address, setAddress] = useState(student?.address ?? "");
   const [joinDate, setJoinDate] = useState(student?.join_date ?? todayIso());
   const [error, setError] = useState("");
@@ -59,6 +67,10 @@ export function StudentFormModal({
           date_of_birth: dob || null,
           phone: phone || null,
           email: email || null,
+          father_name: fatherName || null,
+          qualification: qualification || null,
+          goal: goal || null,
+          preparing_for: preparingFor || null,
           address: address || null,
         });
         toast.success(`Saved changes for ${name}`);
@@ -70,6 +82,10 @@ export function StudentFormModal({
           date_of_birth: dob || null,
           phone: phone || null,
           email: email || null,
+          father_name: fatherName || null,
+          qualification: qualification || null,
+          goal: goal || null,
+          preparing_for: preparingFor || null,
           address: address || null,
           join_date: joinDate,
           status: "Active",
@@ -153,6 +169,40 @@ export function StudentFormModal({
               value={email ?? ""}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="Email address"
+            />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Father's name">
+            <Input
+              value={fatherName ?? ""}
+              onChange={(e) => setFatherName(e.target.value)}
+              placeholder="Father's name"
+            />
+          </Field>
+          <Field label="Qualification">
+            <Input
+              value={qualification ?? ""}
+              onChange={(e) => setQualification(e.target.value)}
+              placeholder="e.g. B.Tech CSE"
+            />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Goal">
+            <Input
+              value={goal ?? ""}
+              onChange={(e) => setGoal(e.target.value)}
+              placeholder="e.g. Government job"
+            />
+          </Field>
+          <Field label="Preparing for">
+            <Input
+              value={preparingFor ?? ""}
+              onChange={(e) => setPreparingFor(e.target.value)}
+              placeholder="e.g. SBI PO, SSC CGL"
             />
           </Field>
         </div>

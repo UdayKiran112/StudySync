@@ -21,6 +21,10 @@ class StudentCreate(RequestModel):
     date_of_birth: Optional[date] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    father_name: Optional[str] = None
+    qualification: Optional[str] = None
+    goal: Optional[str] = None
+    preparing_for: Optional[str] = None
     address: Optional[str] = None
     join_date: date
     photo_path: Optional[str] = None
@@ -38,6 +42,10 @@ class StudentUpdate(RequestModel):
     date_of_birth: Optional[date] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    father_name: Optional[str] = None
+    qualification: Optional[str] = None
+    goal: Optional[str] = None
+    preparing_for: Optional[str] = None
     address: Optional[str] = None
     photo_path: Optional[str] = None
     status: Optional[Literal["Active", "Inactive"]] = None
@@ -52,6 +60,10 @@ class StudentResponse(BaseModel):
     date_of_birth: Optional[date] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    father_name: Optional[str] = None
+    qualification: Optional[str] = None
+    goal: Optional[str] = None
+    preparing_for: Optional[str] = None
     address: Optional[str] = None
     join_date: date
     photo_path: Optional[str] = None
