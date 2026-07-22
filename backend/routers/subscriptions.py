@@ -72,6 +72,7 @@ def create_subscription(
 def list_subscriptions(
     status: Optional[str] = None,
     search: Optional[str] = None,
+    used_today: bool = False,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db_dependency),
@@ -85,14 +86,71 @@ def list_subscriptions(
         params.append(status)
 
     if search:
-        query += " AND name LIKE ?"
-        params.append(f"%{search}%")
+        query += " AND (name LIKE ? OR subscription_id LIKE ?)"
+        params.extend([f"%{search}%", f"%{search}%"])
+
+    if used_today:
+        query += " AND subscription_id IN (SELECT subscription_id FROM digital_library_usage WHERE date = date('now') AND subscription_id IS NOT NULL)"
 
     query += " ORDER BY name LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
     rows = db.execute(query, params).fetchall()
     return [dict(row) for row in rows]
+
+
+@router.get("/summary")
+def subscription_summary(
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    db: sqlite3.Connection = Depends(get_db_dependency),
+):
+    """Filter-aware catalog and usage overview for the Subscriptions page."""
+    clauses: list[str] = []
+    params: list[str] = []
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if search:
+        clauses.append("(name LIKE ? OR subscription_id LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    totals = db.execute(
+        f"""SELECT COUNT(*) AS total,
+        SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END) AS active,
+        SUM(CASE WHEN status = 'Expired' THEN 1 ELSE 0 END) AS expired,
+        COALESCE(SUM(cost), 0) AS total_cost,
+        AVG(validity_days) AS average_validity
+        FROM subscriptions{where}""",
+        params,
+    ).fetchone()
+    usage = db.execute(
+        f"""SELECT COUNT(DISTINCT digital_library_usage.subscription_id) AS used_today
+        FROM digital_library_usage JOIN subscriptions ON subscriptions.subscription_id = digital_library_usage.subscription_id
+        {where}{' AND' if where else ' WHERE'} digital_library_usage.date = date('now')""",
+        params,
+    ).fetchone()
+    type_rows = db.execute(
+        f"""SELECT COALESCE(type, 'Not specified') AS type, COUNT(*) AS count
+        FROM subscriptions{where} GROUP BY COALESCE(type, 'Not specified') ORDER BY count DESC, type""",
+        params,
+    ).fetchall()
+    usage_rows = db.execute(
+        f"""SELECT subscriptions.name, COUNT(*) AS count
+        FROM digital_library_usage JOIN subscriptions ON subscriptions.subscription_id = digital_library_usage.subscription_id
+        {where} GROUP BY subscriptions.subscription_id, subscriptions.name ORDER BY count DESC, subscriptions.name LIMIT 8""",
+        params,
+    ).fetchall()
+    return {
+        "total": totals["total"] or 0,
+        "active": totals["active"] or 0,
+        "expired": totals["expired"] or 0,
+        "total_cost": totals["total_cost"] or 0,
+        "average_validity_days": round(totals["average_validity"], 1) if totals["average_validity"] is not None else None,
+        "used_today": usage["used_today"] or 0,
+        "type_distribution": [dict(row) for row in type_rows],
+        "usage_by_subscription": [dict(row) for row in usage_rows],
+    }
 
 
 @router.get("/{subscription_id}", response_model=SubscriptionResponse)

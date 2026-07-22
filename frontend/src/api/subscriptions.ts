@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
-import type { Subscription, SubscriptionCreateInput, SubscriptionUpdateInput } from "./types";
+import type { Subscription, SubscriptionCreateInput, SubscriptionSummary, SubscriptionUpdateInput } from "./types";
 
 export interface SubscriptionListParams {
   status?: string;
   search?: string;
   limit?: number;
   offset?: number;
+  used_today?: boolean;
 }
 
 const keys = {
@@ -21,6 +22,14 @@ export function useSubscriptions(params: SubscriptionListParams) {
       const { data } = await apiClient.get<Subscription[]>("/api/subscriptions", { params });
       return data;
     },
+  });
+}
+
+export function useSubscriptionSummary(params: Pick<SubscriptionListParams, "status" | "search">) {
+  return useQuery({
+    queryKey: ["subscriptions", "summary", params],
+    queryFn: async () => (await apiClient.get<SubscriptionSummary>("/api/subscriptions/summary", { params })).data,
+    staleTime: 60 * 1000,
   });
 }
 

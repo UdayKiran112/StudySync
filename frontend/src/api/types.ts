@@ -147,6 +147,17 @@ export type SubscriptionUpdateInput = Partial<
   Omit<SubscriptionCreateInput, "subscription_id">
 >;
 
+export interface SubscriptionSummary {
+  total: number;
+  active: number;
+  expired: number;
+  total_cost: number;
+  average_validity_days: number | null;
+  used_today: number;
+  type_distribution: { type: string; count: number }[];
+  usage_by_subscription: { name: string; count: number }[];
+}
+
 export interface Book {
   book_id: string;
   title: string;

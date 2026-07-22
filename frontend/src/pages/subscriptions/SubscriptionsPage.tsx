@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Plus, Search, Pencil, Trash2 } from "lucide-react";
 import {
@@ -23,14 +24,18 @@ import {
   useCreateSubscription,
   useUpdateSubscription,
   useDeleteSubscription,
+  useSubscriptionSummary,
 } from "../../api/subscriptions";
 import { extractErrorMessage } from "../../api/client";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import type { Subscription } from "../../api/types";
+import { SubscriptionSummaryDashboard } from "./SubscriptionSummaryDashboard";
 
 const LIMIT = 20;
 
 export function SubscriptionsPage() {
+  const [searchParams] = useSearchParams();
+  const view = searchParams.get("view");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [offset, setOffset] = useState(0);
@@ -39,12 +44,15 @@ export function SubscriptionsPage() {
   const [deleting, setDeleting] = useState<Subscription | undefined>(undefined);
 
   const debouncedSearch = useDebouncedValue(search);
+  const viewFilters = view === "active" ? { status: "Active" } : view === "expired" ? { status: "Expired" } : view === "used-today" ? { used_today: true } : {};
   const { data, isLoading, isError, error } = useSubscriptions({
     search: debouncedSearch || undefined,
-    status: status || undefined,
+    status: (viewFilters.status ?? status) || undefined,
     limit: LIMIT,
     offset,
+    ...viewFilters,
   });
+  const summary = useSubscriptionSummary({ search: debouncedSearch || undefined, status: status || undefined });
   const deleteMutation = useDeleteSubscription();
 
   async function handleDelete() {
@@ -77,6 +85,8 @@ export function SubscriptionsPage() {
         }
       />
 
+      <SubscriptionSummaryDashboard summary={summary.data} loading={summary.isLoading} />
+
       <div className="mb-4 flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[220px]">
           <Search
@@ -94,7 +104,7 @@ export function SubscriptionsPage() {
           />
         </div>
         <Select
-          value={status}
+          value={viewFilters.status ?? status}
           onChange={(e) => {
             setStatus(e.target.value);
             setOffset(0);
