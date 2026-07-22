@@ -26,7 +26,7 @@ export function StudentPicker({
     search: canSearch ? search : undefined,
     status: activeOnly ? "Active" : undefined,
     limit: 8,
-  });
+  }, canSearch);
   const results = useMemo(() => (canSearch ? (data ?? []) : []), [canSearch, data]);
 
   useEffect(() => {

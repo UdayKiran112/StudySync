@@ -28,7 +28,6 @@ export function StudentFormModal({
   const [email, setEmail] = useState(student?.email ?? "");
   const [address, setAddress] = useState(student?.address ?? "");
   const [joinDate, setJoinDate] = useState(student?.join_date ?? todayIso());
-  const [status, setStatus] = useState<string>(student?.status ?? "Active");
   const [error, setError] = useState("");
 
   const createMutation = useCreateStudent();
@@ -61,7 +60,6 @@ export function StudentFormModal({
           phone: phone || null,
           email: email || null,
           address: address || null,
-          status: status as Student["status"],
         });
         toast.success(`Saved changes for ${name}`);
       } else {
@@ -74,7 +72,7 @@ export function StudentFormModal({
           email: email || null,
           address: address || null,
           join_date: joinDate,
-          status: status as Student["status"],
+          status: "Active",
         });
         toast.success(`Added ${name} to StudySync`);
       }
@@ -107,12 +105,9 @@ export function StudentFormModal({
               placeholder="e.g. 4351"
             />
           </Field>
-          <Field label="Status" required>
-            <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="Active">Active</option>
-              <option value="Inactive">Inactive</option>
-            </Select>
-          </Field>
+          <div className="rounded-md border border-border bg-paper-dim px-3 py-2 text-sm text-slate">
+            Membership is active for one year from joining or renewal.
+          </div>
         </div>
 
         <Field label="Full name" required>

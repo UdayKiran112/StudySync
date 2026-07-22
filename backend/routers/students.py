@@ -9,6 +9,7 @@ get working and confirm end-to-end before building anything else.
 """
 
 import sqlite3
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 
@@ -19,6 +20,24 @@ from security import require_api_key
 router = APIRouter(
     prefix="/api/students", tags=["Students"], dependencies=[Depends(require_api_key)]
 )
+
+
+@router.post("/{student_id}/renew", response_model=StudentResponse)
+def renew_student(student_id: int, db: sqlite3.Connection = Depends(get_db_dependency)):
+    """Renew a membership for one year while retaining the existing student ID."""
+    existing = db.execute(
+        "SELECT student_id FROM students WHERE student_id = ?", (student_id,)
+    ).fetchone()
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
+
+    db.execute(
+        "UPDATE students SET join_date = ?, status = 'Active' WHERE student_id = ?",
+        (date.today().isoformat(), student_id),
+    )
+    return dict(
+        db.execute("SELECT * FROM students WHERE student_id = ?", (student_id,)).fetchone()
+    )
 
 
 @router.post("", response_model=StudentResponse, status_code=201)
@@ -53,6 +72,13 @@ def create_student(
             student.status,
         ),
     )
+    # A back-dated record should immediately reflect the same one-year rule.
+    db.execute(
+        """UPDATE students
+        SET status = CASE WHEN date(join_date, '+1 year') < ? THEN 'Inactive' ELSE 'Active' END
+        WHERE student_id = ?""",
+        (date.today().isoformat(), student.student_id),
+    )
 
     row = db.execute(
         "SELECT * FROM students WHERE student_id = ?", (student.student_id,)
@@ -64,6 +90,9 @@ def create_student(
 def list_students(
     status: Optional[str] = None,
     search: Optional[str] = None,
+    new_this_month: bool = False,
+    expiring: bool = False,
+    present_today: bool = False,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db_dependency),
@@ -83,11 +112,74 @@ def list_students(
         query += " AND name LIKE ?"
         params.append(f"%{search}%")
 
+    if new_this_month:
+        query += " AND date(join_date) >= date('now', 'start of month')"
+    if expiring:
+        query += " AND status = 'Active' AND date(join_date, '+1 year') >= date('now') AND date(join_date, '+1 year') <= date('now', '+30 days')"
+    if present_today:
+        query += " AND student_id IN (SELECT student_id FROM attendance WHERE date = date('now'))"
+
     query += " ORDER BY name LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
     rows = db.execute(query, params).fetchall()
     return [dict(row) for row in rows]
+
+
+@router.get("/summary")
+def student_summary(
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    db: sqlite3.Connection = Depends(get_db_dependency),
+):
+    """Filter-aware overview metrics and chart data for the Students page."""
+    clauses: list[str] = []
+    params: list[str] = []
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if search:
+        clauses.append("(name LIKE ? OR CAST(student_id AS TEXT) LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    totals = db.execute(
+        f"""SELECT COUNT(*) AS total,
+        SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END) AS active,
+        SUM(CASE WHEN status = 'Inactive' THEN 1 ELSE 0 END) AS inactive,
+        SUM(CASE WHEN date(join_date) >= date('now', 'start of month') THEN 1 ELSE 0 END) AS new_this_month,
+        SUM(CASE WHEN status = 'Active' AND date(join_date, '+1 year') >= date('now')
+                 AND date(join_date, '+1 year') <= date('now', '+30 days') THEN 1 ELSE 0 END) AS expiring
+        FROM students{where}""",
+        params,
+    ).fetchone()
+    present = db.execute(
+        f"""SELECT COUNT(DISTINCT attendance.student_id) AS present
+        FROM attendance JOIN students ON students.student_id = attendance.student_id
+        {where}{' AND' if where else ' WHERE'} attendance.date = date('now')""",
+        params,
+    ).fetchone()
+    gender_rows = db.execute(
+        f"""SELECT COALESCE(gender, 'Not specified') AS gender, COUNT(*) AS count
+        FROM students{where} GROUP BY COALESCE(gender, 'Not specified') ORDER BY gender""",
+        params,
+    ).fetchall()
+    monthly_rows = db.execute(
+        f"""SELECT strftime('%Y-%m', join_date) AS month, COUNT(*) AS count
+        FROM students{where}{' AND' if where else ' WHERE'} date(join_date) >= date('now', '-5 months', 'start of month')
+        GROUP BY month ORDER BY month""",
+        params,
+    ).fetchall()
+    return {
+        "total": totals["total"] or 0,
+        "active": totals["active"] or 0,
+        "inactive": totals["inactive"] or 0,
+        "new_this_month": totals["new_this_month"] or 0,
+        "expiring": totals["expiring"] or 0,
+        "present_today": present["present"] or 0,
+        "gender_distribution": [dict(row) for row in gender_rows],
+        "monthly_registrations": [dict(row) for row in monthly_rows],
+    }
 
 
 @router.get("/{student_id}", response_model=StudentResponse)

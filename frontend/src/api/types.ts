@@ -34,6 +34,17 @@ export interface StudentCreateInput {
   status?: StudentStatus;
 }
 
+export interface StudentSummary {
+  total: number;
+  active: number;
+  inactive: number;
+  new_this_month: number;
+  expiring: number;
+  present_today: number;
+  gender_distribution: { gender: string; count: number }[];
+  monthly_registrations: { month: string; count: number }[];
+}
+
 export type StudentUpdateInput = Partial<
   Omit<StudentCreateInput, "student_id">
 >;

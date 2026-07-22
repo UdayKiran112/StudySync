@@ -1,13 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
 import { apiClient } from "./client";
-import type { Student, StudentCreateInput, StudentUpdateInput } from "./types";
+import type { Student, StudentCreateInput, StudentSummary, StudentUpdateInput } from "./types";
 
 export interface StudentListParams {
   status?: string;
   search?: string;
   limit?: number;
   offset?: number;
+  new_this_month?: boolean;
+  expiring?: boolean;
+  present_today?: boolean;
 }
 
 const keys = {
@@ -30,6 +33,14 @@ export function useStudents(params: StudentListParams, enabled = true) {
   });
 }
 
+export function useStudentSummary(params: Pick<StudentListParams, "status" | "search">) {
+  return useQuery({
+    queryKey: ["students", "summary", params],
+    queryFn: async () => (await apiClient.get<StudentSummary>("/api/students/summary", { params })).data,
+    staleTime: 60 * 1000,
+  });
+}
+
 /**
  * Same shape as useStudents, but understands student IDs too.
  *
@@ -39,7 +50,7 @@ export function useStudents(params: StudentListParams, enabled = true) {
  * student up directly via GET /api/students/{id} instead, and fall back
  * to an empty result (not an error) if that ID doesn't exist.
  */
-export function useStudentSearch(params: StudentListParams) {
+export function useStudentSearch(params: StudentListParams, enabled = true) {
   const trimmed = (params.search ?? "").trim();
   const isIdLookup = trimmed.length > 0 && /^\d+$/.test(trimmed);
 
@@ -59,14 +70,14 @@ export function useStudentSearch(params: StudentListParams) {
         throw err;
       }
     },
-    enabled: isIdLookup,
+    enabled: enabled && isIdLookup,
     staleTime: 5 * 60 * 1000,
   });
 
   const nameSearch = useStudents({
     ...params,
     search: isIdLookup ? undefined : params.search,
-  }, Boolean(trimmed));
+  }, enabled && !isIdLookup);
 
   return isIdLookup ? idLookup : nameSearch;
 }
@@ -103,6 +114,17 @@ export function useUpdateStudent(studentId: number) {
         `/api/students/${studentId}`,
         input,
       );
+      return data;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.all }),
+  });
+}
+
+export function useRenewStudent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (studentId: number) => {
+      const { data } = await apiClient.post<Student>(`/api/students/${studentId}/renew`);
       return data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.all }),

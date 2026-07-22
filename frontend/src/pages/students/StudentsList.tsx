@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Plus, Search, Pencil, Trash2 } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, RefreshCw } from "lucide-react";
 import {
   PageHeader,
   Spinner,
@@ -10,36 +10,47 @@ import {
   Pagination,
 } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
-import { Input, Select } from "../../components/ui/Form";
+import { Field, Input, Select } from "../../components/ui/Form";
 import { Button } from "../../components/ui/Button";
+import { Modal } from "../../components/ui/Modal";
+import { StudentPicker } from "../../components/ui/StudentPicker";
 import { IdTab, StatusTab, studentStatusTone } from "../../components/ui/Tabs";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
-import { useStudentSearch, useDeleteStudent } from "../../api/students";
+import { useStudentSearch, useDeleteStudent, useRenewStudent, useStudentSummary } from "../../api/students";
 import { extractErrorMessage } from "../../api/client";
 import { formatDate } from "../../lib/format";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import { StudentFormModal } from "./StudentFormModal";
 import type { Student } from "../../api/types";
+import { StudentSummaryDashboard } from "./StudentSummaryDashboard";
 
 const LIMIT = 20;
 
 export function StudentsList() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const view = searchParams.get("view");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [offset, setOffset] = useState(0);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Student | undefined>(undefined);
   const [deleting, setDeleting] = useState<Student | undefined>(undefined);
+  const [renewOpen, setRenewOpen] = useState(false);
+  const [renewing, setRenewing] = useState<Student | null>(null);
 
   const debouncedSearch = useDebouncedValue(search);
+  const viewFilters = view === "active" ? { status: "Active" } : view === "inactive" ? { status: "Inactive" } : view === "new" ? { new_this_month: true } : view === "expiring" ? { expiring: true } : view === "present" ? { present_today: true } : {};
   const { data, isLoading, isError, error } = useStudentSearch({
     search: debouncedSearch || undefined,
-    status: status || undefined,
+    status: (viewFilters.status ?? status) || undefined,
     limit: LIMIT,
     offset,
+    ...viewFilters,
   });
   const deleteMutation = useDeleteStudent();
+  const renewMutation = useRenewStudent();
+  const summary = useStudentSummary({ search: debouncedSearch || undefined, status: status || undefined });
 
   async function handleDelete() {
     if (!deleting) return;
@@ -52,24 +63,27 @@ export function StudentsList() {
     }
   }
 
+  async function handleRenew(student: Student) {
+    try {
+      await renewMutation.mutateAsync(student.student_id);
+      toast.success(`${student.name}'s membership is renewed for one year`);
+      setRenewing(null);
+      setRenewOpen(false);
+    } catch (err) {
+      toast.error(extractErrorMessage(err));
+    }
+  }
+
   return (
     <div>
       <PageHeader
         eyebrow="Front desk"
         title="Students"
         description="Every enrolled student's record card — search, add, and update details here."
-        action={
-          <Button
-            variant="primary"
-            onClick={() => {
-              setEditing(undefined);
-              setFormOpen(true);
-            }}
-          >
-            <Plus size={16} /> Add student
-          </Button>
-        }
+        action={<div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => setRenewOpen(true)}><RefreshCw size={16} /> Renew ID</Button><Button variant="primary" onClick={() => { setEditing(undefined); setFormOpen(true); }}><Plus size={16} /> Add student</Button></div>}
       />
+
+      <StudentSummaryDashboard summary={summary.data} loading={summary.isLoading} />
 
       <div className="mb-4 flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[220px]">
@@ -88,7 +102,7 @@ export function StudentsList() {
           />
         </div>
         <Select
-          value={status}
+          value={viewFilters.status ?? status}
           onChange={(e) => {
             setStatus(e.target.value);
             setOffset(0);
@@ -193,6 +207,16 @@ export function StudentsList() {
         onClose={() => setFormOpen(false)}
         student={editing}
       />
+
+      <Modal open={renewOpen} onClose={() => { setRenewOpen(false); setRenewing(null); }} title="Renew student ID" subtitle="Renewal keeps the existing ID and starts a new one-year membership.">
+        <form onSubmit={(event) => { event.preventDefault(); if (renewing) handleRenew(renewing); }} className="space-y-4">
+          <Field label="Student to renew" required>
+            <StudentPicker value={renewing} onChange={setRenewing} activeOnly={false} />
+          </Field>
+          {renewing && <div className="rounded-md border border-border bg-paper-dim px-3 py-2 text-sm text-slate">Student ID <span className="font-medium text-ink">{renewing.student_id}</span> will remain unchanged. Membership will be valid for one year from today.</div>}
+          <div className="flex justify-end gap-2 border-t border-border pt-4"><Button type="button" variant="ghost" onClick={() => { setRenewOpen(false); setRenewing(null); }}>Cancel</Button><Button type="submit" variant="primary" disabled={!renewing || renewMutation.isPending}>{renewMutation.isPending ? "Renewing…" : "Renew ID"}</Button></div>
+        </form>
+      </Modal>
 
       <ConfirmDialog
         open={Boolean(deleting)}

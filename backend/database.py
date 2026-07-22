@@ -12,6 +12,7 @@ together will still work, but FK ON DELETE RESTRICT will not.
 import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
+from datetime import date
 
 # Path to the SQLite database file. Lives next to this file.
 DB_PATH = Path(__file__).parent / "library.db"
@@ -28,6 +29,15 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA journal_mode = WAL")
+    # Membership lasts one year from the most recent join/renewal date.  This
+    # runs for every API connection so expired memberships cannot be used by
+    # attendance, library, or assessment endpoints between server restarts.
+    conn.execute(
+        """UPDATE students
+        SET status = CASE WHEN date(join_date, '+1 year') < ? THEN 'Inactive' ELSE 'Active' END
+        WHERE status != CASE WHEN date(join_date, '+1 year') < ? THEN 'Inactive' ELSE 'Active' END""",
+        (date.today().isoformat(), date.today().isoformat()),
+    )
     return conn
 
 
