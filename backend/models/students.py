@@ -29,6 +29,11 @@ class StudentCreate(RequestModel):
     join_date: date
     photo_path: Optional[str] = None
     status: Literal["Active", "Inactive"] = "Active"
+    renewal_count: Optional[int] = Field(
+        0,
+        ge=0,
+        description="Renewals already recorded, e.g. when importing an existing student.",
+    )
 
 
 class StudentUpdate(RequestModel):
@@ -49,6 +54,7 @@ class StudentUpdate(RequestModel):
     address: Optional[str] = None
     photo_path: Optional[str] = None
     status: Optional[Literal["Active", "Inactive"]] = None
+    renewal_count: Optional[int] = Field(None, ge=0)
 
 
 class StudentResponse(BaseModel):
@@ -68,5 +74,10 @@ class StudentResponse(BaseModel):
     join_date: date
     photo_path: Optional[str] = None
     status: str
+    renewal_count: int
+    valid_until: Optional[date] = Field(
+        None,
+        description="join_date + (renewal_count + 1) years -- computed by the DB, never stored separately.",
+    )
     created_at: datetime
     updated_at: datetime

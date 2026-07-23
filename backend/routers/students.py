@@ -21,25 +21,55 @@ router = APIRouter(
     prefix="/api/students", tags=["Students"], dependencies=[Depends(require_api_key)]
 )
 
+# Membership validity: join_date + (renewal_count + 1) whole years.
+# renewal_count starts at 0, so a never-renewed student's expiry is
+# join_date + 1 year, exactly as before -- but now each renewal adds a
+# year to this formula instead of resetting join_date itself. Defined
+# once here and reused everywhere this app needs "when does this
+# student's membership expire" so it can never drift out of sync
+# between endpoints (or with database.py's per-connection status sync).
+VALID_UNTIL_EXPR = "date(join_date, '+' || (renewal_count + 1) || ' years')"
+
 
 @router.post("/{student_id}/renew", response_model=StudentResponse)
 def renew_student(student_id: int, db: sqlite3.Connection = Depends(get_db_dependency)):
-    """Renew a membership for one year while retaining the existing student ID."""
+    """
+    Renew a membership for one more year WITHOUT touching join_date.
+
+    join_date is a permanent historical fact (when the student first
+    joined) and must never change. Renewing just increments
+    renewal_count by one, which extends membership validity by exactly
+    one more year, always anchored to the original join_date's calendar
+    day (see VALID_UNTIL_EXPR below) -- not to whenever the renewal
+    happens to be clicked.
+    """
     existing = db.execute(
         "SELECT student_id FROM students WHERE student_id = ?", (student_id,)
     ).fetchone()
     if not existing:
         raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
 
+    # renewal_count and status are set in the same statement. SQLite
+    # evaluates every expression in a SET clause against the row's OLD
+    # values, so "the new renewal_count" is spelled out explicitly here
+    # as (renewal_count + 1) rather than relying on the just-updated
+    # value -- this keeps the math correct without a fragile string
+    # substitution on VALID_UNTIL_EXPR.
     db.execute(
-        "UPDATE students SET join_date = ?, status = 'Active' WHERE student_id = ?",
+        """UPDATE students
+        SET renewal_count = renewal_count + 1,
+            status = CASE
+                WHEN date(join_date, '+' || ((renewal_count + 1) + 1) || ' years') < ?
+                THEN 'Inactive' ELSE 'Active'
+            END
+        WHERE student_id = ?""",
         (date.today().isoformat(), student_id),
     )
-    return dict(
-        db.execute(
-            "SELECT * FROM students WHERE student_id = ?", (student_id,)
-        ).fetchone()
-    )
+    row = db.execute(
+        f"SELECT *, {VALID_UNTIL_EXPR} AS valid_until FROM students WHERE student_id = ?",
+        (student_id,),
+    ).fetchone()
+    return dict(row)
 
 
 @router.post("", response_model=StudentResponse, status_code=201)
@@ -59,8 +89,8 @@ def create_student(
         """
         INSERT INTO students (student_id, name, gender, date_of_birth, phone, email,
                                father_name, qualification, goal, preparing_for,
-                               address, join_date, photo_path, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               address, join_date, photo_path, status, renewal_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             student.student_id,
@@ -77,18 +107,20 @@ def create_student(
             student.join_date,
             student.photo_path,
             student.status,
+            student.renewal_count or 0,
         ),
     )
-    # A back-dated record should immediately reflect the same one-year rule.
+    # A back-dated record should immediately reflect the same rule.
     db.execute(
-        """UPDATE students
-        SET status = CASE WHEN date(join_date, '+1 year') < ? THEN 'Inactive' ELSE 'Active' END
+        f"""UPDATE students
+        SET status = CASE WHEN {VALID_UNTIL_EXPR} < ? THEN 'Inactive' ELSE 'Active' END
         WHERE student_id = ?""",
         (date.today().isoformat(), student.student_id),
     )
 
     row = db.execute(
-        "SELECT * FROM students WHERE student_id = ?", (student.student_id,)
+        f"SELECT *, {VALID_UNTIL_EXPR} AS valid_until FROM students WHERE student_id = ?",
+        (student.student_id,),
     ).fetchone()
     return dict(row)
 
@@ -108,7 +140,7 @@ def list_students(
     List all students, optionally filtered by status (Active/Inactive)
     and/or a name search (partial match).
     """
-    query = "SELECT * FROM students WHERE 1=1"
+    query = f"SELECT *, {VALID_UNTIL_EXPR} AS valid_until FROM students WHERE 1=1"
     params = []
 
     if status:
@@ -122,7 +154,7 @@ def list_students(
     if new_this_month:
         query += " AND date(join_date) >= date('now', 'start of month')"
     if expiring:
-        query += " AND status = 'Active' AND date(join_date, '+1 year') >= date('now') AND date(join_date, '+1 year') <= date('now', '+30 days')"
+        query += f" AND status = 'Active' AND {VALID_UNTIL_EXPR} >= date('now') AND {VALID_UNTIL_EXPR} <= date('now', '+30 days')"
     if present_today:
         query += " AND student_id IN (SELECT student_id FROM attendance WHERE date = date('now'))"
 
@@ -155,8 +187,8 @@ def student_summary(
         SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END) AS active,
         SUM(CASE WHEN status = 'Inactive' THEN 1 ELSE 0 END) AS inactive,
         SUM(CASE WHEN date(join_date) >= date('now', 'start of month') THEN 1 ELSE 0 END) AS new_this_month,
-        SUM(CASE WHEN status = 'Active' AND date(join_date, '+1 year') >= date('now')
-                 AND date(join_date, '+1 year') <= date('now', '+30 days') THEN 1 ELSE 0 END) AS expiring
+        SUM(CASE WHEN status = 'Active' AND {VALID_UNTIL_EXPR} >= date('now')
+                 AND {VALID_UNTIL_EXPR} <= date('now', '+30 days') THEN 1 ELSE 0 END) AS expiring
         FROM students{where}""",
         params,
     ).fetchone()
@@ -193,7 +225,8 @@ def student_summary(
 def get_student(student_id: int, db: sqlite3.Connection = Depends(get_db_dependency)):
     """Fetch a single student by ID."""
     row = db.execute(
-        "SELECT * FROM students WHERE student_id = ?", (student_id,)
+        f"SELECT *, {VALID_UNTIL_EXPR} AS valid_until FROM students WHERE student_id = ?",
+        (student_id,),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
@@ -228,7 +261,8 @@ def update_student(
     db.execute(f"UPDATE students SET {set_clause} WHERE student_id = ?", values)
 
     row = db.execute(
-        "SELECT * FROM students WHERE student_id = ?", (student_id,)
+        f"SELECT *, {VALID_UNTIL_EXPR} AS valid_until FROM students WHERE student_id = ?",
+        (student_id,),
     ).fetchone()
     return dict(row)
 

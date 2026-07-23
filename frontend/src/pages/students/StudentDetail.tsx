@@ -12,6 +12,7 @@ import {
   GraduationCap,
   Target,
   Compass,
+  RefreshCw,
 } from "lucide-react";
 import { Spinner, ErrorBanner } from "../../components/ui/Feedback";
 import { StatusTab, studentStatusTone, IdTab } from "../../components/ui/Tabs";
@@ -67,6 +68,14 @@ export function StudentDetail() {
                 <CalendarDays size={13} /> Joined{" "}
                 {formatDate(student.join_date)}
                 {student.gender && <span>· {student.gender}</span>}
+                {student.valid_until && (
+                  <span className="flex items-center gap-1">
+                    · <RefreshCw size={12} /> Valid until{" "}
+                    {formatDate(student.valid_until)}
+                    {student.renewal_count > 0 &&
+                      ` (renewed ${student.renewal_count}×)`}
+                  </span>
+                )}
               </div>
             </div>
           </div>

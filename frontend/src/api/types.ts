@@ -21,6 +21,10 @@ export interface Student {
   join_date: string;
   photo_path: string | null;
   status: StudentStatus;
+  /** Number of times membership has been renewed. join_date never changes. */
+  renewal_count: number;
+  /** join_date + (renewal_count + 1) years -- computed by the backend. */
+  valid_until: string | null;
   created_at: string;
   updated_at: string;
 }

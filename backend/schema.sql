@@ -18,6 +18,12 @@ CREATE TABLE students (
     join_date       DATE NOT NULL,
     photo_path      TEXT,
     status          TEXT DEFAULT 'Active' CHECK(status IN ('Active', 'Inactive')),
+    -- Number of times membership has been renewed. join_date NEVER
+    -- changes after creation -- membership validity is always computed
+    -- as join_date + (renewal_count + 1) whole years, so it stays
+    -- anchored to the original join date's calendar day no matter how
+    -- many times (or when) the student renews.
+    renewal_count   INTEGER NOT NULL DEFAULT 0 CHECK(renewal_count >= 0),
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

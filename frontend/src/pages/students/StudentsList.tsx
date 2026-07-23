@@ -16,7 +16,12 @@ import { Modal } from "../../components/ui/Modal";
 import { StudentPicker } from "../../components/ui/StudentPicker";
 import { IdTab, StatusTab, studentStatusTone } from "../../components/ui/Tabs";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
-import { useStudentSearch, useDeleteStudent, useRenewStudent, useStudentSummary } from "../../api/students";
+import {
+  useStudentSearch,
+  useDeleteStudent,
+  useRenewStudent,
+  useStudentSummary,
+} from "../../api/students";
 import { extractErrorMessage } from "../../api/client";
 import { formatDate } from "../../lib/format";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
@@ -40,7 +45,18 @@ export function StudentsList() {
   const [renewing, setRenewing] = useState<Student | null>(null);
 
   const debouncedSearch = useDebouncedValue(search);
-  const viewFilters = view === "active" ? { status: "Active" } : view === "inactive" ? { status: "Inactive" } : view === "new" ? { new_this_month: true } : view === "expiring" ? { expiring: true } : view === "present" ? { present_today: true } : {};
+  const viewFilters =
+    view === "active"
+      ? { status: "Active" }
+      : view === "inactive"
+        ? { status: "Inactive" }
+        : view === "new"
+          ? { new_this_month: true }
+          : view === "expiring"
+            ? { expiring: true }
+            : view === "present"
+              ? { present_today: true }
+              : {};
   const { data, isLoading, isError, error } = useStudentSearch({
     search: debouncedSearch || undefined,
     status: (viewFilters.status ?? status) || undefined,
@@ -50,7 +66,10 @@ export function StudentsList() {
   });
   const deleteMutation = useDeleteStudent();
   const renewMutation = useRenewStudent();
-  const summary = useStudentSummary({ search: debouncedSearch || undefined, status: status || undefined });
+  const summary = useStudentSummary({
+    search: debouncedSearch || undefined,
+    status: status || undefined,
+  });
 
   async function handleDelete() {
     if (!deleting) return;
@@ -80,10 +99,28 @@ export function StudentsList() {
         eyebrow="Front desk"
         title="Students"
         description="Every enrolled student's record card — search, add, and update details here."
-        action={<div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => setRenewOpen(true)}><RefreshCw size={16} /> Renew ID</Button><Button variant="primary" onClick={() => { setEditing(undefined); setFormOpen(true); }}><Plus size={16} /> Add student</Button></div>}
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => setRenewOpen(true)}>
+              <RefreshCw size={16} /> Renew ID
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setEditing(undefined);
+                setFormOpen(true);
+              }}
+            >
+              <Plus size={16} /> Add student
+            </Button>
+          </div>
+        }
       />
 
-      <StudentSummaryDashboard summary={summary.data} loading={summary.isLoading} />
+      <StudentSummaryDashboard
+        summary={summary.data}
+        loading={summary.isLoading}
+      />
 
       <div className="mb-4 flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[220px]">
@@ -208,13 +245,69 @@ export function StudentsList() {
         student={editing}
       />
 
-      <Modal open={renewOpen} onClose={() => { setRenewOpen(false); setRenewing(null); }} title="Renew student ID" subtitle="Renewal keeps the existing ID and starts a new one-year membership.">
-        <form onSubmit={(event) => { event.preventDefault(); if (renewing) handleRenew(renewing); }} className="space-y-4">
+      <Modal
+        open={renewOpen}
+        onClose={() => {
+          setRenewOpen(false);
+          setRenewing(null);
+        }}
+        title="Renew student ID"
+        subtitle="Renewal keeps the existing ID and join date unchanged, and extends membership by one more year."
+      >
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (renewing) handleRenew(renewing);
+          }}
+          className="space-y-4"
+        >
           <Field label="Student to renew" required>
-            <StudentPicker value={renewing} onChange={setRenewing} activeOnly={false} />
+            <StudentPicker
+              value={renewing}
+              onChange={setRenewing}
+              activeOnly={false}
+            />
           </Field>
-          {renewing && <div className="rounded-md border border-border bg-paper-dim px-3 py-2 text-sm text-slate">Student ID <span className="font-medium text-ink">{renewing.student_id}</span> will remain unchanged. Membership will be valid for one year from today.</div>}
-          <div className="flex justify-end gap-2 border-t border-border pt-4"><Button type="button" variant="ghost" onClick={() => { setRenewOpen(false); setRenewing(null); }}>Cancel</Button><Button type="submit" variant="primary" disabled={!renewing || renewMutation.isPending}>{renewMutation.isPending ? "Renewing…" : "Renew ID"}</Button></div>
+          {renewing && (
+            <div className="rounded-md border border-border bg-paper-dim px-3 py-2 text-sm text-slate">
+              Student ID{" "}
+              <span className="font-medium text-ink">
+                {renewing.student_id}
+              </span>{" "}
+              and join date{" "}
+              <span className="font-medium text-ink">{renewing.join_date}</span>{" "}
+              will remain unchanged.
+              {renewing.valid_until && (
+                <>
+                  {" "}
+                  Currently valid until{" "}
+                  <span className="font-medium text-ink">
+                    {renewing.valid_until}
+                  </span>{" "}
+                  — renewing extends this by one more year.
+                </>
+              )}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 border-t border-border pt-4">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setRenewOpen(false);
+                setRenewing(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!renewing || renewMutation.isPending}
+            >
+              {renewMutation.isPending ? "Renewing…" : "Renew ID"}
+            </Button>
+          </div>
         </form>
       </Modal>
 

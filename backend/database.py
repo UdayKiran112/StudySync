@@ -29,13 +29,15 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA journal_mode = WAL")
-    # Membership lasts one year from the most recent join/renewal date.  This
-    # runs for every API connection so expired memberships cannot be used by
-    # attendance, library, or assessment endpoints between server restarts.
+    # Membership lasts one year from join_date, extended by one more year
+    # per renewal (join_date itself never changes -- see routers/students.py
+    # renew_student). This runs for every API connection so expired
+    # memberships cannot be used by attendance, library, or assessment
+    # endpoints between server restarts.
     conn.execute(
         """UPDATE students
-        SET status = CASE WHEN date(join_date, '+1 year') < ? THEN 'Inactive' ELSE 'Active' END
-        WHERE status != CASE WHEN date(join_date, '+1 year') < ? THEN 'Inactive' ELSE 'Active' END""",
+        SET status = CASE WHEN date(join_date, '+' || (renewal_count + 1) || ' years') < ? THEN 'Inactive' ELSE 'Active' END
+        WHERE status != CASE WHEN date(join_date, '+' || (renewal_count + 1) || ' years') < ? THEN 'Inactive' ELSE 'Active' END""",
         (date.today().isoformat(), date.today().isoformat()),
     )
     return conn

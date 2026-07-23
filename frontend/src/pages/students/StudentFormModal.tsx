@@ -122,7 +122,9 @@ export function StudentFormModal({
             />
           </Field>
           <div className="rounded-md border border-border bg-paper-dim px-3 py-2 text-sm text-slate">
-            Membership is active for one year from joining or renewal.
+            Membership is active for one year from the join date below. The join
+            date never changes — renewing later extends validity by another year
+            instead.
           </div>
         </div>
 
