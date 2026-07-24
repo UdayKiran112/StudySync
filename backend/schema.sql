@@ -172,7 +172,7 @@ CREATE TABLE exams (
     exam_name       TEXT NOT NULL CHECK(length(trim(exam_name)) > 0),
     exam_date       DATE,
     subject         TEXT,
-    max_marks       REAL NOT NULL CHECK(max_marks > 0)
+    max_marks       REAL CHECK(max_marks > 0)
 );
 
 CREATE INDEX idx_exams_exam_date ON exams(exam_date);
@@ -181,7 +181,7 @@ CREATE TABLE exam_marks (
     mark_id         INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id      INTEGER NOT NULL,
     exam_id         INTEGER NOT NULL,
-    marks_obtained  REAL NOT NULL CHECK(marks_obtained >= 0),
+    marks_obtained  REAL CHECK(marks_obtained >= 0),
     remarks         TEXT,
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
     FOREIGN KEY (exam_id) REFERENCES exams(exam_id) ON DELETE RESTRICT,
@@ -199,7 +199,7 @@ CREATE TABLE quizzes (
     quiz_name       TEXT NOT NULL CHECK(length(trim(quiz_name)) > 0),
     quiz_date       DATE,
     subject         TEXT,
-    max_marks       REAL NOT NULL CHECK(max_marks > 0)
+    max_marks       REAL CHECK(max_marks > 0)
 );
 
 CREATE INDEX idx_quizzes_quiz_date ON quizzes(quiz_date);
@@ -208,7 +208,7 @@ CREATE TABLE quiz_scores (
     score_id        INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id      INTEGER NOT NULL,
     quiz_id         INTEGER NOT NULL,
-    score           REAL NOT NULL CHECK(score >= 0),
+    score           REAL CHECK(score >= 0),
     remarks         TEXT,
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
     FOREIGN KEY (quiz_id) REFERENCES quizzes(quiz_id) ON DELETE RESTRICT,

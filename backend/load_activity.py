@@ -15,20 +15,44 @@ WHAT THIS LOADS, PER CSV ROW
 -----------------------------
   ID NO                        -> students.student_id (existing row; the
                                    FK, never re-derived from Name)
-  Date, IN, OUT, DURATION       -> attendance (one row per student/date)
+  Date, IN, OUT                -> attendance (one row per student/date).
+                                   duration_minutes is always DERIVED from
+                                   IN/OUT, never read from the CSV's own
+                                   DURATION column (it disagreed with IN/OUT
+                                   often enough, and can't express the lunch
+                                   rule below). Any overlap with 13:00-14:00
+                                   is excluded from duration_minutes as an
+                                   unattended lunch break, even for a
+                                   session that spans across it. Every
+                                   exclusion is logged to the report as an
+                                   auto-correction (not a skip -- the row is
+                                   still loaded, just with an adjusted
+                                   number) so it can be reviewed later.
   Book ID + Reference Book      -> books (auto-created master rows) and
                                    offline_library_usage (one row per book;
                                    a cell can list several books comma-
                                    separated -- each becomes its own row)
   Digital Library + Purpose +
-  Online Subscription           -> digital_library_usage. Online
-                                   Subscription present -> account_type
-                                   'Library Subscription', with a
-                                   subscriptions master row auto-created
-                                   per unique platform name; absent ->
-                                   'Own Account'. Re-uses the row's IN/OUT
-                                   as in_time/out_time (no separate
-                                   timestamp exists for this activity).
+  Online Subscription           -> digital_library_usage. A cell can list
+                                   several platform/purpose values comma-
+                                   separated (the same messy pattern as
+                                   Book ID above) -- each becomes its own
+                                   row instead of being inserted as one
+                                   garbled "Adda 247, Youtube"-style value.
+                                   Platform names (and book titles below)
+                                   are run through a canonicalizer that
+                                   merges pure spelling/case/spacing
+                                   variants of the same real-world name so
+                                   the subscriptions/books tables don't
+                                   grow a new row per typo -- see
+                                   Canonicalizer below. Online Subscription
+                                   present -> account_type 'Library
+                                   Subscription', with a subscriptions
+                                   master row auto-created per canonical
+                                   platform name; absent -> 'Own Account'.
+                                   Re-uses the row's IN/OUT as in_time/
+                                   out_time (no separate timestamp exists
+                                   for this activity).
   Quiz                          -> quizzes (one row per unique topic+date)
                                    + quiz_scores (score left NULL --
                                    the CSV never records a numeric score,
@@ -88,6 +112,7 @@ Re-running this script against the same --db will insert everything again
 
 import argparse
 import csv
+import difflib
 import re
 import sqlite3
 import sys
@@ -169,16 +194,32 @@ def parse_time(raw: str):
     return f"{h:02d}:{mnt:02d}"
 
 
-def parse_duration_minutes(raw: str, check_in, check_out):
-    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", raw or "")
-    if m:
-        return int(m.group(1)) * 60 + int(m.group(2))
-    if check_in and check_out:
-        h1, m1 = map(int, check_in.split(":"))
-        h2, m2 = map(int, check_out.split(":"))
-        diff = (h2 * 60 + m2) - (h1 * 60 + m1)
-        return diff if diff > 0 else None
-    return None
+LUNCH_START_MIN = 13 * 60  # 13:00
+LUNCH_END_MIN = 14 * 60  # 14:00
+
+
+def compute_duration_minutes(check_in, check_out):
+    """
+    Derive duration purely from check_in/check_out -- the CSV's own
+    DURATION column is never read or trusted (it disagreed with
+    check_in/check_out on enough rows that deriving it ourselves is more
+    reliable, and it can't express the lunch rule below anyway).
+
+    Any overlap with the 13:00-14:00 lunch break is subtracted from the
+    total, since that hour is unattended time even for a session that
+    spans across it (e.g. 11:30-15:00 counts as 2h30m, not 3h30m).
+
+    Returns (duration_minutes_or_None, lunch_minutes_excluded).
+    """
+    if not check_in or not check_out:
+        return None, 0
+    h1, m1 = int(check_in[:2]), int(check_in[3:])
+    h2, m2 = int(check_out[:2]), int(check_out[3:])
+    start, end = h1 * 60 + m1, h2 * 60 + m2
+    if end <= start:
+        return None, 0
+    lunch_overlap = max(0, min(end, LUNCH_END_MIN) - max(start, LUNCH_START_MIN))
+    return (end - start) - lunch_overlap, lunch_overlap
 
 
 def derive_session(check_in, check_out):
@@ -198,6 +239,118 @@ def derive_session(check_in, check_out):
 def slugify(s: str) -> str:
     s = re.sub(r"[^A-Za-z0-9]+", "_", s.strip().lower()).strip("_")
     return s or "unknown"
+
+
+def _normalize_key(s: str) -> str:
+    """Strip everything but letters/digits and lowercase, so 'Adda 247',
+    'adda_247', and 'ADDA-247' all reduce to the same key."""
+    return re.sub(r"[^a-z0-9]+", "", s.lower())
+
+
+class Canonicalizer:
+    """
+    Groups near-duplicate raw strings (case/spacing/punctuation variants,
+    and minor typos) under one canonical spelling, so a messy CSV column
+    doesn't create a new subscriptions/books row for every misspelling of
+    the same real-world name (e.g. 'Adda247' / 'Adda 247' / 'adda_247' /
+    'Add247' all landing on one entry instead of four).
+
+    Three tiers, each handled with a different confidence level:
+      1. EXACT match after stripping case/spacing/punctuation -> merged
+         silently. This is a pure formatting difference, not a guess.
+      2. ANAGRAM match (same letters, reordered -- e.g. 'Adda247' vs
+         '247Adda') -> merged, logged as an auto-correction, since two
+         short strings sharing an *entire* letter multiset by chance is
+         very unlikely.
+      3. FUZZY match above `merge_threshold` (e.g. 'Add247' vs 'Adda247',
+         'Reasonoing' vs 'Reasoning') -> merged, logged as an
+         auto-correction with the similarity score, so it's easy to
+         spot-check later.
+      4. Below `merge_threshold` but above `review_threshold` -> NOT
+         merged (too risky to guess), but logged as a possible duplicate
+         for a human to review.
+      5. Below `review_threshold` -> treated as a genuinely new/distinct
+         entry, no log entry (this is the common case).
+
+    The canonical spelling kept for a cluster is whichever raw form has
+    been seen most often, so a one-off typo doesn't become the
+    "official" spelling stored in the database.
+    """
+
+    def __init__(
+        self,
+        log_auto,
+        log_review,
+        category,
+        merge_threshold=0.90,
+        review_threshold=0.78,
+    ):
+        self.log_auto = log_auto
+        self.log_review = log_review
+        self.category = category
+        self.merge_threshold = merge_threshold
+        self.review_threshold = review_threshold
+        self.key_to_canonical = {}  # normalized key -> current canonical spelling
+        self.spelling_counts = {}  # canonical spelling -> {raw spelling: count}
+
+    def canonicalize(self, raw: str, context: str = "") -> str:
+        raw = collapse_ws(raw)
+        if not raw:
+            return raw
+        key = _normalize_key(raw)
+        if not key:
+            return raw
+
+        if key in self.key_to_canonical:
+            canonical = self.key_to_canonical[key]
+        else:
+            canonical = self._find_match(key, raw, context)
+            self.key_to_canonical[key] = canonical
+
+        counts = self.spelling_counts.setdefault(canonical, {})
+        counts[raw] = counts.get(raw, 0) + 1
+        # The most frequently-seen spelling becomes the display/stored form.
+        canonical = max(counts, key=counts.get)
+        # Repoint every key that currently maps to this cluster at the
+        # (possibly updated) most-frequent spelling.
+        for k in list(self.key_to_canonical):
+            if self.key_to_canonical[k] in counts:
+                self.key_to_canonical[k] = canonical
+        return canonical
+
+    def _find_match(self, key: str, raw: str, context: str) -> str:
+        sorted_key = "".join(sorted(key))
+        best_canonical, best_score = None, 0.0
+        for existing_key, existing_canonical in self.key_to_canonical.items():
+            if existing_key == key:
+                continue
+            if "".join(sorted(existing_key)) == sorted_key and len(key) >= 4:
+                self.log_auto(
+                    self.category,
+                    f"{context}: {raw!r} is the same letters reordered as "
+                    f"existing entry {existing_canonical!r} -> merged",
+                )
+                return existing_canonical
+            score = difflib.SequenceMatcher(None, key, existing_key).ratio()
+            if score > best_score:
+                best_canonical, best_score = existing_canonical, score
+
+        if best_canonical is not None and best_score >= self.merge_threshold:
+            self.log_auto(
+                self.category,
+                f"{context}: {raw!r} matched existing entry {best_canonical!r} "
+                f"(similarity {best_score:.2f}) -> merged rather than creating a duplicate",
+            )
+            return best_canonical
+
+        if best_canonical is not None and best_score >= self.review_threshold:
+            self.log_review(
+                f"{context}: {raw!r} looks similar to existing entry {best_canonical!r} "
+                f"(similarity {best_score:.2f}) but not similar enough to auto-merge -- "
+                f"kept as a separate entry, please review",
+            )
+
+        return raw
 
 
 def relax_schema(conn: sqlite3.Cursor):
@@ -277,7 +430,7 @@ class Loader:
         self.conn = conn
         self.existing_student_ids = existing_student_ids
         self.report = report
-        self.book_cache = {}  # book_id -> title actually stored
+        self.book_cache = {}  # book_id -> canonical title actually stored
         self.subscription_cache = set()
         self.quiz_cache = {}  # (topic, date) -> quiz_id
         self.exam_cache = {}  # (topic, date) -> exam_id
@@ -290,35 +443,166 @@ class Loader:
             "exam_marks": 0,
             "coaching_enrollments": 0,
         }
+        self.autocorrections = []
+        self.autocorrection_counts = {
+            "lunch_break_excluded": 0,
+            "duration_left_null_no_checkout": 0,
+            "digital_usage_row_split": 0,
+            "subscription_name_merged": 0,
+            "book_title_merged": 0,
+            "book_title_majority_vote": 0,
+        }
+        self.review_notes = []
+        self.subscription_canon = Canonicalizer(
+            self.log_auto, self.log_review, "subscription_name_merged"
+        )
+        self.book_title_canon = Canonicalizer(
+            self.log_auto, self.log_review, "book_title_merged"
+        )
+        # subscription_id -> normalized cluster key, so that once every row
+        # has been seen, finalize_canonical_names() can sync an
+        # already-inserted subscription whose spelling turned out not to be
+        # the cluster's most common one (the winner can only be known once
+        # all rows are in, but rows are inserted as we go).
+        self.subscription_id_to_cluster_key = {}
+        # book_id -> {normalized_title_key: count}. Unlike subscriptions,
+        # the same book_id can legitimately show up with several genuinely
+        # DIFFERENT titles (not spelling variants -- book_id looks like
+        # it's reused rather than being a stable 1:1 catalog key). We tally
+        # every title seen per book_id and pick the majority at the end,
+        # rather than just keeping whichever title happened to come first.
+        self.book_id_title_key_counts = {}
 
     def log(self, msg):
+        """A row (or part of one) was SKIPPED / dropped -- goes in the report's
+        skip section."""
         self.report.append(msg)
 
+    def log_auto(self, category, msg):
+        """Data WAS loaded, but not exactly as it appeared in the CSV -- the
+        app derived or adjusted a value. Tracked separately from skips so the
+        report distinguishes 'lost' rows from 'corrected' ones."""
+        self.autocorrection_counts[category] = (
+            self.autocorrection_counts.get(category, 0) + 1
+        )
+        self.autocorrections.append(msg)
+
+    def log_review(self, msg):
+        """Nothing was changed automatically -- this is a 'looked similar but
+        wasn't confident enough to merge' note for a human to look at."""
+        self.review_notes.append(msg)
+
     # ---- master-data getters (cached) -------------------------------
-    def get_or_create_book(self, book_id, title):
+    def get_or_create_book(self, book_id, title, line_no=None):
+        canonical_title = self.book_title_canon.canonicalize(
+            title, context=f"line {line_no}, book_id {book_id!r}"
+        )
+        key = _normalize_key(collapse_ws(title))
+        key_counts = self.book_id_title_key_counts.setdefault(book_id, {})
+        key_counts[key] = key_counts.get(key, 0) + 1
+
         if book_id in self.book_cache:
-            return
-        self.book_cache[book_id] = title
+            return  # final title (majority vote) gets synced in finalize()
+        self.book_cache[book_id] = canonical_title
         try:
             self.conn.execute(
-                "INSERT INTO books (book_id, title) VALUES (?, ?)", (book_id, title)
+                "INSERT INTO books (book_id, title) VALUES (?, ?)",
+                (book_id, canonical_title),
             )
         except sqlite3.IntegrityError as e:
-            self.log(f"books insert failed for {book_id!r}/{title!r}: {e}")
+            self.log(f"books insert failed for {book_id!r}/{canonical_title!r}: {e}")
 
-    def get_or_create_subscription(self, platform_name):
-        sub_id = slugify(platform_name)
+    def get_or_create_subscription(self, platform_name, line_no=None):
+        canonical = self.subscription_canon.canonicalize(
+            platform_name, context=f"line {line_no}" if line_no is not None else ""
+        )
+        sub_id = slugify(canonical)
+        self.subscription_id_to_cluster_key[sub_id] = _normalize_key(
+            collapse_ws(platform_name)
+        )
         if sub_id in self.subscription_cache:
             return sub_id
         self.subscription_cache.add(sub_id)
         try:
             self.conn.execute(
                 "INSERT INTO subscriptions (subscription_id, name, status) VALUES (?, ?, 'Active')",
-                (sub_id, platform_name),
+                (sub_id, canonical),
             )
         except sqlite3.IntegrityError:
             pass  # already exists
         return sub_id
+
+    def finalize_canonical_names(self):
+        """
+        Two things can only be known once every row has been seen, so this
+        runs after the full CSV pass:
+
+        1. A spelling cluster's "winning" spelling (most frequent variant)
+           can shift as later rows come in, but earlier rows already wrote
+           whichever spelling was winning *at the time*. Re-sync any
+           subscriptions row whose stored name no longer matches its
+           cluster's final majority spelling.
+
+        2. For book_id, tally every (canonicalized) title it was ever seen
+           with and keep the majority one -- book_id is reused across
+           genuinely different titles often enough that "first title wins"
+           would silently keep whichever one happened to load first.
+        """
+        updated_subs = 0
+        for sub_id, key in self.subscription_id_to_cluster_key.items():
+            final = self.subscription_canon.key_to_canonical.get(key)
+            if final:
+                cur = self.conn.execute(
+                    "SELECT name FROM subscriptions WHERE subscription_id = ?",
+                    (sub_id,),
+                ).fetchone()
+                if cur and cur[0] != final:
+                    self.conn.execute(
+                        "UPDATE subscriptions SET name = ? WHERE subscription_id = ?",
+                        (final, sub_id),
+                    )
+                    updated_subs += 1
+        if updated_subs:
+            self.log_auto(
+                "subscription_name_merged",
+                f"finalize: re-synced {updated_subs} subscriptions.name row(s) to "
+                f"their cluster's final majority spelling",
+            )
+
+        updated_books = 0
+        conflicted_book_ids = 0
+        for book_id, key_counts in self.book_id_title_key_counts.items():
+            tallies = {}
+            for key, cnt in key_counts.items():
+                final_title = self.book_title_canon.key_to_canonical.get(key, key)
+                tallies[final_title] = tallies.get(final_title, 0) + cnt
+            winner = max(tallies, key=tallies.get)
+            if len(tallies) > 1:
+                conflicted_book_ids += 1
+                total = sum(tallies.values())
+                breakdown = ", ".join(
+                    f"{t!r} ({c}/{total})"
+                    for t, c in sorted(tallies.items(), key=lambda kv: -kv[1])
+                )
+                self.log_auto(
+                    "book_title_majority_vote",
+                    f"book_id {book_id!r}: seen with {len(tallies)} different titles "
+                    f"-- {breakdown} -> kept {winner!r} (majority vote)",
+                )
+            if winner != self.book_cache.get(book_id):
+                self.conn.execute(
+                    "UPDATE books SET title = ? WHERE book_id = ?", (winner, book_id)
+                )
+                self.book_cache[book_id] = winner
+                updated_books += 1
+
+        if updated_books:
+            self.log_auto(
+                "book_title_merged",
+                f"finalize: re-synced {updated_books} books.title row(s) to their "
+                f"final majority title ({conflicted_book_ids} book_id(s) had "
+                f"genuinely conflicting titles, not just spelling variants)",
+            )
 
     def get_or_create_quiz(self, topic, date):
         key = (topic, date)
@@ -354,14 +638,33 @@ class Loader:
         return cur.lastrowid
 
     # ---- per-row feature loaders --------------------------------------
-    def load_attendance(
-        self, student_id, date, check_in, check_out, duration_raw, line_no
-    ):
+    def load_attendance(self, student_id, date, check_in, check_out, line_no):
         session = derive_session(check_in, check_out)
         if session is None:
             self.log(f"line {line_no}: no usable check-in time -> attendance SKIPPED")
             return
-        duration = parse_duration_minutes(duration_raw, check_in, check_out)
+
+        duration, lunch_overlap = compute_duration_minutes(check_in, check_out)
+        if lunch_overlap:
+            self.log_auto(
+                "lunch_break_excluded",
+                f"line {line_no} (student {student_id}, {date}): {check_in}-{check_out} "
+                f"overlaps the 13:00-14:00 lunch break -> {lunch_overlap} min excluded, "
+                f"duration_minutes set to {duration}",
+            )
+        elif check_out is None:
+            self.log_auto(
+                "duration_left_null_no_checkout",
+                f"line {line_no} (student {student_id}, {date}): no check_out recorded "
+                f"-> duration_minutes left NULL (session marked '{session}')",
+            )
+        elif duration is None:
+            # check_in and check_out both present but check_out <= check_in
+            self.log(
+                f"line {line_no} (student {student_id}, {date}): check_out {check_out} "
+                f"not after check_in {check_in} -> duration_minutes left NULL"
+            )
+
         try:
             self.conn.execute(
                 """INSERT INTO attendance
@@ -392,7 +695,7 @@ class Loader:
                 )
                 continue
             if bid:
-                self.get_or_create_book(bid, name)
+                self.get_or_create_book(bid, name, line_no)
             elif not name:
                 continue
             try:
@@ -419,43 +722,75 @@ class Loader:
     ):
         if not platform_raw and not sub_raw and not purpose_raw:
             return
-        platform = collapse_ws(platform_raw)
-        if not platform:
-            self.log(
-                f"line {line_no}: digital library activity with no platform name -> SKIPPED"
-            )
+        # Same messy pattern as Book ID/Reference Book: a cell can contain
+        # several comma-separated values that got merged into one instead
+        # of being split into separate rows at data-entry time (e.g.
+        # platform 'Adda247 , Adda247' with purpose 'Polity , Polity' is
+        # really two separate visits, not one visit to a platform literally
+        # named "Adda247 , Adda247").
+        platforms = (
+            [collapse_ws(x) for x in platform_raw.split(",")] if platform_raw else []
+        )
+        purposes = (
+            [collapse_ws(x) for x in purpose_raw.split(",")] if purpose_raw else []
+        )
+        n = max(len(platforms), len(purposes))
+        if n == 0:
             return
-        if check_in is None:
-            self.log(
-                f"line {line_no}: digital library usage with no check-in time -> SKIPPED"
-            )
-            return
+
         is_subscription = bool(collapse_ws(sub_raw))
-        sub_id = self.get_or_create_subscription(platform) if is_subscription else None
         account_type = "Library Subscription" if is_subscription else "Own Account"
-        purpose = collapse_ws(purpose_raw) or None
-        try:
-            self.conn.execute(
-                """INSERT INTO digital_library_usage
-                   (student_id, date, in_time, out_time, account_type,
-                    subscription_id, platform_name, purpose)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    student_id,
-                    date,
-                    check_in,
-                    check_out,
-                    account_type,
-                    sub_id,
-                    platform,
-                    purpose,
-                ),
+
+        if n > 1:
+            self.log_auto(
+                "digital_usage_row_split",
+                f"line {line_no} (student {student_id}, {date}): platform/purpose "
+                f"cell had {n} comma-separated values ({platform_raw!r} / "
+                f"{purpose_raw!r}) -> split into {n} separate digital_library_usage "
+                f"rows instead of one garbled row",
             )
-            self.counts["digital_usage"] += 1
-        except sqlite3.IntegrityError as e:
-            self.log(
-                f"line {line_no}: digital_library_usage insert failed ({e}) -> SKIPPED"
+
+        for i in range(n):
+            platform_val = platforms[i] if i < len(platforms) else ""
+            if not platform_val:
+                self.log(
+                    f"line {line_no}: digital library activity with no platform name -> SKIPPED"
+                )
+                continue
+            if check_in is None:
+                self.log(
+                    f"line {line_no}: digital library usage with no check-in time -> SKIPPED"
+                )
+                continue
+            platform = self.subscription_canon.canonicalize(
+                platform_val, context=f"line {line_no}"
             )
+            sub_id = None
+            if is_subscription:
+                sub_id = self.get_or_create_subscription(platform, line_no)
+            purpose = (purposes[i] if i < len(purposes) else None) or None
+            try:
+                self.conn.execute(
+                    """INSERT INTO digital_library_usage
+                       (student_id, date, in_time, out_time, account_type,
+                        subscription_id, platform_name, purpose)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        student_id,
+                        date,
+                        check_in,
+                        check_out,
+                        account_type,
+                        sub_id,
+                        platform,
+                        purpose,
+                    ),
+                )
+                self.counts["digital_usage"] += 1
+            except sqlite3.IntegrityError as e:
+                self.log(
+                    f"line {line_no}: digital_library_usage insert failed ({e}) -> SKIPPED"
+                )
 
     def load_quiz(self, student_id, date, topic_raw, line_no):
         topic = collapse_ws(topic_raw)
@@ -556,11 +891,11 @@ def main():
 
             check_in = parse_time(row[COL_IN]) if len(row) > COL_IN else None
             check_out = parse_time(row[COL_OUT]) if len(row) > COL_OUT else None
-            duration_raw = row[COL_DURATION] if len(row) > COL_DURATION else ""
+            # Note: row[COL_DURATION], the CSV's own DURATION column, is
+            # intentionally never read. duration_minutes is always derived
+            # from check_in/check_out (see compute_duration_minutes).
 
-            loader.load_attendance(
-                student_id, date, check_in, check_out, duration_raw, line_no
-            )
+            loader.load_attendance(student_id, date, check_in, check_out, line_no)
 
             book_id_raw = (
                 collapse_ws(row[COL_BOOK_ID]) if len(row) > COL_BOOK_ID else ""
@@ -595,6 +930,7 @@ def main():
                     student_id, date, row[COL_DIGITAL_CLASS], line_no
                 )
 
+    loader.finalize_canonical_names()
     conn.commit()
 
     totals = {}
@@ -624,14 +960,32 @@ def main():
         f.write("\nTotal rows now in each table:\n")
         for k, v in totals.items():
             f.write(f"  {k}: {v}\n")
-        f.write("\n=== PER-ROW WARNINGS/SKIPS ===\n")
+        f.write(
+            "\nAuto-corrections this run (row WAS loaded, value derived/adjusted):\n"
+        )
+        for k, v in loader.autocorrection_counts.items():
+            f.write(f"  {k}: {v}\n")
+        f.write(
+            f"\nPossible duplicates NOT auto-merged (need manual review): {len(loader.review_notes)}\n"
+        )
+        f.write("\n=== PER-ROW SKIPS (row or part of it was NOT loaded) ===\n")
         f.write("\n".join(report) + "\n")
+        f.write(
+            "\n=== PER-ROW AUTO-CORRECTIONS (loaded, but adjusted from the raw CSV) ===\n"
+        )
+        f.write("\n".join(loader.autocorrections) + "\n")
+        f.write(
+            "\n=== POSSIBLE DUPLICATES NOT MERGED (similar name, kept separate -- please review) ===\n"
+        )
+        f.write("\n".join(loader.review_notes) + "\n")
 
     print(f"Processed {total_rows} CSV rows.")
     print(
         f"Skipped: {skipped_id} (unknown student_id), {skipped_date} (unparseable date)"
     )
     print("Inserted this run:", loader.counts)
+    print("Auto-corrected this run:", loader.autocorrection_counts)
+    print(f"Possible duplicates flagged for review: {len(loader.review_notes)}")
     print(f"Full details in {args.report}")
 
 
