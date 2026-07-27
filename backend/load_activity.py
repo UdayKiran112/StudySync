@@ -921,10 +921,10 @@ def main():
                 line_no,
             )
 
-            if len(row) > COL_QUIZ:
-                loader.load_quiz(student_id, date, row[COL_QUIZ], line_no)
-            if len(row) > COL_OFFLINE_EXAM:
-                loader.load_exam(student_id, date, row[COL_OFFLINE_EXAM], line_no)
+            # if len(row) > COL_QUIZ:
+            #     loader.load_quiz(student_id, date, row[COL_QUIZ], line_no)
+            # if len(row) > COL_OFFLINE_EXAM:
+            #     loader.load_exam(student_id, date, row[COL_OFFLINE_EXAM], line_no)
             if len(row) > COL_DIGITAL_CLASS:
                 loader.load_digital_class(
                     student_id, date, row[COL_DIGITAL_CLASS], line_no
@@ -938,10 +938,10 @@ def main():
         "attendance",
         "offline_library_usage",
         "digital_library_usage",
-        "quizzes",
-        "quiz_scores",
-        "exams",
-        "exam_marks",
+        # "quizzes",
+        # "quiz_scores",
+        # "exams",
+        # "exam_marks",
         "coaching_classes",
         "coaching_enrollments",
         "books",

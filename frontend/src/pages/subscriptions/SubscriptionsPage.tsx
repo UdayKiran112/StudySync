@@ -27,6 +27,7 @@ import {
   useSubscriptionSummary,
 } from "../../api/subscriptions";
 import { extractErrorMessage } from "../../api/client";
+import { todayIso } from "../../lib/format";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import type { Subscription } from "../../api/types";
 import { SubscriptionSummaryDashboard } from "./SubscriptionSummaryDashboard";
@@ -44,7 +45,16 @@ export function SubscriptionsPage() {
   const [deleting, setDeleting] = useState<Subscription | undefined>(undefined);
 
   const debouncedSearch = useDebouncedValue(search);
-  const viewFilters = view === "active" ? { status: "Active" } : view === "expired" ? { status: "Expired" } : view === "used-today" ? { used_today: true } : {};
+  const viewFilters =
+    view === "active"
+      ? { status: "Active" }
+      : view === "expired"
+        ? { status: "Expired" }
+        : view === "used-today"
+          ? { used_today: true }
+          : view === "expiring"
+            ? { expiring: true }
+            : {};
   const { data, isLoading, isError, error } = useSubscriptions({
     search: debouncedSearch || undefined,
     status: (viewFilters.status ?? status) || undefined,
@@ -52,7 +62,10 @@ export function SubscriptionsPage() {
     offset,
     ...viewFilters,
   });
-  const summary = useSubscriptionSummary({ search: debouncedSearch || undefined, status: status || undefined });
+  const summary = useSubscriptionSummary({
+    search: debouncedSearch || undefined,
+    status: status || undefined,
+  });
   const deleteMutation = useDeleteSubscription();
 
   async function handleDelete() {
@@ -85,7 +98,10 @@ export function SubscriptionsPage() {
         }
       />
 
-      <SubscriptionSummaryDashboard summary={summary.data} loading={summary.isLoading} />
+      <SubscriptionSummaryDashboard
+        summary={summary.data}
+        loading={summary.isLoading}
+      />
 
       <div className="mb-4 flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[220px]">
@@ -131,6 +147,7 @@ export function SubscriptionsPage() {
               <Th>Type</Th>
               <Th>Cost</Th>
               <Th>Validity</Th>
+              <Th>Valid until</Th>
               <Th>Status</Th>
               <Th className="text-right">Actions</Th>
             </Thead>
@@ -150,6 +167,7 @@ export function SubscriptionsPage() {
                   <Td className="text-slate">
                     {s.validity_days != null ? `${s.validity_days} days` : "—"}
                   </Td>
+                  <Td className="text-slate">{s.valid_until ?? "—"}</Td>
                   <Td>
                     <StatusTab tone={subscriptionStatusTone(s.status)}>
                       {s.status}
@@ -230,6 +248,9 @@ function SubscriptionFormModal({
       ? String(subscription.validity_days)
       : "",
   );
+  const [startDate, setStartDate] = useState(
+    subscription?.start_date ?? todayIso(),
+  );
   const [status, setStatus] = useState<string>(
     subscription?.status ?? "Active",
   );
@@ -252,12 +273,17 @@ function SubscriptionFormModal({
       setError("Name is required.");
       return;
     }
+    if (!startDate) {
+      setError("Start date is required.");
+      return;
+    }
     try {
       if (isEdit && subscription) {
         await updateMutation.mutateAsync({
           name,
           type: type || null,
           cost: cost ? Number(cost) : null,
+          start_date: startDate,
           validity_days: validityDays ? Number(validityDays) : null,
           status: status as Subscription["status"],
         });
@@ -268,6 +294,7 @@ function SubscriptionFormModal({
           name,
           type: type || null,
           cost: cost ? Number(cost) : null,
+          start_date: startDate,
           validity_days: validityDays ? Number(validityDays) : null,
           status: status as Subscription["status"],
         });
@@ -297,10 +324,19 @@ function SubscriptionFormModal({
             />
           </Field>
           <Field label="Status" required>
-            <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="Active">Active</option>
-              <option value="Expired">Expired</option>
-            </Select>
+            {validityDays ? (
+              <div className="flex h-9 items-center rounded-md border border-border bg-paper-dim px-3 text-sm text-slate">
+                Computed automatically from validity ({status})
+              </div>
+            ) : (
+              <Select
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+              >
+                <option value="Active">Active</option>
+                <option value="Expired">Expired</option>
+              </Select>
+            )}
           </Field>
         </div>
         <Field label="Name" required>
@@ -317,14 +353,21 @@ function SubscriptionFormModal({
             placeholder="e.g. Online Learning"
           />
         </Field>
+        <Field label="Cost">
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            value={cost}
+            onChange={(e) => setCost(e.target.value)}
+          />
+        </Field>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Cost">
+          <Field label="Start date" required>
             <Input
-              type="number"
-              min="0"
-              step="0.01"
-              value={cost}
-              onChange={(e) => setCost(e.target.value)}
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
             />
           </Field>
           <Field label="Validity (days)">
@@ -335,6 +378,12 @@ function SubscriptionFormModal({
               onChange={(e) => setValidityDays(e.target.value)}
             />
           </Field>
+        </div>
+        <div className="rounded-md border border-border bg-paper-dim px-3 py-2 text-sm text-slate">
+          The subscription is Active from the start date for the number of
+          validity days entered — expiry is checked automatically against the
+          start date, and updates to Expired on its own once that period ends.
+          Leave validity blank for a subscription with no fixed term.
         </div>
         {error && <p className="text-sm text-rust">{error}</p>}
         <div className="flex justify-end gap-2 border-t border-border pt-4">

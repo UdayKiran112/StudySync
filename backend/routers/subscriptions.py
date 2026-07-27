@@ -12,6 +12,7 @@ same convention as students.status.
 """
 
 import sqlite3
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 
@@ -27,6 +28,17 @@ router = APIRouter(
     prefix="/api/subscriptions",
     tags=["Subscriptions"],
     dependencies=[Depends(require_api_key)],
+)
+
+# Valid until start_date + validity_days, when validity_days is set.
+# NULL when validity_days isn't set (a subscription with no defined
+# term, whose status stays whatever staff set manually). Defined once
+# and reused everywhere this app needs "when does this subscription
+# expire" so it can't drift out of sync between endpoints or with
+# database.py's per-connection status sync.
+VALID_UNTIL_EXPR = (
+    "CASE WHEN validity_days IS NOT NULL "
+    "THEN date(start_date, '+' || validity_days || ' days') ELSE NULL END"
 )
 
 
@@ -48,21 +60,36 @@ def create_subscription(
 
     db.execute(
         """
-        INSERT INTO subscriptions (subscription_id, name, type, cost, validity_days, status)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO subscriptions (subscription_id, name, type, cost, start_date, validity_days, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             subscription.subscription_id,
             subscription.name,
             subscription.type,
             subscription.cost,
+            subscription.start_date,
             subscription.validity_days,
             subscription.status,
         ),
     )
+    # A back-dated start_date + validity_days that's already expired
+    # should be reflected immediately, not just on the next request's
+    # connection-level sync (database.py). Rows with no validity_days
+    # keep whatever status was explicitly provided.
+    db.execute(
+        f"""UPDATE subscriptions
+        SET status = CASE
+            WHEN {VALID_UNTIL_EXPR} IS NULL THEN status
+            WHEN {VALID_UNTIL_EXPR} < ? THEN 'Expired'
+            ELSE 'Active'
+        END
+        WHERE subscription_id = ?""",
+        (date.today().isoformat(), subscription.subscription_id),
+    )
 
     row = db.execute(
-        "SELECT * FROM subscriptions WHERE subscription_id = ?",
+        f"SELECT *, {VALID_UNTIL_EXPR} AS valid_until FROM subscriptions WHERE subscription_id = ?",
         (subscription.subscription_id,),
     ).fetchone()
     return dict(row)
@@ -73,12 +100,13 @@ def list_subscriptions(
     status: Optional[str] = None,
     search: Optional[str] = None,
     used_today: bool = False,
+    expiring: bool = False,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
-    """List all subscriptions, optionally filtered by status and/or name search."""
-    query = "SELECT * FROM subscriptions WHERE 1=1"
+    """List all subscriptions, optionally filtered by status, name search, and/or expiring-soon."""
+    query = f"SELECT *, {VALID_UNTIL_EXPR} AS valid_until FROM subscriptions WHERE 1=1"
     params = []
 
     if status:
@@ -91,6 +119,12 @@ def list_subscriptions(
 
     if used_today:
         query += " AND subscription_id IN (SELECT subscription_id FROM digital_library_usage WHERE date = date('now') AND subscription_id IS NOT NULL)"
+
+    if expiring:
+        query += (
+            f" AND status = 'Active' AND {VALID_UNTIL_EXPR} IS NOT NULL"
+            f" AND {VALID_UNTIL_EXPR} >= date('now') AND {VALID_UNTIL_EXPR} <= date('now', '+30 days')"
+        )
 
     query += " ORDER BY name LIMIT ? OFFSET ?"
     params.extend([limit, offset])
@@ -120,14 +154,17 @@ def subscription_summary(
         SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END) AS active,
         SUM(CASE WHEN status = 'Expired' THEN 1 ELSE 0 END) AS expired,
         COALESCE(SUM(cost), 0) AS total_cost,
-        AVG(validity_days) AS average_validity
+        AVG(validity_days) AS average_validity,
+        SUM(CASE WHEN status = 'Active' AND {VALID_UNTIL_EXPR} IS NOT NULL
+                 AND {VALID_UNTIL_EXPR} >= date('now')
+                 AND {VALID_UNTIL_EXPR} <= date('now', '+30 days') THEN 1 ELSE 0 END) AS expiring
         FROM subscriptions{where}""",
         params,
     ).fetchone()
     usage = db.execute(
         f"""SELECT COUNT(DISTINCT digital_library_usage.subscription_id) AS used_today
         FROM digital_library_usage JOIN subscriptions ON subscriptions.subscription_id = digital_library_usage.subscription_id
-        {where}{' AND' if where else ' WHERE'} digital_library_usage.date = date('now')""",
+        {where}{" AND" if where else " WHERE"} digital_library_usage.date = date('now')""",
         params,
     ).fetchone()
     type_rows = db.execute(
@@ -146,7 +183,10 @@ def subscription_summary(
         "active": totals["active"] or 0,
         "expired": totals["expired"] or 0,
         "total_cost": totals["total_cost"] or 0,
-        "average_validity_days": round(totals["average_validity"], 1) if totals["average_validity"] is not None else None,
+        "average_validity_days": round(totals["average_validity"], 1)
+        if totals["average_validity"] is not None
+        else None,
+        "expiring": totals["expiring"] or 0,
         "used_today": usage["used_today"] or 0,
         "type_distribution": [dict(row) for row in type_rows],
         "usage_by_subscription": [dict(row) for row in usage_rows],
@@ -159,7 +199,8 @@ def get_subscription(
 ):
     """Fetch a single subscription by ID."""
     row = db.execute(
-        "SELECT * FROM subscriptions WHERE subscription_id = ?", (subscription_id,)
+        f"SELECT *, {VALID_UNTIL_EXPR} AS valid_until FROM subscriptions WHERE subscription_id = ?",
+        (subscription_id,),
     ).fetchone()
     if not row:
         raise HTTPException(
@@ -189,6 +230,10 @@ def update_subscription(
     updates = subscription.model_dump(exclude_unset=True)
     if "name" in updates and updates["name"] is None:
         raise HTTPException(status_code=422, detail="name cannot be null")
+    if "start_date" in updates and updates["start_date"] is None:
+        raise HTTPException(status_code=422, detail="start_date cannot be null")
+    if "status" in updates and updates["status"] is None:
+        raise HTTPException(status_code=422, detail="status cannot be null")
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided to update")
 
@@ -198,9 +243,25 @@ def update_subscription(
     db.execute(
         f"UPDATE subscriptions SET {set_clause} WHERE subscription_id = ?", values
     )
+    # start_date/validity_days may have just changed -- recompute status
+    # immediately rather than waiting for the next request's connection-
+    # level sync (database.py), the same class of staleness bug already
+    # fixed for the students module's renew endpoint. Rows with no
+    # validity_days keep whatever status was just explicitly set above.
+    db.execute(
+        f"""UPDATE subscriptions
+        SET status = CASE
+            WHEN {VALID_UNTIL_EXPR} IS NULL THEN status
+            WHEN {VALID_UNTIL_EXPR} < ? THEN 'Expired'
+            ELSE 'Active'
+        END
+        WHERE subscription_id = ?""",
+        (date.today().isoformat(), subscription_id),
+    )
 
     row = db.execute(
-        "SELECT * FROM subscriptions WHERE subscription_id = ?", (subscription_id,)
+        f"SELECT *, {VALID_UNTIL_EXPR} AS valid_until FROM subscriptions WHERE subscription_id = ?",
+        (subscription_id,),
     ).fetchone()
     return dict(row)
 

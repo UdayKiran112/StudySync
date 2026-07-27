@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
-import type { Subscription, SubscriptionCreateInput, SubscriptionSummary, SubscriptionUpdateInput } from "./types";
+import type {
+  Subscription,
+  SubscriptionCreateInput,
+  SubscriptionSummary,
+  SubscriptionUpdateInput,
+} from "./types";
 
 export interface SubscriptionListParams {
   status?: string;
@@ -8,27 +13,39 @@ export interface SubscriptionListParams {
   limit?: number;
   offset?: number;
   used_today?: boolean;
+  expiring?: boolean;
 }
 
 const keys = {
   all: ["subscriptions"] as const,
-  list: (params: SubscriptionListParams) => ["subscriptions", "list", params] as const,
+  list: (params: SubscriptionListParams) =>
+    ["subscriptions", "list", params] as const,
 };
 
 export function useSubscriptions(params: SubscriptionListParams) {
   return useQuery({
     queryKey: keys.list(params),
     queryFn: async () => {
-      const { data } = await apiClient.get<Subscription[]>("/api/subscriptions", { params });
+      const { data } = await apiClient.get<Subscription[]>(
+        "/api/subscriptions",
+        { params },
+      );
       return data;
     },
   });
 }
 
-export function useSubscriptionSummary(params: Pick<SubscriptionListParams, "status" | "search">) {
+export function useSubscriptionSummary(
+  params: Pick<SubscriptionListParams, "status" | "search">,
+) {
   return useQuery({
     queryKey: ["subscriptions", "summary", params],
-    queryFn: async () => (await apiClient.get<SubscriptionSummary>("/api/subscriptions/summary", { params })).data,
+    queryFn: async () =>
+      (
+        await apiClient.get<SubscriptionSummary>("/api/subscriptions/summary", {
+          params,
+        })
+      ).data,
     staleTime: 60 * 1000,
   });
 }
@@ -37,7 +54,10 @@ export function useCreateSubscription() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: SubscriptionCreateInput) => {
-      const { data } = await apiClient.post<Subscription>("/api/subscriptions", input);
+      const { data } = await apiClient.post<Subscription>(
+        "/api/subscriptions",
+        input,
+      );
       return data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.all }),
@@ -48,7 +68,10 @@ export function useUpdateSubscription(subscriptionId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: SubscriptionUpdateInput) => {
-      const { data } = await apiClient.patch<Subscription>(`/api/subscriptions/${subscriptionId}`, input);
+      const { data } = await apiClient.patch<Subscription>(
+        `/api/subscriptions/${subscriptionId}`,
+        input,
+      );
       return data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: keys.all }),

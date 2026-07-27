@@ -142,8 +142,11 @@ export interface Subscription {
   name: string;
   type: string | null;
   cost: number | null;
+  start_date: string;
   validity_days: number | null;
   status: SubscriptionStatus;
+  /** start_date + validity_days -- computed by the backend, null if validity_days isn't set. */
+  valid_until: string | null;
 }
 
 export interface SubscriptionCreateInput {
@@ -151,6 +154,7 @@ export interface SubscriptionCreateInput {
   name: string;
   type?: string | null;
   cost?: number | null;
+  start_date: string;
   validity_days?: number | null;
   status?: SubscriptionStatus;
 }
@@ -165,6 +169,7 @@ export interface SubscriptionSummary {
   expired: number;
   total_cost: number;
   average_validity_days: number | null;
+  expiring: number;
   used_today: number;
   type_distribution: { type: string; count: number }[];
   usage_by_subscription: { name: string; count: number }[];

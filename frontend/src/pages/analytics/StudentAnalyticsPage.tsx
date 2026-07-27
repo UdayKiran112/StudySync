@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   BarChart3,
@@ -12,7 +12,12 @@ import {
   CalendarClock,
   Search,
 } from "lucide-react";
-import { PageHeader, Spinner, ErrorBanner, EmptyState } from "../../components/ui/Feedback";
+import {
+  PageHeader,
+  Spinner,
+  ErrorBanner,
+  EmptyState,
+} from "../../components/ui/Feedback";
 import { Field } from "../../components/ui/Form";
 import { StudentPicker } from "../../components/ui/StudentPicker";
 import { IdTab, StatusTab, studentStatusTone } from "../../components/ui/Tabs";
@@ -20,6 +25,8 @@ import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { useStudentDashboard } from "../../api/dashboard";
 import { extractErrorMessage } from "../../api/client";
 import { formatDate, formatDuration } from "../../lib/format";
+import { computeHolidayAwareStats } from "../../lib/attendanceStats";
+import { HOLIDAY_RULE_DESCRIPTION } from "../../lib/holidays";
 import type { Student } from "../../api/types";
 import { AnalyticsStatCard } from "./components/AnalyticsStatCard";
 import { TrendBadge } from "./components/TrendBadge";
@@ -27,8 +34,8 @@ import { ScoreTrendChart } from "./components/ScoreTrendChart";
 import { SubjectPerformanceTable } from "./components/SubjectPerformanceTable";
 import { CategoryBreakdownChart } from "./components/CategoryBreakdownChart";
 import { AssessmentAttemptsTable } from "./components/AssessmentAttemptsTable";
+import { AttendanceCalendar } from "./components/AttendanceCalendar";
 import { ExportMenu } from "./components/ExportMenu";
-import { EngagementInsights } from "./components/EngagementInsights";
 
 export function StudentAnalyticsPage() {
   const { studentId } = useParams();
@@ -36,7 +43,12 @@ export function StudentAnalyticsPage() {
   const id = studentId ? Number(studentId) : undefined;
 
   const [picked, setPicked] = useState<Student | null>(null);
-  const { data: dashboard, isLoading, isError, error } = useStudentDashboard(id);
+  const {
+    data: dashboard,
+    isLoading,
+    isError,
+    error,
+  } = useStudentDashboard(id);
 
   // Keep the search box showing the loaded student once the report arrives
   // (covers landing directly on /analytics/:id via a link, not just search).
@@ -59,7 +71,11 @@ export function StudentAnalyticsPage() {
 
       <div className="no-print mb-6 max-w-md">
         <Field label="Student">
-          <StudentPicker value={picked} onChange={handlePick} activeOnly={false} />
+          <StudentPicker
+            value={picked}
+            onChange={handlePick}
+            activeOnly={false}
+          />
         </Field>
       </div>
 
@@ -79,8 +95,20 @@ export function StudentAnalyticsPage() {
   );
 }
 
-function Report({ dashboard }: { dashboard: import("../../api/types").StudentDashboardResponse }) {
+function Report({
+  dashboard,
+}: {
+  dashboard: import("../../api/types").StudentDashboardResponse;
+}) {
   const { student, analytics } = dashboard;
+
+  // The backend's attendance_rate/streak numbers don't know the library is
+  // closed on Sundays and the 2nd/4th/5th Saturday of each month — recompute
+  // both from the raw history so a holiday never counts against a student.
+  const holidayStats = useMemo(
+    () => computeHolidayAwareStats(dashboard.attendance_history),
+    [dashboard.attendance_history],
+  );
 
   return (
     <div className="space-y-8">
@@ -89,7 +117,9 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
         <div className="flex items-center gap-3">
           <IdTab>{student.student_id}</IdTab>
           <div>
-            <h2 className="font-display text-xl font-semibold text-ink">{student.name}</h2>
+            <h2 className="font-display text-xl font-semibold text-ink">
+              {student.name}
+            </h2>
             <p className="mt-0.5 text-xs text-slate">
               Joined {formatDate(student.join_date)}
               {student.phone && ` · ${student.phone}`}
@@ -97,37 +127,53 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <StatusTab tone={studentStatusTone(student.status)}>{student.status}</StatusTab>
-          <ExportMenu dashboard={dashboard} />
+          <StatusTab tone={studentStatusTone(student.status)}>
+            {student.status}
+          </StatusTab>
+          <ExportMenu dashboard={dashboard} holidayStats={holidayStats} />
         </div>
       </div>
 
-      <EngagementInsights dashboard={dashboard} />
-
       {/* Top-line summary */}
       <section>
-        <h3 className="mb-3 font-display text-base font-semibold text-ink">Overview</h3>
+        <h3 className="mb-3 font-display text-base font-semibold text-ink">
+          Overview
+        </h3>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           <AnalyticsStatCard
             icon={BarChart3}
             label="Overall average"
-            value={analytics.overall.average_percentage != null ? `${analytics.overall.average_percentage.toFixed(1)}%` : "—"}
-            sub={<TrendBadge trend={analytics.overall.trend} delta={analytics.overall.trend_delta_percentage_points} />}
+            value={
+              analytics.overall.average_percentage != null
+                ? `${analytics.overall.average_percentage.toFixed(1)}%`
+                : "—"
+            }
+            sub={
+              <TrendBadge
+                trend={analytics.overall.trend}
+                delta={analytics.overall.trend_delta_percentage_points}
+              />
+            }
           />
           <AnalyticsStatCard
             icon={ClipboardCheck}
             label="Attendance (30d)"
             value={
-              analytics.attendance.attendance_rate_last_30_days_percent != null
-                ? `${analytics.attendance.attendance_rate_last_30_days_percent.toFixed(0)}%`
+              holidayStats.ratePercent != null
+                ? `${holidayStats.ratePercent.toFixed(0)}%`
                 : "—"
             }
-            sub={<span className="text-xs text-slate">{analytics.attendance.total_sessions} sessions total</span>}
+            sub={
+              <span className="text-xs text-slate">
+                {holidayStats.attendedDays}/{holidayStats.openDays} open days ·{" "}
+                {analytics.attendance.total_sessions} sessions total
+              </span>
+            }
           />
           <AnalyticsStatCard
             icon={Flame}
             label="Current streak"
-            value={`${analytics.attendance.current_streak_days}d`}
+            value={`${holidayStats.streakDays}d`}
             sub={
               <span className="text-xs text-slate">
                 {analytics.attendance.days_since_last_visit != null
@@ -139,15 +185,33 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
           <AnalyticsStatCard
             icon={CalendarClock}
             label="Avg. session length"
-            value={formatDuration(analytics.attendance.average_duration_minutes ?? null)}
-            sub={<TrendBadge trend={analytics.attendance.trend} delta={analytics.attendance.trend_delta_minutes} suffix="min" />}
+            value={formatDuration(
+              analytics.attendance.average_duration_minutes ?? null,
+            )}
+            sub={
+              <TrendBadge
+                trend={analytics.attendance.trend}
+                delta={analytics.attendance.trend_delta_minutes}
+                suffix="min"
+              />
+            }
           />
+        </div>
+        <p className="mt-2 text-xs text-slate-light">
+          Attendance rate and streak exclude library holidays (
+          {HOLIDAY_RULE_DESCRIPTION}).
+        </p>
+
+        <div className="mt-4">
+          <AttendanceCalendar history={dashboard.attendance_history} />
         </div>
       </section>
 
       {/* Exams / Quizzes summary */}
       <section>
-        <h3 className="mb-3 font-display text-base font-semibold text-ink">Assessment performance</h3>
+        <h3 className="mb-3 font-display text-base font-semibold text-ink">
+          Assessment performance
+        </h3>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <AnalyticsStatCard
             icon={GraduationCap}
@@ -156,9 +220,14 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
             sub={
               <>
                 <span className="mr-2 font-mono text-xs text-slate">
-                  {analytics.exams.average_percentage != null ? `${analytics.exams.average_percentage.toFixed(1)}% avg` : "—"}
+                  {analytics.exams.average_percentage != null
+                    ? `${analytics.exams.average_percentage.toFixed(1)}% avg`
+                    : "—"}
                 </span>
-                <TrendBadge trend={analytics.exams.trend} delta={analytics.exams.trend_delta_percentage_points} />
+                <TrendBadge
+                  trend={analytics.exams.trend}
+                  delta={analytics.exams.trend_delta_percentage_points}
+                />
               </>
             }
           />
@@ -169,9 +238,14 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
             sub={
               <>
                 <span className="mr-2 font-mono text-xs text-slate">
-                  {analytics.quizzes.average_percentage != null ? `${analytics.quizzes.average_percentage.toFixed(1)}% avg` : "—"}
+                  {analytics.quizzes.average_percentage != null
+                    ? `${analytics.quizzes.average_percentage.toFixed(1)}% avg`
+                    : "—"}
                 </span>
-                <TrendBadge trend={analytics.quizzes.trend} delta={analytics.quizzes.trend_delta_percentage_points} />
+                <TrendBadge
+                  trend={analytics.quizzes.trend}
+                  delta={analytics.quizzes.trend_delta_percentage_points}
+                />
               </>
             }
           />
@@ -194,48 +268,91 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
 
       {/* Library usage */}
       <section>
-        <h3 className="mb-3 font-display text-base font-semibold text-ink">Library usage</h3>
+        <h3 className="mb-3 font-display text-base font-semibold text-ink">
+          Library usage
+        </h3>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <AnalyticsStatCard
             icon={Laptop}
             label="Digital library time"
-            value={formatDuration(analytics.digital_library.total_duration_minutes)}
-            sub={<span className="text-xs text-slate">{analytics.digital_library.total_sessions} sessions</span>}
+            value={formatDuration(
+              analytics.digital_library.total_duration_minutes,
+            )}
+            sub={
+              <span className="text-xs text-slate">
+                {analytics.digital_library.total_sessions} sessions
+              </span>
+            }
           />
           <AnalyticsStatCard
             icon={BookOpen}
             label="Offline visits"
             value={analytics.offline_library.total_sessions}
-            sub={<span className="text-xs text-slate">{analytics.offline_library.self_study_sessions} self-study</span>}
+            sub={
+              <span className="text-xs text-slate">
+                {analytics.offline_library.self_study_sessions} self-study
+              </span>
+            }
           />
           <AnalyticsStatCard
             icon={BookOpen}
             label="Offline library time"
-            value={formatDuration(analytics.offline_library.estimated_total_minutes)}
-            sub={<span className="text-xs text-slate-light">Inferred from attendance minus digital time</span>}
+            value={formatDuration(
+              analytics.offline_library.estimated_total_minutes,
+            )}
+            sub={
+              <span className="text-xs text-slate-light">
+                Inferred from attendance minus digital time
+              </span>
+            }
           />
-          <AnalyticsStatCard icon={Presentation} label="Coaching class time" value={formatDuration(analytics.coaching.total_duration_minutes)} sub={<span className="text-xs text-slate">{analytics.coaching.total_sessions} sessions</span>} />
+          <AnalyticsStatCard
+            icon={Presentation}
+            label="Coaching class time"
+            value={formatDuration(analytics.coaching.total_duration_minutes)}
+            sub={
+              <span className="text-xs text-slate">
+                {analytics.coaching.total_sessions} sessions
+              </span>
+            }
+          />
         </div>
 
         <div className="mt-4">
-          <h4 className="mb-2 text-sm font-medium text-slate">Offline library — by category</h4>
-          <CategoryBreakdownChart data={analytics.offline_library.by_category} />
+          <h4 className="mb-2 text-sm font-medium text-slate">
+            Offline library — by category
+          </h4>
+          <CategoryBreakdownChart
+            data={analytics.offline_library.by_category}
+          />
         </div>
       </section>
 
       {/* Detailed history */}
       <section>
-        <h3 className="mb-3 font-display text-base font-semibold text-ink">Exams attempted</h3>
-        <AssessmentAttemptsTable attempts={dashboard.exams_attempted} emptyLabel="No exams attempted yet" />
+        <h3 className="mb-3 font-display text-base font-semibold text-ink">
+          Exams attempted
+        </h3>
+        <AssessmentAttemptsTable
+          attempts={dashboard.exams_attempted}
+          emptyLabel="No exams attempted yet"
+        />
       </section>
 
       <section>
-        <h3 className="mb-3 font-display text-base font-semibold text-ink">Quizzes attempted</h3>
-        <AssessmentAttemptsTable attempts={dashboard.quizzes_attempted} emptyLabel="No quizzes attempted yet" />
+        <h3 className="mb-3 font-display text-base font-semibold text-ink">
+          Quizzes attempted
+        </h3>
+        <AssessmentAttemptsTable
+          attempts={dashboard.quizzes_attempted}
+          emptyLabel="No quizzes attempted yet"
+        />
       </section>
 
       <section>
-        <h3 className="mb-3 font-display text-base font-semibold text-ink">Recent attendance</h3>
+        <h3 className="mb-3 font-display text-base font-semibold text-ink">
+          Recent attendance
+        </h3>
         {dashboard.attendance_history.length === 0 ? (
           <EmptyState title="No attendance recorded yet" />
         ) : (
@@ -253,8 +370,14 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
                   <Td>{formatDate(a.date)}</Td>
                   <Td>{a.session}</Td>
                   <Td className="font-mono text-xs">{a.check_in ?? "—"}</Td>
-                  <Td className="font-mono text-xs">{a.check_out ?? <span className="text-brass">Still in</span>}</Td>
-                  <Td className="text-slate">{formatDuration(a.duration_minutes)}</Td>
+                  <Td className="font-mono text-xs">
+                    {a.check_out ?? (
+                      <span className="text-brass">Still in</span>
+                    )}
+                  </Td>
+                  <Td className="text-slate">
+                    {formatDuration(a.duration_minutes)}
+                  </Td>
                 </Tr>
               ))}
             </tbody>
@@ -263,8 +386,11 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
       </section>
 
       <section>
-        <h3 className="mb-3 font-display text-base font-semibold text-ink">Recent library sessions</h3>
-        {dashboard.digital_library_usage.length === 0 && dashboard.offline_library_usage.length === 0 ? (
+        <h3 className="mb-3 font-display text-base font-semibold text-ink">
+          Recent library sessions
+        </h3>
+        {dashboard.digital_library_usage.length === 0 &&
+        dashboard.offline_library_usage.length === 0 ? (
           <EmptyState title="No library activity yet" />
         ) : (
           <Table>
@@ -280,14 +406,18 @@ function Report({ dashboard }: { dashboard: import("../../api/types").StudentDas
                   <Td>Digital</Td>
                   <Td>{formatDate(u.date)}</Td>
                   <Td className="font-medium">{u.platform_name}</Td>
-                  <Td className="text-slate">{formatDuration(u.duration_minutes)}</Td>
+                  <Td className="text-slate">
+                    {formatDuration(u.duration_minutes)}
+                  </Td>
                 </Tr>
               ))}
               {dashboard.offline_library_usage.slice(0, 10).map((u) => (
                 <Tr key={`offline-${u.usage_id}`}>
                   <Td>Offline</Td>
                   <Td>{formatDate(u.date)}</Td>
-                  <Td className="font-medium">{u.book_title ?? u.book_id ?? "Own material"}</Td>
+                  <Td className="font-medium">
+                    {u.book_title ?? u.book_id ?? "Own material"}
+                  </Td>
                   <Td className="text-slate">—</Td>
                 </Tr>
               ))}

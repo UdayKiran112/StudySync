@@ -44,6 +44,14 @@
   .tab-clip {
     clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 100%, 0 100%);
   }
+  .holiday-hatch {
+    background-image: repeating-linear-gradient(
+      45deg,
+      var(--color-border) 0 2px,
+      transparent 2px 4px
+    );
+    background-color: var(--color-paper-dim);
+  }
   .scrollbar-thin::-webkit-scrollbar {
     width: 8px;
     height: 8px;
