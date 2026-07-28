@@ -22,7 +22,9 @@ router = APIRouter(
     prefix="/api/exams", tags=["Exams"], dependencies=[Depends(require_api_key)]
 )
 marks_router = APIRouter(
-    prefix="/api/exam-marks", tags=["Exam Marks"], dependencies=[Depends(require_api_key)]
+    prefix="/api/exam-marks",
+    tags=["Exam Marks"],
+    dependencies=[Depends(require_api_key)],
 )
 
 
@@ -44,8 +46,20 @@ def _ensure_active_student(db: sqlite3.Connection, student_id: int) -> None:
 
 
 def _ensure_marks_within_max(
-    db: sqlite3.Connection, exam_id: int, marks_obtained: float, max_marks: float
+    db: sqlite3.Connection,
+    exam_id: int,
+    marks_obtained: float,
+    max_marks: Optional[float],
 ) -> None:
+    # FIX: max_marks can legitimately be NULL for exams created by the bulk
+    # activity-log loader (which never has a numeric max_marks to supply).
+    # The old version assumed max_marks was always a float and would raise
+    # a TypeError ("'>' not supported between instances of 'float' and
+    # 'NoneType'") the first time a mark was added/updated against one of
+    # those exams, instead of a clean response. Skip the comparison -- and
+    # therefore the check -- when there's no max_marks to compare against.
+    if max_marks is None:
+        return
     if marks_obtained > max_marks:
         raise HTTPException(
             status_code=422,
@@ -116,7 +130,17 @@ def update_exam(
         "SELECT MAX(marks_obtained) AS highest_mark FROM exam_marks WHERE exam_id = ?",
         (exam_id,),
     ).fetchone()["highest_mark"]
-    if highest_mark is not None and highest_mark > new_max_marks:
+    # FIX: existing["max_marks"] can be NULL for exams the activity-log
+    # loader created without one. If this update doesn't itself set
+    # max_marks, new_max_marks would then be None, and the comparison
+    # below (`highest_mark > new_max_marks`) would raise a TypeError
+    # instead of validating cleanly. Only enforce the ceiling when there's
+    # an actual max_marks to enforce against.
+    if (
+        highest_mark is not None
+        and new_max_marks is not None
+        and highest_mark > new_max_marks
+    ):
         raise HTTPException(
             status_code=422,
             detail=(
@@ -171,7 +195,9 @@ def create_exam_mark(
             status_code=409,
             detail=f"Student {mark.student_id} already has marks for exam {exam_id}",
         )
-    row = db.execute("SELECT * FROM exam_marks WHERE mark_id = ?", (cursor.lastrowid,)).fetchone()
+    row = db.execute(
+        "SELECT * FROM exam_marks WHERE mark_id = ?", (cursor.lastrowid,)
+    ).fetchone()
     return dict(row)
 
 
@@ -215,7 +241,9 @@ def list_exam_marks(
 
 
 def _get_mark(db: sqlite3.Connection, mark_id: int) -> sqlite3.Row:
-    row = db.execute("SELECT * FROM exam_marks WHERE mark_id = ?", (mark_id,)).fetchone()
+    row = db.execute(
+        "SELECT * FROM exam_marks WHERE mark_id = ?", (mark_id,)
+    ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail=f"Exam mark {mark_id} not found")
     return row

@@ -230,11 +230,6 @@ backend/library.db-wal
 frontend/.oxlintrc.json
 frontend/tsconfig.app.json
 frontend/tsconfig.node.json
-backend/activity_load_report.txt
-backend/load_report.txt
-backend/members_details.csv
-backend/students_activity.csv
-backend/internal_marks.csv
 backend/data_loader/attendance_load_report.txt
 backend/data_loader/coaching_load_report.txt
 backend/data_loader/digital_library_load_report.txt
