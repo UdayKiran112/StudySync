@@ -237,3 +237,4 @@ backend/data_loader/exam_marks_load_report.txt
 backend/data_loader/internal_marks.csv
 backend/data_loader/members_details.csv
 backend/data_loader/students_activity.csv
+backend/data_loader/offline_library_load_report.txt
