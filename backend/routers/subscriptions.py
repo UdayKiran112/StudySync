@@ -11,17 +11,14 @@ will fail (ON DELETE RESTRICT) — prefer setting status='Expired' instead,
 same convention as students.status.
 """
 
-import sqlite3
 from datetime import date
-from fastapi import APIRouter, Depends, HTTPException, Query
+import sqlite3
 from typing import List, Optional
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+
 from database import get_db_dependency
-from models.subscriptions import (
-    SubscriptionCreate,
-    SubscriptionUpdate,
-    SubscriptionResponse,
-)
+from models.subscriptions import SubscriptionCreate, SubscriptionResponse, SubscriptionUpdate
 from security import require_api_key
 
 router = APIRouter(
@@ -140,8 +137,8 @@ def subscription_summary(
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     """Filter-aware catalog and usage overview for the Subscriptions page."""
-    clauses: list[str] = []
-    params: list[str] = []
+    clauses: List[str] = []
+    params: List[str] = []
     if status:
         clauses.append("status = ?")
         params.append(status)
