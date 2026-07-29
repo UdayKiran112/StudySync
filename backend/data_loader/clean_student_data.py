@@ -1,0 +1,588 @@
+"""
+clean_student_data.py
+======================
+
+Cleans the messy, inconsistent "Student details" export and splits it into
+four separate, well-formed section files:
+
+    1. digital_library.csv
+    2. offline_library.csv
+    3. digital_class.csv
+    4. attendance.csv
+
+Every record that is missing, invalid, or irregular in a way that could not
+be safely auto-corrected is written to error_log.csv, with a plain-English
+description of the problem and a reference back to the original row in the
+source spreadsheet so it can be fixed by hand.
+
+USAGE
+-----
+    python clean_student_data.py input.csv output_folder/
+
+If output_folder is omitted, files are written to ./output/
+"""
+
+import csv
+import re
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import pandas as pd
+
+# --------------------------------------------------------------------------
+# CONFIG
+# --------------------------------------------------------------------------
+
+# How many non-data rows sit above the real header row in the raw export
+# (in this sheet: 2 blank rows, then the header row).
+HEADER_SKIPROWS = 2
+
+# Known misspellings / casing variants -> canonical value
+GENDER_MAP = {
+    "male": "Male",
+    "male ": "Male",
+    "female": "Female",
+    "famale": "Female",
+    "femlae": "Female",
+}
+
+# A value counts as "Subscription" if, once whitespace/punctuation is
+# stripped, it *starts with* something that looks like the word
+# "subscription" (covers Subcription, Subscrption, Subsciption,
+# Subscritption, Subscription,Subscription, etc.)
+SUBSCRIPTION_LIKE = re.compile(r"^sub[sc]", re.IGNORECASE)
+
+TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+
+# Reasonable date bounds for this dataset - anything outside this window is
+# treated as suspicious rather than blindly trusted.
+DATE_FLOOR = datetime(2020, 1, 1)
+DATE_CEIL = datetime.today() + timedelta(days=1)
+
+# A freshly-parsed date that jumps more than this many days away from the
+# previous good date is assumed to be a typo/autofill error rather than a
+# genuine gap in attendance.
+MAX_PLAUSIBLE_JUMP_DAYS = 60
+
+
+# --------------------------------------------------------------------------
+# ERROR LOG
+# --------------------------------------------------------------------------
+
+class ErrorLog:
+    """Collects one entry per problem found, tagged with which section it
+    affects and whether it was auto-corrected or needs manual review, so
+    two sets of .log files can be written per section:
+
+      error_log_<section>.log       - things that still need manual review
+      corrections_log_<section>.log - things the script fixed automatically
+    """
+
+    # Display order / friendly titles for each section's log file.
+    SECTIONS = [
+        ("general", "General (Student ID / Name / Date - affects every section)"),
+        ("digital_library", "Digital Library"),
+        ("offline_library", "Offline Library"),
+        ("digital_class", "Digital Class"),
+        ("attendance", "Attendance"),
+    ]
+
+    def __init__(self):
+        self.rows = []
+
+    def add(self, section, status, excel_row, sl_no, student_id, student_name, issue, raw_value=""):
+        assert section in dict(self.SECTIONS), f"Unknown log section: {section}"
+        assert status in ("review", "corrected"), f"Unknown log status: {status}"
+        self.rows.append(
+            {
+                "section": section,
+                "status": status,
+                "excel_row": excel_row,
+                "sl_no": sl_no,
+                "student_id": student_id,
+                "student_name": student_name,
+                "issue": issue,
+                "raw_value": raw_value,
+            }
+        )
+
+    @staticmethod
+    def _group_key(issue: str) -> str:
+        # Collapse variable parts (like specific old/new values) so similar
+        # problems are grouped together under one heading.
+        return re.sub(r"'[^']*'", "'...'", issue)
+
+    def _render(self, heading: str, title: str, entries: list, source_file: str, empty_message: str) -> str:
+        groups = {}
+        for entry in entries:
+            groups.setdefault(self._group_key(entry["issue"]), []).append(entry)
+
+        lines = []
+        lines.append("=" * 78)
+        lines.append(f"STUDENT DATA CLEANUP - {heading}: {title.upper()}")
+        lines.append("=" * 78)
+        lines.append(f"Source file   : {source_file}")
+        lines.append(f"Generated     : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"Total entries : {len(entries)}")
+        lines.append("")
+
+        if not entries:
+            lines.append(empty_message)
+            return "\n".join(lines) + "\n"
+
+        lines.append("Summary by type:")
+        for key in sorted(groups, key=lambda k: -len(groups[k])):
+            lines.append(f"  - {len(groups[key]):>5}  {key}")
+        lines.append("")
+        lines.append("=" * 78)
+        lines.append("DETAILS (grouped by type)")
+        lines.append("=" * 78)
+
+        for key in sorted(groups, key=lambda k: -len(groups[k])):
+            group_entries = sorted(groups[key], key=lambda e: e["excel_row"])
+            lines.append("")
+            lines.append(f"--- {key}  ({len(group_entries)} occurrence(s)) ---")
+            for e in group_entries:
+                student = e["student_name"] or "(missing)"
+                sid = e["student_id"] or "(missing)"
+                loc = f"Excel row {e['excel_row']} (Serial No. {e['sl_no']})"
+                detail = f"    [{loc}] Student: {student} (ID: {sid}) - {e['issue']}"
+                if e["raw_value"]:
+                    detail += f"  [original value: {e['raw_value']!r}]"
+                lines.append(detail)
+
+        return "\n".join(lines) + "\n"
+
+    def write_all(self, output_dir: Path, source_file: str):
+        """Writes two .log files per section into output_dir:
+          error_log_<section>.log       - needs manual review
+          corrections_log_<section>.log - auto-corrected, FYI only
+        """
+
+        for section_key, title in self.SECTIONS:
+            review_entries = [e for e in self.rows if e["section"] == section_key and e["status"] == "review"]
+            corrected_entries = [e for e in self.rows if e["section"] == section_key and e["status"] == "corrected"]
+
+            review_text = self._render(
+                "ERROR LOG", title, review_entries, source_file,
+                "No issues found for this section.",
+            )
+            (output_dir / f"error_log_{section_key}.log").write_text(review_text, encoding="utf-8")
+
+            corrections_text = self._render(
+                "CORRECTIONS LOG", title, corrected_entries, source_file,
+                "No auto-corrections were made for this section.",
+            )
+            (output_dir / f"corrections_log_{section_key}.log").write_text(corrections_text, encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# LOADING
+# --------------------------------------------------------------------------
+
+def load_raw(path: Path) -> pd.DataFrame:
+    """Load the export, drop decorative blank rows/columns, keep an
+    'Excel Row' reference column that points back to the original file."""
+
+    df = pd.read_csv(path, skiprows=HEADER_SKIPROWS, dtype=str, low_memory=False)
+
+    # Drop the trailing unlabeled columns Excel/Sheets sometimes exports
+    df = df.loc[:, ~df.columns.str.match(r"^Unnamed")]
+
+    # Row N of this dataframe is line (N + HEADER_SKIPROWS + 2) of the raw file
+    # (+1 for the header row itself, +1 to go from 0-based to 1-based).
+    df["Excel Row"] = df.index + HEADER_SKIPROWS + 2
+
+    # Strip whitespace on every text cell
+    for col in df.columns:
+        if col != "Excel Row":
+            df[col] = df[col].fillna("").astype(str).str.strip()
+
+    # Drop rows that are entirely blank (trailing padding rows some sheets
+    # keep after the last real record)
+    data_cols = [c for c in df.columns if c != "Excel Row"]
+    is_blank = (df[data_cols] == "").all(axis=1)
+    df = df.loc[~is_blank].reset_index(drop=True)
+
+    return df
+
+
+# --------------------------------------------------------------------------
+# FIELD-LEVEL CLEANING
+# --------------------------------------------------------------------------
+
+def clean_gender(value: str) -> str:
+    if value == "":
+        return ""
+    return GENDER_MAP.get(value.lower(), value if value in ("Male", "Female") else "")
+
+
+def is_subscription(value: str) -> bool:
+    return bool(SUBSCRIPTION_LIKE.match(value.replace(" ", "").replace(",", "")))
+
+
+def parse_date(raw: str):
+    """Try to turn a raw date string into a datetime, tolerating the ':' vs
+    '.' separator typo seen in the sheet. Returns None if unparsable."""
+    if raw == "":
+        return None
+    candidate = raw.replace(":", ".").replace("/", ".").replace("-", ".")
+    parts = [p for p in candidate.split(".") if p != ""]
+    if len(parts) != 3:
+        return None
+    day, month, year = parts
+    try:
+        return datetime(int(year), int(month), int(day))
+    except ValueError:
+        return None
+
+
+def fix_dates(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
+    """Adds a 'Date_clean' column (datetime, or None if unrecoverable),
+    correcting obvious autofill/typo errors (e.g. day.month staying the
+    same while the year increments nonsensically) by carrying forward the
+    last plausible date."""
+
+    last_good = None
+    cleaned = []
+
+    for idx, row in df.iterrows():
+        raw = row["Date"]
+        excel_row = row["Excel Row"]
+        sl_no = row["Sl.No"]
+        student_id = row["ID NO"]
+        student_name = row["Name of the Student"]
+
+        parsed = parse_date(raw)
+
+        if parsed is None:
+            log.add("general", "review", excel_row, sl_no, student_id, student_name,
+                     "Date could not be parsed", raw)
+            cleaned.append(None)
+            continue
+
+        plausible = (
+            DATE_FLOOR <= parsed <= DATE_CEIL
+            and (last_good is None or abs((parsed - last_good).days) <= MAX_PLAUSIBLE_JUMP_DAYS)
+        )
+
+        if plausible:
+            cleaned.append(parsed)
+            last_good = parsed
+        elif last_good is not None:
+            # Try re-using day/month with the last known-good year, which
+            # fixes the classic "autofill dragged the year forward" bug.
+            try:
+                corrected = parsed.replace(year=last_good.year)
+            except ValueError:
+                corrected = None
+            if corrected and abs((corrected - last_good).days) <= MAX_PLAUSIBLE_JUMP_DAYS:
+                log.add("general", "corrected", excel_row, sl_no, student_id, student_name,
+                         f"Date auto-corrected from '{raw}' to '{corrected.strftime('%d.%m.%Y')}' "
+                         f"(looked like a copy/autofill error - please verify)",
+                         raw)
+                cleaned.append(corrected)
+                last_good = corrected
+            else:
+                log.add("general", "review", excel_row, sl_no, student_id, student_name,
+                         "Date is out of the expected range / sequence and was left as-is",
+                         raw)
+                cleaned.append(parsed)
+        else:
+            cleaned.append(parsed)
+            last_good = parsed
+
+    df = df.copy()
+    df["Date_clean"] = cleaned
+    return df
+
+
+# --------------------------------------------------------------------------
+# SECTION BUILDERS
+# --------------------------------------------------------------------------
+
+def validate_core_fields(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
+    """Flags/removes rows missing the fields every section depends on:
+    Student ID and Student Name. Returns only the rows that are usable."""
+
+    ok = pd.Series(True, index=df.index)
+
+    missing_id = df["ID NO"] == ""
+    missing_name = df["Name of the Student"] == ""
+
+    for idx in df.index[missing_id]:
+        r = df.loc[idx]
+        log.add("general", "review", r["Excel Row"], r["Sl.No"], r["ID NO"], r["Name of the Student"],
+                 "Missing Student ID - record dropped from all sections")
+    for idx in df.index[missing_name & ~missing_id]:
+        r = df.loc[idx]
+        log.add("general", "review", r["Excel Row"], r["Sl.No"], r["ID NO"], r["Name of the Student"],
+                 "Missing Student Name - record dropped from all sections")
+
+    ok &= ~missing_id & ~missing_name
+    return df.loc[ok].copy()
+
+
+def build_digital_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
+    mask = (df["Digital Library"] != "") | (df["Purpose"] != "") | (df["Online Subscription"] != "")
+    sub = df.loc[mask].copy()
+
+    valid_sub_values = []
+    for idx, row in sub.iterrows():
+        val = row["Online Subscription"]
+        if val != "" and not is_subscription(val):
+            log.add("digital_library", "review", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                     "Unrecognized value in 'Online Subscription' column "
+                     "(expected blank or some form of 'Subscription') - treated as 'Own', please verify",
+                     val)
+        elif val != "" and val.strip().lower().replace(" ", "").replace(",", "") != "subscription":
+            log.add("digital_library", "corrected", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                     "Online Subscription value normalized to 'Subscription' (misspelling corrected) "
+                     "-> Account Type set to 'Library Subscription'",
+                     val)
+        valid_sub_values.append(val)
+
+    sub["Account Type"] = ["Library Subscription" if is_subscription(v) else "Own" for v in valid_sub_values]
+
+    out = pd.DataFrame({
+        "Serial No.": sub["Sl.No"],
+        "Date": sub["Date_clean"].dt.strftime("%d-%m-%Y").where(sub["Date_clean"].notna(), sub["Date"]),
+        "Student ID": sub["ID NO"],
+        "Student Name": sub["Name of the Student"],
+        "Account Name": sub["Digital Library"],
+        "Account Type": sub["Account Type"],
+        "Purpose": sub["Purpose"],
+    })
+    return out.reset_index(drop=True)
+
+
+# Matches a '.' used as a list separator between two numeric book IDs
+# (e.g. "1642. 1565"), as opposed to a decimal point or part of a code.
+BOOK_ID_DOT_SEPARATOR = re.compile(r"(\d)\s*\.\s*(\d)")
+
+
+def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
+    """Multiple comma-separated Book IDs mean the student took out multiple
+    books in one visit - each one becomes its own row here, rather than
+    being kept as a single combined record."""
+
+    mask = (df["Book ID"] != "") | (df["Reference Book"] != "")
+    sub = df.loc[mask].copy()
+
+    records = []
+    for idx, row in sub.iterrows():
+        raw_book_id = row["Book ID"]
+        raw_book_name = row["Reference Book"]
+        date_str = row["Date_clean"].strftime("%d-%m-%Y") if pd.notna(row["Date_clean"]) else row["Date"]
+
+        # Fix the occasional typo where '.' was used instead of ',' to
+        # separate multiple numeric book IDs (e.g. "1642. 1565").
+        normalized_id = BOOK_ID_DOT_SEPARATOR.sub(r"\1, \2", raw_book_id)
+        if normalized_id != raw_book_id:
+            log.add("offline_library", "corrected", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                     "Book ID used '.' instead of ',' to separate multiple books - corrected",
+                     raw_book_id)
+
+        book_ids = [b.strip() for b in normalized_id.split(",") if b.strip() != ""]
+        book_names = [b.strip() for b in raw_book_name.split(",") if b.strip() != ""]
+
+        def add_record(bid, bname):
+            records.append({
+                "Serial No.": row["Sl.No"],
+                "Date": date_str,
+                "Student ID": row["ID NO"],
+                "Student Name": row["Name of the Student"],
+                "Book ID": bid,
+                "Book Name": bname,
+            })
+
+        if not book_ids and not book_names:
+            continue
+
+        elif book_ids and not book_names:
+            # Book(s) taken but no name recorded at all - a real gap worth reviewing.
+            log.add("offline_library", "review", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                     f"{len(book_ids)} Book ID(s) present but Book Name is missing", raw_book_id)
+            for bid in book_ids:
+                add_record(bid, "")
+
+        elif book_names and not book_ids:
+            # Un-catalogued items (e.g. "Self", "Shine India" magazines) are a
+            # normal pattern with no Book ID - just one row per named item.
+            for bname in book_names:
+                add_record("", bname)
+
+        else:
+            # Both present. Multiple IDs -> multiple books taken.
+            target_len = max(len(book_ids), len(book_names))
+
+            if len(book_ids) >= len(book_names):
+                # More (or equal) IDs than names: most likely several
+                # physical copies of the same title, so reuse the last
+                # name to cover the extra IDs.
+                ids = book_ids
+                names = book_names + [book_names[-1]] * (target_len - len(book_names))
+            else:
+                # Fewer IDs than names: the names are probably distinct
+                # titles, so it would be wrong to guess which one the lone
+                # ID belongs to. Leave the extra name(s) with a blank ID
+                # instead of duplicating it.
+                ids = book_ids + [""] * (target_len - len(book_ids))
+                names = book_names
+
+            if len(book_ids) != len(book_names):
+                log.add("offline_library", "review", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                         f"Book ID list ({len(book_ids)} item(s)) and Book Name list "
+                         f"({len(book_names)} item(s)) don't match up - split into "
+                         f"{target_len} book record(s); please verify the Book ID "
+                         f"assigned to each",
+                         f"Book ID='{raw_book_id}' | Reference Book='{raw_book_name}'")
+
+            for bid, bname in zip(ids, names):
+                add_record(bid, bname)
+
+    return pd.DataFrame(records, columns=[
+        "Serial No.", "Date", "Student ID", "Student Name", "Book ID", "Book Name"
+    ])
+
+
+def build_digital_class(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
+    mask = df["Digital Class"] != ""
+    sub = df.loc[mask].copy()
+
+    for idx, row in sub.iterrows():
+        if row["Digital Class"].isdigit():
+            log.add("digital_class", "review", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                     "Digital Class value is purely numeric, which doesn't look like a class "
+                     "name - please verify",
+                     row["Digital Class"])
+
+    out = pd.DataFrame({
+        "Serial No.": sub["Sl.No"],
+        "Date": sub["Date_clean"].dt.strftime("%d-%m-%Y").where(sub["Date_clean"].notna(), sub["Date"]),
+        "Student ID": sub["ID NO"],
+        "Student Name": sub["Name of the Student"],
+        "Class Name": sub["Digital Class"],
+    })
+    return out.reset_index(drop=True)
+
+
+def build_attendance(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
+    sub = df.copy()
+
+    clean_genders = []
+    for idx, row in sub.iterrows():
+        g = clean_gender(row["Gender"])
+        if row["Gender"] != "" and g == "":
+            log.add("attendance", "review", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                     "Unrecognized Gender value", row["Gender"])
+        elif row["Gender"] == "":
+            log.add("attendance", "review", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                     "Missing Gender")
+        elif g != row["Gender"]:
+            log.add("attendance", "corrected", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                     f"Gender value normalized from '{row['Gender']}' to '{g}' (misspelling corrected)",
+                     row["Gender"])
+        clean_genders.append(g)
+    sub["Gender_clean"] = clean_genders
+
+    for idx, row in sub.iterrows():
+        for label, col in (("In Time", "IN"), ("Out Time", "OUT")):
+            val = row[col]
+            if val == "":
+                log.add("attendance", "review", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                         f"Missing {label}")
+            elif not TIME_RE.match(val):
+                log.add("attendance", "review", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                         f"{label} is not in HH:MM format", val)
+
+        if TIME_RE.match(row["IN"]) and TIME_RE.match(row["OUT"]):
+            t_in = datetime.strptime(row["IN"], "%H:%M")
+            t_out = datetime.strptime(row["OUT"], "%H:%M")
+            if t_out < t_in:
+                log.add("attendance", "review", row["Excel Row"], row["Sl.No"], row["ID NO"], row["Name of the Student"],
+                         "Out Time is earlier than In Time", f"IN={row['IN']} OUT={row['OUT']}")
+
+    out = pd.DataFrame({
+        "Serial No.": sub["Sl.No"],
+        "Date": sub["Date_clean"].dt.strftime("%d-%m-%Y").where(sub["Date_clean"].notna(), sub["Date"]),
+        "Student ID": sub["ID NO"],
+        "Student Name": sub["Name of the Student"],
+        "Gender": sub["Gender_clean"],
+        "In Time": sub["IN"],
+        "Out Time": sub["OUT"],
+    })
+    return out.reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------
+# MAIN
+# --------------------------------------------------------------------------
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python clean_student_data.py <input.csv> [output_folder]")
+        sys.exit(1)
+
+    input_path = Path(sys.argv[1])
+    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    log = ErrorLog()
+
+    print(f"Loading {input_path} ...")
+    df = load_raw(input_path)
+    total_rows = len(df)
+    print(f"  {total_rows} data rows found (after removing blank padding rows).")
+
+    print("Validating Student ID / Student Name ...")
+    df = validate_core_fields(df, log)
+    usable_rows = len(df)
+    print(f"  {usable_rows} rows remain usable.")
+
+    print("Cleaning dates ...")
+    df = fix_dates(df, log)
+
+    print("Building sections ...")
+    digital_library = build_digital_library(df, log)
+    offline_library = build_offline_library(df, log)
+    digital_class = build_digital_class(df, log)
+    attendance = build_attendance(df, log)
+
+    digital_library.to_csv(output_dir / "digital_library.csv", index=False, quoting=csv.QUOTE_MINIMAL)
+    offline_library.to_csv(output_dir / "offline_library.csv", index=False, quoting=csv.QUOTE_MINIMAL)
+    digital_class.to_csv(output_dir / "digital_class.csv", index=False, quoting=csv.QUOTE_MINIMAL)
+    attendance.to_csv(output_dir / "attendance.csv", index=False, quoting=csv.QUOTE_MINIMAL)
+
+    log.write_all(output_dir, str(input_path))
+
+    review_counts = {key: 0 for key, _ in ErrorLog.SECTIONS}
+    corrected_counts = {key: 0 for key, _ in ErrorLog.SECTIONS}
+    for entry in log.rows:
+        if entry["status"] == "review":
+            review_counts[entry["section"]] += 1
+        else:
+            corrected_counts[entry["section"]] += 1
+
+    total_review = sum(review_counts.values())
+    total_corrected = sum(corrected_counts.values())
+
+    print()
+    print("Done. Rows written:")
+    print(f"  Digital Library : {len(digital_library)}")
+    print(f"  Offline Library : {len(offline_library)}")
+    print(f"  Digital Class   : {len(digital_class)}")
+    print(f"  Attendance      : {len(attendance)}")
+    print()
+    print(f"Needs manual review ({total_review} total):")
+    for key, title in ErrorLog.SECTIONS:
+        print(f"  {review_counts[key]:>5}  error_log_{key}.log  ({title})")
+    print()
+    print(f"Auto-corrected by the script ({total_corrected} total):")
+    for key, title in ErrorLog.SECTIONS:
+        print(f"  {corrected_counts[key]:>5}  corrections_log_{key}.log  ({title})")
+
+
+if __name__ == "__main__":
+    main()

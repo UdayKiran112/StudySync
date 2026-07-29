@@ -238,3 +238,7 @@ backend/data_loader/internal_marks.csv
 backend/data_loader/members_details.csv
 backend/data_loader/students_activity.csv
 backend/data_loader/offline_library_load_report.txt
+backend/data_loader/output/attendance.csv
+backend/data_loader/output/digital_class.csv
+backend/data_loader/output/digital_library.csv
+backend/data_loader/output/offline_library.csv
