@@ -6,14 +6,21 @@ Load exam data into the library SQLite database from two sources:
      student/date who sat an exam that day -- marks_obtained left NULL,
      since the daily activity CSV never records a numeric score, only a
      topic).
-  2. An optional separate exam-marks register (--marks-csv, e.g.
-     internal_marks.csv) -- one row per (student name, exam) -- which fills
-     in marks_obtained (and exams.max_marks) for exams that already exist
-     (creating them if they don't).
+  2. An optional separate exam-marks register (--marks-csv) -- one row per
+     (student name, exam) -- which fills in marks_obtained (and
+     exams.max_marks) for exams that already exist (creating them if they
+     don't). This must be the ORGANIZED file produced by
+     organize_internal_marks.py, not the raw internal_marks.csv directly --
+     see that script's docstring for why (an Excel merged-cell export needs
+     validated forward-filling before it's one resolved fact per row) and
+     run it first:
+
+        python3 organize_internal_marks.py --csv internal_marks.csv \\
+            --out internal_marks_organized.csv
 
 Usage:
     python3 load_exam_marks.py --csv students_activity.csv --db library.db \\
-        [--marks-csv internal_marks.csv]
+        [--marks-csv internal_marks_organized.csv]
 
 Requires that library.db already exists and its `students` table is already
 populated (e.g. via load_members.py). Attendance/library/coaching data is
@@ -43,22 +50,23 @@ topic rather than being guessed into the wrong one.
 
 --marks-csv MATCHING
 ----------------------
-There's no student ID in the marks register, only a name, so matching is by
-exact normalized name (case/whitespace/'.'-vs-space-insensitive) against
+Most rows in the register have no student ID, only a name, so matching is
+by exact normalized name (case/whitespace/'.'-vs-space-insensitive) against
 students.name. Ambiguous (2+ students share that name) or unmatched names
 are skipped and logged rather than guessed -- misattributing someone's
-marks is a worse error than leaving them unfilled.
+marks is a worse error than leaving them unfilled. A few blocks of the
+register DO carry a numeric Student ID (organize_internal_marks.py captures
+this in its own "Student ID" column) -- that's used directly instead of
+name-matching whenever it's present and valid, since it's more reliable.
 
-Name of the Exam / Date / Max. Marks are only filled on the first row of
-each block in the source register (an Excel merged-cell export) --
-forward-filled here, but only from a row that actually looks like a topic
-name / date / number; a stray mis-keyed value (e.g. a student ID typed into
-the Exam column, or a time typed into Marks Obtained) is rejected rather
-than forward-filled or loaded, and logged. Matching then goes through the
-same topic canonicalizer as the Offline Exam column above, so a mark row
-lands on the SAME exams row that Offline Exam already created, by
-(canonical topic, date). marks_obtained and exams.max_marks are filled in
-(or updated, with the change logged) rather than duplicated.
+The organized file has already resolved Name of the Exam / Date / Max.
+Marks for every row (organize_internal_marks.py forward-filled them from
+each block's header row and validated each candidate value), so this
+script just canonicalizes the topic through the same canonicalizer as the
+Offline Exam column above, so a mark row lands on the SAME exams row that
+Offline Exam already created, by (canonical topic, date). marks_obtained
+and exams.max_marks are filled in (or updated, with the change logged)
+rather than duplicated.
 
 LOGGING
 --------
@@ -136,7 +144,7 @@ _EXAM_TOPIC_ALIAS_GROUPS = {
         "G. Science",
         "G.Sci",
     ],
-    "General Studies": ["General Studies", "G Studies", "Genaral Studies"],
+    "General Studies": ["General Studies", "G Studies", "Genaral Studies, G S"],
     "Constable Grand Test": [
         "Constable Grand Test",
         "Constable G T",
@@ -357,99 +365,92 @@ class ExamLoader:
             pass
 
 
-def load_marks_csv(path: Path, loader: "ExamLoader"):
+def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
     """
-    Load a separate exam-marks register (e.g. internal_marks.csv): one row
-    per (student name, exam), with Name of the Exam / Date / Max. Marks
-    only filled on the first row of each block (Excel merged-cell export).
-    See the module docstring's --marks-csv section for the matching rules.
+    Load internal_marks_organized.csv, produced by running
+    organize_internal_marks.py against the raw register first. That step
+    already resolved the Excel merged-cell block structure (forward-filling
+    Name of the Exam / Date / Max. Marks, validating each candidate value,
+    and recovering the odd colon-for-decimal marks typo) -- every row here
+    is already one fully-resolved (student, exam, marks) fact, so this
+    function only has to do the DB-side work: match the student,
+    canonicalize the topic, and apply the mark. See the module docstring's
+    --marks-csv section for the name-matching rule, and
+    organize_internal_marks.py's own docstring for what "Student ID" (a
+    few blocks of this register give one directly, more reliable than
+    name-matching) means below.
     """
-    with path.open(encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.reader(f))
-
-    header_idx = None
-    for i, row in enumerate(rows):
-        if row and collapse_ws(row[0]).lower() == "sl no":
-            header_idx = i
-            break
-    if header_idx is None:
-        print(f"--marks-csv {path}: no 'Sl No' header row found -- nothing loaded.")
-        return 0, 0
-
     total_named_rows = 0
     marks_applied = 0
-    cur_topic_raw, cur_date, cur_max = None, None, None
 
-    for line_no, row in enumerate(rows[header_idx + 1 :], start=header_idx + 2):
-        if len(row) < 6:
-            continue
-        name = collapse_ws(row[1])
-        topic_cell = collapse_ws(row[2])
-        date_cell = collapse_ws(row[3])
-        max_cell = collapse_ws(row[4])
-        marks_cell = collapse_ws(row[5])
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for line_no, row in enumerate(reader, start=2):  # +1 for header row
+            name = collapse_ws(row.get("Name of Student", ""))
+            if not name:
+                continue
+            total_named_rows += 1
 
-        # Forward-fill each of the three block-header fields, but only from
-        # a value that actually looks valid for that field -- a stray
-        # mis-keyed value (a student ID typed into the Exam column, a date
-        # typed where a number was expected, etc.) is rejected rather than
-        # forward-filled, so it doesn't silently corrupt every row in the
-        # block that follows it.
-        if topic_cell:
-            if re.search(r"[A-Za-z]", topic_cell):
-                cur_topic_raw = topic_cell
-            else:
-                loader.log(
-                    f"line {line_no}: Name of the Exam {topic_cell!r} has no letters "
-                    f"-- doesn't look like a topic, ignored (not forward-filled)"
-                )
-        if date_cell:
-            parsed = parse_date(date_cell, min_year=2005, bound_today=True)
-            if parsed:
-                cur_date = parsed
-            else:
-                loader.log(
-                    f"line {line_no}: Date {date_cell!r} didn't parse -- ignored "
-                    f"(not forward-filled)"
-                )
-        if max_cell:
-            if re.match(r"^\d+(\.\d+)?$", max_cell):
-                cur_max = float(max_cell)
-            else:
-                loader.log(
-                    f"line {line_no}: Max. Marks {max_cell!r} isn't numeric -- "
-                    f"ignored (not forward-filled)"
-                )
-
-        if not name:
-            continue  # fully blank filler row
-        total_named_rows += 1
-
-        if not cur_topic_raw or not cur_date:
-            loader.log(
-                f"line {line_no} ({name!r}): no valid exam topic/date established "
-                f"yet for this block -> row SKIPPED"
+            date = parse_date(
+                row.get("Date of Exam", ""), min_year=2005, bound_today=True
             )
-            continue
-        if not marks_cell:
-            continue  # name present but no mark entered -- nothing to add
-        if not re.match(r"^\d+(\.\d+)?$", marks_cell):
-            loader.log(
-                f"line {line_no} ({name!r}): Marks Obtained {marks_cell!r} isn't "
-                f"numeric -> row SKIPPED"
+            if date is None:
+                loader.log(
+                    f"line {line_no} ({name!r}): unparseable Date of Exam "
+                    f"{row.get('Date of Exam')!r} -> row SKIPPED"
+                )
+                continue
+
+            topic_raw = collapse_ws(row.get("Name of Exam", ""))
+            if not topic_raw:
+                loader.log(
+                    f"line {line_no} ({name!r}): missing Name of Exam -> row SKIPPED"
+                )
+                continue
+
+            marks_raw = collapse_ws(row.get("Marks Obtained", ""))
+            if not marks_raw:
+                continue  # nothing to add for this row
+            try:
+                marks_obtained = float(marks_raw)
+            except ValueError:
+                loader.log(
+                    f"line {line_no} ({name!r}): Marks Obtained {marks_raw!r} isn't "
+                    f"numeric -> row SKIPPED"
+                )
+                continue
+
+            max_raw = collapse_ws(row.get("Max Marks", ""))
+            try:
+                max_marks = float(max_raw) if max_raw else None
+            except ValueError:
+                max_marks = None
+
+            student_id = None
+            id_override = collapse_ws(row.get("Student ID", ""))
+            if id_override:
+                if id_override.isdigit() and int(id_override) in existing_student_ids:
+                    student_id = int(id_override)
+                else:
+                    loader.log(
+                        f"line {line_no} ({name!r}): Student ID override {id_override!r} "
+                        f"not found in students table -- falling back to name match"
+                    )
+            if student_id is None:
+                student_id = loader.match_student_by_name(
+                    name, context=f"line {line_no}"
+                )
+                if student_id is None:
+                    continue
+
+            topic = loader.canonicalize_exam_topic(
+                topic_raw, context=f"line {line_no} (marks)"
             )
-            continue
-
-        student_id = loader.match_student_by_name(name, context=f"line {line_no}")
-        if student_id is None:
-            continue
-
-        topic = loader.canonicalize_exam_topic(
-            cur_topic_raw, context=f"line {line_no} (marks)"
-        )
-        exam_id = loader.get_or_create_exam(topic, cur_date)
-        loader.apply_exam_mark(student_id, exam_id, float(marks_cell), cur_max, line_no)
-        marks_applied += 1
+            exam_id = loader.get_or_create_exam(topic, date)
+            loader.apply_exam_mark(
+                student_id, exam_id, marks_obtained, max_marks, line_no
+            )
+            marks_applied += 1
 
     return total_named_rows, marks_applied
 
@@ -465,8 +466,9 @@ def main():
         "--marks-csv",
         type=Path,
         default=None,
-        help="Optional separate exam-marks register (e.g. internal_marks.csv) "
-        "to match against exams/exam_marks and fill in marks_obtained.",
+        help="Optional ORGANIZED exam-marks register (run organize_internal_marks.py "
+        "on the raw internal_marks.csv first) to match against exams/exam_marks "
+        "and fill in marks_obtained.",
     )
     args = ap.parse_args()
 
@@ -526,7 +528,9 @@ def main():
         if not args.marks_csv.exists():
             print(f"--marks-csv {args.marks_csv} does not exist -- skipping.")
         else:
-            marks_named_rows, marks_applied = load_marks_csv(args.marks_csv, loader)
+            marks_named_rows, marks_applied = load_marks_csv(
+                args.marks_csv, loader, existing_student_ids
+            )
 
     conn.commit()
 
