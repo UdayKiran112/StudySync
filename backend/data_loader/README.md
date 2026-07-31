@@ -6,15 +6,15 @@ kind of data and writes its own separate report -- no shared logging.
 
 ## Files
 
-| File                        | Loads                                                    | Source CSV                                       | Report (default)                 |
-|------------------------------|-----------------------------------------------------------|----------------------------------------------------|-------------------------------------|
-| `common.py`                   | shared helpers only (not run directly)                     | --                                                   | --                                    |
-| `load_members.py`             | member/student details -> `students`                        | `members_details.csv`                               | `members_load_report.txt`            |
-| `load_attendance.py`          | check-in/check-out -> `attendance`                          | `students_activity.csv`                             | `attendance_load_report.txt`         |
-| `load_offline_library.py`     | physical book usage -> `books`, `offline_library_usage`     | `students_activity.csv`                             | `offline_library_load_report.txt`    |
-| `load_digital_library.py`     | online/subscription usage -> `digital_library_usage`, `subscriptions` | `students_activity.csv`                   | `digital_library_load_report.txt`    |
-| `load_coaching.py`            | coaching-class enrollment -> `coaching_classes`, `coaching_enrollments` | `students_activity.csv`                 | `coaching_load_report.txt`           |
-| `load_exam_marks.py`          | exams + exam marks (Offline Exam column, plus optional marks register) | `students_activity.csv` (+ `internal_marks.csv`) | `exam_marks_load_report.txt` |
+| File                      | Loads                                                                   | Source CSV                                       | Report (default)                  |
+| ------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------ | --------------------------------- |
+| `common.py`               | shared helpers only (not run directly)                                  | --                                               | --                                |
+| `load_members.py`         | member/student details -> `students`                                    | `members_details.csv`                            | `members_load_report.txt`         |
+| `load_attendance.py`      | check-in/check-out -> `attendance`                                      | `students_activity.csv`                          | `attendance_load_report.txt`      |
+| `load_offline_library.py` | physical book usage -> `books`, `offline_library_usage`                 | `students_activity.csv`                          | `offline_library_load_report.txt` |
+| `load_digital_library.py` | online/subscription usage -> `digital_library_usage`, `subscriptions`   | `students_activity.csv`                          | `digital_library_load_report.txt` |
+| `load_coaching.py`        | coaching-class enrollment -> `coaching_classes`, `coaching_enrollments` | `students_activity.csv`                          | `coaching_load_report.txt`        |
+| `load_exam_marks.py`      | exams + exam marks (Offline Exam column, plus optional marks register)  | `students_activity.csv` (+ `internal_marks.csv`) | `exam_marks_load_report.txt`      |
 
 `load_coaching.py` wasn't explicitly asked for by name, but it's split out
 for the same reason as the other three: it's a distinct activity type in

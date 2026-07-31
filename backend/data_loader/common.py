@@ -26,7 +26,9 @@ def collapse_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
 
-def parse_date(raw: str, min_year: int = 1900, max_year: int = 2100, bound_today: bool = False):
+def parse_date(
+    raw: str, min_year: int = 1900, max_year: int = 2100, bound_today: bool = False
+):
     """
     Parse a DD.MM.YYYY-ish date that may use '.', ',', '-', ':', '/' as
     separators (including doubled/mixed separators and trailing junk).
@@ -144,7 +146,14 @@ class Canonicalizer:
     spelling stored in the database.
     """
 
-    def __init__(self, log_auto, log_review, category, merge_threshold=0.90, review_threshold=0.78):
+    def __init__(
+        self,
+        log_auto,
+        log_review,
+        category,
+        merge_threshold=0.90,
+        review_threshold=0.78,
+    ):
         self.log_auto = log_auto
         self.log_review = log_review
         self.category = category
@@ -234,8 +243,7 @@ def relax_marks_schema(conn: sqlite3.Connection):
     if info.get("score") == 0:
         return  # already relaxed (0 = not NOT NULL)
 
-    conn.executescript(
-        """
+    conn.executescript("""
         PRAGMA foreign_keys = OFF;
 
         CREATE TABLE quizzes_new (
@@ -295,5 +303,4 @@ def relax_marks_schema(conn: sqlite3.Connection):
         CREATE INDEX idx_exam_marks_exam_id ON exam_marks(exam_id);
 
         PRAGMA foreign_keys = ON;
-        """
-    )
+        """)

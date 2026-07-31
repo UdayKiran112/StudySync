@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Load coaching-class enrollment (the "Digital Class" column) from the daily
-activity-log CSV into the library SQLite database.
+Load coaching-class enrollment (the "Digital Class" column) into the
+library SQLite database from the CLEANED digital_class.csv produced by
+clean_student_data.py -- not from the raw students_activity.csv export.
 
 Not explicitly requested as its own category, but split out for the same
 reason as attendance/offline/digital library: it's a distinct activity type
@@ -9,25 +10,34 @@ in the same source CSV, so it gets its own report instead of being folded
 into one of the other three.
 
 Usage:
-    python3 load_coaching.py --csv students_activity.csv --db library.db
+    python3 clean_student_data.py students_activity.csv cleaned_output/
+    python3 load_coaching.py --csv cleaned_output/digital_class.csv --db library.db
 
 Requires that library.db already exists and its `students` table is
 already populated (e.g. via load_members.py) -- every row here is linked
-to an existing student purely by "ID NO", never by name.
+to an existing student purely by "Student ID", never by name.
 
-WHAT THIS LOADS, PER CSV ROW
------------------------------
-  ID NO, Date      -> the student/date this enrollment belongs to.
-  Digital Class    -> coaching_classes (one row per unique topic+date,
-                       instructor_id left NULL) + coaching_enrollments
-                       (participant_type 'Library Student').
+WHY THIS READS THE CLEANED CSV INSTEAD OF THE RAW EXPORT
+-----------------------------------------------------------
+clean_student_data.py already corrects the autofill/copy-paste date bug
+(day/month staying the same while the year drifted) and flags Digital
+Class values that are purely numeric -- which don't look like a real class
+name -- in error_log_digital_class.log, rather than silently loading them
+as a topic here.
+
+WHAT THIS LOADS, PER CLEANED CSV ROW
+---------------------------------------
+  Student ID, Date  -> the student/date this enrollment belongs to.
+  Class Name        -> coaching_classes (one row per unique topic+date,
+                        instructor_id left NULL) + coaching_enrollments
+                        (participant_type 'Library Student').
 
 WHAT GETS SKIPPED (and logged to the report)
 ---------------------------------------------
-  - Rows with no parseable numeric ID NO, or an ID NO not present in
-    students.
+  - Rows with no parseable numeric Student ID, or a Student ID not present
+    in students.
   - Rows with no parseable Date.
-  - Rows with a blank Digital Class cell (nothing to enroll in).
+  - Rows with a blank Class Name cell (nothing to enroll in).
   - A duplicate (class, student) enrollment is silently ignored (UNIQUE
     constraint), not logged as an error -- it just means the student was
     already enrolled in that class.
@@ -51,10 +61,6 @@ import sys
 from pathlib import Path
 
 from common import collapse_ws, parse_date
-
-COL_DATE = 1
-COL_ID = 2
-COL_DIGITAL_CLASS = 15
 
 
 class CoachingLoader:
@@ -95,7 +101,7 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--csv", required=True, type=Path)
+    ap.add_argument("--csv", required=True, type=Path, help="cleaned digital_class.csv")
     ap.add_argument("--db", required=True, type=Path)
     ap.add_argument("--report", type=Path, default=Path("coaching_load_report.txt"))
     args = ap.parse_args()
@@ -116,11 +122,9 @@ def main():
     total_rows = 0
 
     with args.csv.open(encoding="utf-8-sig", newline="") as f:
-        reader = csv.reader(f)
-        for line_no, row in enumerate(reader, start=1):
-            if len(row) <= COL_ID:
-                continue
-            id_raw = row[COL_ID].strip()
+        reader = csv.DictReader(f)
+        for line_no, row in enumerate(reader, start=2):  # +1 for header row
+            id_raw = (row.get("Student ID") or "").strip()
             if not id_raw.isdigit():
                 continue
             total_rows += 1
@@ -132,22 +136,18 @@ def main():
                 )
                 continue
 
-            date = (
-                parse_date(row[COL_DATE], min_year=2005, bound_today=True)
-                if len(row) > COL_DATE
-                else None
-            )
+            date = parse_date(row.get("Date", ""), min_year=2005, bound_today=True)
             if date is None:
                 skipped_date += 1
                 loader.skips.append(
-                    f"line {line_no} (student {student_id}): unparseable date {row[COL_DATE]!r} -> row SKIPPED"
+                    f"line {line_no} (student {student_id}): unparseable date "
+                    f"{row.get('Date')!r} -> row SKIPPED"
                 )
                 continue
 
-            if len(row) > COL_DIGITAL_CLASS:
-                loader.load_digital_class(
-                    student_id, date, row[COL_DIGITAL_CLASS], line_no
-                )
+            loader.load_digital_class(
+                student_id, date, row.get("Class Name", ""), line_no
+            )
 
     conn.commit()
 

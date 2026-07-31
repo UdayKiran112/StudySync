@@ -80,7 +80,13 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from common import Canonicalizer, collapse_ws, normalize_key, parse_date, relax_marks_schema
+from common import (
+    Canonicalizer,
+    collapse_ws,
+    normalize_key,
+    parse_date,
+    relax_marks_schema,
+)
 
 COL_DATE = 1
 COL_ID = 2
@@ -500,7 +506,11 @@ def main():
                 )
                 continue
 
-            date = parse_date(row[COL_DATE], min_year=2005, bound_today=True) if len(row) > COL_DATE else None
+            date = (
+                parse_date(row[COL_DATE], min_year=2005, bound_today=True)
+                if len(row) > COL_DATE
+                else None
+            )
             if date is None:
                 skipped_date += 1
                 report.append(

@@ -1,62 +1,65 @@
 #!/usr/bin/env python3
 """
-Load digital library / online subscription usage from the daily
-activity-log CSV into the library SQLite database.
+Load digital library / online subscription usage into the library SQLite
+database from the CLEANED digital_library.csv produced by
+clean_student_data.py -- not from the raw students_activity.csv export.
 
 Usage:
-    python3 load_digital_library.py --csv students_activity.csv --db library.db
+    python3 clean_student_data.py students_activity.csv cleaned_output/
+    python3 load_digital_library.py --csv cleaned_output/digital_library.csv --db library.db
 
 Requires that library.db already exists and its `students` table is
 already populated (e.g. via load_members.py) -- every row here is linked
-to an existing student purely by "ID NO", never by name.
+to an existing student purely by "Student ID", never by name.
 
-WHAT THIS LOADS, PER CSV ROW
------------------------------
-  ID NO, Date, IN, OUT           -> the student/date/time window this
-                                     usage belongs to (re-uses IN/OUT as
-                                     in_time/out_time -- no separate
-                                     timestamp exists for this activity).
-  Digital Library + Purpose +
-  Online Subscription            -> digital_library_usage. A cell can
-                                     list several platform/purpose values
-                                     comma-separated -- each becomes its
-                                     own row instead of being inserted as
-                                     one garbled "Adda 247, Youtube"-style
-                                     value. Platform names are run through
-                                     a canonicalizer (common.Canonicalizer)
-                                     that merges pure spelling/case/spacing
-                                     variants of the same real-world name.
-                                     Online Subscription present ->
-                                     account_type 'Library Subscription',
-                                     with a subscriptions master row
-                                     auto-created per canonical platform
-                                     name; absent -> 'Own Account'.
+WHY THIS READS THE CLEANED CSV INSTEAD OF THE RAW EXPORT
+-----------------------------------------------------------
+clean_student_data.py already:
+  - splits a comma cell like "IACE, Youtube" / "RRB Exam, RRB NTPC" into one
+    row per platform/purpose (instead of this loader re-doing that split
+    from scratch against a differently-shaped raw row),
+  - normalizes Online Subscription typos (Subcription, Subscrption, ...) to
+    a clean "Library Subscription" / "Own" Account Type,
+  - normalizes recoverable IN/OUT time typos (missing colon, ';'/'.'/'"'
+    used as a separator) via its shared fix_times() step, and
+  - validates In Time is actually present (digital_library_usage.in_time is
+    NOT NULL) and logs a row-specific reason to
+    error_log_digital_library.log when it isn't, rather than this loader
+    silently skipping it.
+This loader now only has to trust that shape and focus on what still needs
+doing at load time: platform-name canonicalization (fuzzy spelling merge,
+which is a different, coarser-grained problem than the exact-typo cleanup
+above) and the actual database inserts.
+
+WHAT THIS LOADS, PER CLEANED CSV ROW
+---------------------------------------
+  Student ID                 -> students.student_id (existing row; the FK)
+  Date, In Time, Out Time    -> the usage window (in_time/out_time)
+  Account Name                -> platform_name, run through a canonicalizer
+                                 (common.Canonicalizer) that merges pure
+                                 spelling/case/spacing variants of the same
+                                 real-world platform name (e.g. 'Adda247' /
+                                 'Adda 247' / 'Add247').
+  Account Type                -> 'Library Subscription' (CSV value 'Library
+                                 Subscription') or 'Own Account' (CSV value
+                                 'Own'), with a subscriptions master row
+                                 auto-created per canonical platform name
+                                 when it's a subscription.
+  Purpose                    -> purpose (nullable)
 
 WHAT GETS SKIPPED (and logged to the report)
 ---------------------------------------------
-  - Rows with no parseable numeric ID NO, or an ID NO not present in
-    students.
+  - Rows with no parseable numeric Student ID, or a Student ID not present
+    in students (shouldn't happen against a library.db built from the
+    matching Members export, but checked defensively).
   - Rows with no parseable Date.
-  - digital_library_usage for a row with a subscription/purpose but no
-    platform name (platform_name is NOT NULL) -- rare.
-  - digital_library_usage for a row with no parseable check-in time
-    (in_time is NOT NULL in the schema).
+  - Rows with no parseable In Time (in_time is NOT NULL in the schema) --
+    the small remainder clean_student_data.py couldn't safely recover
+    (e.g. a 5-digit typo like '17520', or a value missing its hour
+    entirely) is already itemized in error_log_digital_library.log.
   - Any insert that trips a UNIQUE constraint (e.g. two rows would both
     leave a student's digital session "open" with no check-out, which the
     schema only allows once per student) -- caught per-row and logged.
-
-BUG FIX (vs. the original combined loader)
---------------------------------------------
-subscriptions.start_date is NOT NULL in schema.sql, but the original
-get_or_create_subscription() never supplied it, so every subscription
-insert failed with an IntegrityError that was silently swallowed by a bare
-`except sqlite3.IntegrityError: pass` (whose comment assumed the only
-possible failure was "row already exists"). That left `subscriptions`
-permanently empty and caused every 'Library Subscription' row to be
-skipped later with "FOREIGN KEY constraint failed", since it referenced a
-subscription_id that was never actually created. This script now passes
-the activity row's own date as start_date, so the insert succeeds and
-those rows load.
 
 LOGGING
 --------
@@ -84,14 +87,6 @@ from common import (
     slugify,
 )
 
-COL_DATE = 1
-COL_ID = 2
-COL_IN = 5
-COL_OUT = 6
-COL_DIGITAL_LIBRARY = 10
-COL_PURPOSE = 11
-COL_ONLINE_SUB = 12
-
 
 class DigitalLibraryLoader:
     def __init__(self, conn):
@@ -103,10 +98,7 @@ class DigitalLibraryLoader:
         # the cluster's most common one.
         self.subscription_id_to_cluster_key = {}
         self.counts = {"digital_usage": 0}
-        self.autocorrection_counts = {
-            "digital_usage_row_split": 0,
-            "subscription_name_merged": 0,
-        }
+        self.autocorrection_counts = {"subscription_name_merged": 0}
         self.autocorrections = []
         self.review_notes = []
         self.skips = []
@@ -124,18 +116,10 @@ class DigitalLibraryLoader:
         self.review_notes.append(msg)
 
     def get_or_create_subscription(self, platform_name, date, line_no=None):
-        """
-        date: the activity-log date of the row that first introduced this
-        subscription, used to fill subscriptions.start_date (NOT NULL in
-        schema.sql, no default). FIX: the original loader never supplied
-        this column, so every subscription insert failed with an
-        IntegrityError that was silently swallowed by the bare except
-        below (its comment wrongly assumed the only possible IntegrityError
-        was "row already exists") -- leaving `subscriptions` permanently
-        empty and every 'Library Subscription' digital_library_usage row
-        skipped downstream on the resulting FK violation. Supplying
-        start_date here is what makes the insert actually succeed.
-        """
+        """subscriptions.start_date is NOT NULL, so it's always supplied
+        here from the row's own date -- otherwise the insert would fail
+        with an IntegrityError and leave subscriptions permanently empty,
+        which would in turn FK-fail every 'Library Subscription' row."""
         canonical = self.subscription_canon.canonicalize(
             platform_name, context=f"line {line_no}" if line_no is not None else ""
         )
@@ -157,13 +141,12 @@ class DigitalLibraryLoader:
         return sub_id
 
     def finalize_canonical_names(self):
-        """
-        A spelling cluster's "winning" spelling (most frequent variant) can
-        shift as later rows come in, but earlier rows already wrote
+        """A spelling cluster's "winning" spelling (most frequent variant)
+        can shift as later rows come in, but earlier rows already wrote
         whichever spelling was winning *at the time*. Re-sync any
         subscriptions row whose stored name no longer matches its
-        cluster's final majority spelling, once the whole CSV has been read.
-        """
+        cluster's final majority spelling, once the whole CSV has been
+        read."""
         updated_subs = 0
         for sub_id, key in self.subscription_id_to_cluster_key.items():
             final = self.subscription_canon.key_to_canonical.get(key)
@@ -193,84 +176,65 @@ class DigitalLibraryLoader:
         check_out,
         platform_raw,
         purpose_raw,
-        sub_raw,
+        account_type_raw,
         line_no,
     ):
-        if not platform_raw and not sub_raw and not purpose_raw:
+        platform_val = collapse_ws(platform_raw)
+        if not platform_val:
+            self.skips.append(
+                f"line {line_no}: digital library activity with no Account Name (platform) -> SKIPPED"
+            )
             return
-        # Same messy pattern as Book ID/Reference Book: a cell can contain
-        # several comma-separated values that got merged into one instead
-        # of being split into separate rows at data-entry time.
-        platforms = (
-            [collapse_ws(x) for x in platform_raw.split(",")] if platform_raw else []
-        )
-        purposes = (
-            [collapse_ws(x) for x in purpose_raw.split(",")] if purpose_raw else []
-        )
-        n = max(len(platforms), len(purposes))
-        if n == 0:
+        if check_in is None:
+            self.skips.append(
+                f"line {line_no}: digital library usage with no usable In Time -> SKIPPED"
+            )
             return
 
-        is_subscription = bool(collapse_ws(sub_raw))
-        account_type = "Library Subscription" if is_subscription else "Own Account"
+        account_type = (
+            "Library Subscription"
+            if account_type_raw.strip() == "Library Subscription"
+            else "Own Account"
+        )
+        platform = self.subscription_canon.canonicalize(
+            platform_val, context=f"line {line_no}"
+        )
+        sub_id = None
+        if account_type == "Library Subscription":
+            sub_id = self.get_or_create_subscription(platform, date, line_no)
+        purpose = collapse_ws(purpose_raw) or None
 
-        if n > 1:
-            self.log_auto(
-                "digital_usage_row_split",
-                f"line {line_no} (student {student_id}, {date}): platform/purpose "
-                f"cell had {n} comma-separated values ({platform_raw!r} / "
-                f"{purpose_raw!r}) -> split into {n} separate digital_library_usage "
-                f"rows instead of one garbled row",
+        try:
+            self.conn.execute(
+                """INSERT INTO digital_library_usage
+                   (student_id, date, in_time, out_time, account_type,
+                    subscription_id, platform_name, purpose)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    student_id,
+                    date,
+                    check_in,
+                    check_out,
+                    account_type,
+                    sub_id,
+                    platform,
+                    purpose,
+                ),
             )
-
-        for i in range(n):
-            platform_val = platforms[i] if i < len(platforms) else ""
-            if not platform_val:
-                self.skips.append(
-                    f"line {line_no}: digital library activity with no platform name -> SKIPPED"
-                )
-                continue
-            if check_in is None:
-                self.skips.append(
-                    f"line {line_no}: digital library usage with no check-in time -> SKIPPED"
-                )
-                continue
-            platform = self.subscription_canon.canonicalize(
-                platform_val, context=f"line {line_no}"
+            self.counts["digital_usage"] += 1
+        except sqlite3.IntegrityError as e:
+            self.skips.append(
+                f"line {line_no}: digital_library_usage insert failed ({e}) -> SKIPPED"
             )
-            sub_id = None
-            if is_subscription:
-                sub_id = self.get_or_create_subscription(platform, date, line_no)
-            purpose = (purposes[i] if i < len(purposes) else None) or None
-            try:
-                self.conn.execute(
-                    """INSERT INTO digital_library_usage
-                       (student_id, date, in_time, out_time, account_type,
-                        subscription_id, platform_name, purpose)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        student_id,
-                        date,
-                        check_in,
-                        check_out,
-                        account_type,
-                        sub_id,
-                        platform,
-                        purpose,
-                    ),
-                )
-                self.counts["digital_usage"] += 1
-            except sqlite3.IntegrityError as e:
-                self.skips.append(
-                    f"line {line_no}: digital_library_usage insert failed ({e}) -> SKIPPED"
-                )
 
 
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--csv", required=True, type=Path)
+    ap.add_argument(
+        "--csv", required=True, type=Path, help="cleaned digital_library.csv"
+    )
     ap.add_argument("--db", required=True, type=Path)
     ap.add_argument(
         "--report", type=Path, default=Path("digital_library_load_report.txt")
@@ -293,11 +257,9 @@ def main():
     total_rows = 0
 
     with args.csv.open(encoding="utf-8-sig", newline="") as f:
-        reader = csv.reader(f)
-        for line_no, row in enumerate(reader, start=1):
-            if len(row) <= COL_ID:
-                continue
-            id_raw = row[COL_ID].strip()
+        reader = csv.DictReader(f)
+        for line_no, row in enumerate(reader, start=2):  # +1 for header row
+            id_raw = (row.get("Student ID") or "").strip()
             if not id_raw.isdigit():
                 continue
             total_rows += 1
@@ -309,34 +271,26 @@ def main():
                 )
                 continue
 
-            date = (
-                parse_date(row[COL_DATE], min_year=2005, bound_today=True)
-                if len(row) > COL_DATE
-                else None
-            )
+            date = parse_date(row.get("Date", ""), min_year=2005, bound_today=True)
             if date is None:
                 skipped_date += 1
                 loader.skips.append(
-                    f"line {line_no} (student {student_id}): unparseable date {row[COL_DATE]!r} -> row SKIPPED"
+                    f"line {line_no} (student {student_id}): unparseable date "
+                    f"{row.get('Date')!r} -> row SKIPPED"
                 )
                 continue
 
-            check_in = parse_time(row[COL_IN]) if len(row) > COL_IN else None
-            check_out = parse_time(row[COL_OUT]) if len(row) > COL_OUT else None
+            check_in = parse_time(row.get("In Time", ""))
+            check_out = parse_time(row.get("Out Time", ""))
 
-            platform_raw = (
-                row[COL_DIGITAL_LIBRARY] if len(row) > COL_DIGITAL_LIBRARY else ""
-            )
-            purpose_raw = row[COL_PURPOSE] if len(row) > COL_PURPOSE else ""
-            sub_raw = row[COL_ONLINE_SUB] if len(row) > COL_ONLINE_SUB else ""
             loader.load_digital_usage(
                 student_id,
                 date,
                 check_in,
                 check_out,
-                platform_raw,
-                purpose_raw,
-                sub_raw,
+                row.get("Account Name", ""),
+                row.get("Purpose", ""),
+                row.get("Account Type", ""),
                 line_no,
             )
 
@@ -369,7 +323,7 @@ def main():
         f.write("\n=== PER-ROW SKIPS (row or part of it was NOT loaded) ===\n")
         f.write("\n".join(loader.skips) + "\n")
         f.write(
-            "\n=== PER-ROW AUTO-CORRECTIONS (loaded, but adjusted from the raw CSV) ===\n"
+            "\n=== PER-ROW AUTO-CORRECTIONS (loaded, but adjusted from the cleaned CSV) ===\n"
         )
         f.write("\n".join(loader.autocorrections) + "\n")
         f.write(

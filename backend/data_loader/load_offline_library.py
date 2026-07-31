@@ -1,41 +1,58 @@
 #!/usr/bin/env python3
 """
-Load offline (physical) library book usage from the daily activity-log CSV
-into the library SQLite database.
+Load offline (physical) library book usage into the library SQLite database
+from the CLEANED offline_library.csv produced by clean_student_data.py --
+not from the raw students_activity.csv export.
 
 Usage:
-    python3 load_offline_library.py --csv students_activity.csv --db library.db
+    python3 clean_student_data.py students_activity.csv cleaned_output/
+    python3 load_offline_library.py --csv cleaned_output/offline_library.csv --db library.db
 
 Requires that library.db already exists and its `students` table is
 already populated (e.g. via load_members.py) -- every row here is linked
-to an existing student purely by "ID NO", never by name.
+to an existing student purely by "Student ID", never by name.
 
-WHAT THIS LOADS, PER CSV ROW
------------------------------
-  ID NO, Date               -> the student/date this usage belongs to.
-  Book ID + Reference Book  -> books (auto-created master rows) and
-                                offline_library_usage (one row per book; a
-                                cell can list several books comma-separated
-                                -- each becomes its own row instead of one
-                                garbled multi-book entry).
+WHY THIS READS THE CLEANED CSV INSTEAD OF THE RAW EXPORT
+-----------------------------------------------------------
+clean_student_data.py already splits a comma cell like "1556, 1556" /
+"Polity, Polity" into one row per book (fixing the '.' vs ',' separator
+typo along the way), so this loader trusts one Book ID + one Book Name per
+row instead of re-doing that split itself.
+
+WHAT THIS LOADS, PER CLEANED CSV ROW
+---------------------------------------
+  Student ID, Date          -> the student/date this usage belongs to.
+  Book ID + Book Name       -> books (auto-created master rows) and
+                                offline_library_usage.
 
 Book titles are run through a canonicalizer (common.Canonicalizer) that
 merges pure spelling/case/spacing variants and close typos of the same
 real title, so the books table doesn't grow a new row per typo (e.g.
-'Adda247 Guide' / 'adda247 guide' / 'Add247 Guide' collapsing to one
-entry). Because the same book_id can legitimately show up with several
+'Shine India' / 'Shine india' / 'Merit Mind' / 'Merit Minds' collapsing to
+one entry). Because the same book_id can legitimately show up with several
 genuinely DIFFERENT titles (book_id looks reused rather than a stable 1:1
 catalog key), every title seen per book_id is tallied and the majority
 title wins -- finalized only after the whole CSV has been read (see
 finalize_canonical_names()).
 
-WHAT GETS SKIPPED (and logged to the report)
----------------------------------------------
-  - Rows with no parseable numeric ID NO, or an ID NO not present in
-    students.
+BOOK ID WITH NO TITLE ON ITS OWN ROW -- BACKFILLED WHERE POSSIBLE
+---------------------------------------------------------------------
+error_log_offline_library.log flags rows where a Book ID was recorded but
+the source spreadsheet never filled in a name for that visit. Before
+giving up on those, this loader first scans the WHOLE cleaned CSV for any
+OTHER row that recorded a title against that same Book ID, and reuses the
+most common one it finds (see prescan_book_titles()). Only if a Book ID
+truly never has a title anywhere in the file is the row skipped (books.title
+is NOT NULL, so an entry can't be created out of nothing) -- these are
+still logged so the remainder can be filled in by hand from the physical
+catalog.
+
+WHAT ELSE GETS SKIPPED (and logged to the report)
+---------------------------------------------------
+  - Rows with no parseable numeric Student ID, or a Student ID not present
+    in students.
   - Rows with no parseable Date.
-  - A Book ID with no matching title (can't insert into offline_library_usage
-    with an unnamed book).
+  - A Book ID with no title anywhere in the file (see above).
   - Any insert that trips a UNIQUE/FK constraint -- caught per-row and
     logged rather than aborting the whole load.
 
@@ -58,10 +75,22 @@ from pathlib import Path
 
 from common import Canonicalizer, collapse_ws, normalize_key, parse_date
 
-COL_DATE = 1
-COL_ID = 2
-COL_BOOK_ID = 8
-COL_REF_BOOK = 9
+
+def prescan_book_titles(rows):
+    """First pass over the cleaned CSV: for every Book ID, tally the raw
+    (whitespace-collapsed) titles actually recorded against it on OTHER
+    rows. Returns {book_id: most_common_raw_title}, used to backfill rows
+    where this particular visit's Book Name was left blank."""
+    titles_by_book_id = {}
+    for row in rows:
+        bid = collapse_ws(row.get("Book ID") or "")
+        name = collapse_ws(row.get("Book Name") or "")
+        if bid and name:
+            counts = titles_by_book_id.setdefault(bid, {})
+            counts[name] = counts.get(name, 0) + 1
+    return {
+        bid: max(counts, key=counts.get) for bid, counts in titles_by_book_id.items()
+    }
 
 
 class OfflineLibraryLoader:
@@ -73,6 +102,7 @@ class OfflineLibraryLoader:
         self.autocorrection_counts = {
             "book_title_merged": 0,
             "book_title_majority_vote": 0,
+            "book_title_backfilled": 0,
         }
         self.autocorrections = []
         self.review_notes = []
@@ -112,12 +142,11 @@ class OfflineLibraryLoader:
             )
 
     def finalize_canonical_names(self):
-        """
-        book_id is reused across genuinely different titles often enough
+        """book_id is reused across genuinely different titles often enough
         that "first title wins" would silently keep whichever one happened
         to load first, so every (canonicalized) title seen per book_id is
-        tallied and the majority one kept, once the full CSV has been read.
-        """
+        tallied and the majority one kept, once the full CSV has been
+        read."""
         updated_books = 0
         conflicted_book_ids = 0
         for book_id, key_counts in self.book_id_title_key_counts.items():
@@ -153,45 +182,54 @@ class OfflineLibraryLoader:
                 f"genuinely conflicting titles, not just spelling variants)",
             )
 
-    def load_books(self, student_id, date, book_id_raw, ref_book_raw, line_no):
-        ids = [collapse_ws(x) for x in book_id_raw.split(",")] if book_id_raw else []
-        names = (
-            [collapse_ws(x) for x in ref_book_raw.split(",")] if ref_book_raw else []
-        )
-        n = max(len(ids), len(names))
-        if n == 0:
+    def load_book_usage(
+        self, student_id, date, book_id_raw, book_name_raw, backfill_titles, line_no
+    ):
+        bid = collapse_ws(book_id_raw) or None
+        name = collapse_ws(book_name_raw) or None
+
+        if not bid and not name:
             return
-        for i in range(n):
-            bid = (ids[i] if i < len(ids) else None) or None
-            name = (names[i] if i < len(names) else None) or None
-            if name and name.lower() == "self":
-                bid = None  # self-study, not a specific library book
-            if bid and not name:
+
+        if bid and not name:
+            backfilled = backfill_titles.get(bid)
+            if backfilled:
+                name = backfilled
+                self.log_auto(
+                    "book_title_backfilled",
+                    f"line {line_no}: book_id {bid!r} had no title recorded on this "
+                    f"visit -- backfilled with {name!r}, seen elsewhere in the file "
+                    f"for the same book_id",
+                )
+            else:
                 self.skips.append(
-                    f"line {line_no}: book id {bid!r} has no matching title -> entry SKIPPED"
+                    f"line {line_no}: book id {bid!r} has no title anywhere in the "
+                    f"file -> entry SKIPPED (fill in the title by hand and re-run)"
                 )
-                continue
-            if bid:
-                self.get_or_create_book(bid, name, line_no)
-            elif not name:
-                continue
-            try:
-                self.conn.execute(
-                    "INSERT INTO offline_library_usage (student_id, date, book_id) VALUES (?, ?, ?)",
-                    (student_id, date, bid),
-                )
-                self.counts["offline_usage"] += 1
-            except sqlite3.IntegrityError as e:
-                self.skips.append(
-                    f"line {line_no}: offline_library_usage insert failed ({e}) -> SKIPPED"
-                )
+                return
+
+        if bid:
+            self.get_or_create_book(bid, name, line_no)
+
+        try:
+            self.conn.execute(
+                "INSERT INTO offline_library_usage (student_id, date, book_id) VALUES (?, ?, ?)",
+                (student_id, date, bid),
+            )
+            self.counts["offline_usage"] += 1
+        except sqlite3.IntegrityError as e:
+            self.skips.append(
+                f"line {line_no}: offline_library_usage insert failed ({e}) -> SKIPPED"
+            )
 
 
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--csv", required=True, type=Path)
+    ap.add_argument(
+        "--csv", required=True, type=Path, help="cleaned offline_library.csv"
+    )
     ap.add_argument("--db", required=True, type=Path)
     ap.add_argument(
         "--report", type=Path, default=Path("offline_library_load_report.txt")
@@ -208,47 +246,46 @@ def main():
         r[0] for r in conn.execute("SELECT student_id FROM students")
     }
 
+    with args.csv.open(encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    backfill_titles = prescan_book_titles(rows)
+
     loader = OfflineLibraryLoader(conn)
     skipped_id = 0
     skipped_date = 0
     total_rows = 0
 
-    with args.csv.open(encoding="utf-8-sig", newline="") as f:
-        reader = csv.reader(f)
-        for line_no, row in enumerate(reader, start=1):
-            if len(row) <= COL_ID:
-                continue
-            id_raw = row[COL_ID].strip()
-            if not id_raw.isdigit():
-                continue
-            total_rows += 1
-            student_id = int(id_raw)
-            if student_id not in existing_student_ids:
-                skipped_id += 1
-                loader.skips.append(
-                    f"line {line_no}: student_id {student_id} not found in students table -> row SKIPPED"
-                )
-                continue
+    for line_no, row in enumerate(rows, start=2):  # +1 for header row
+        id_raw = (row.get("Student ID") or "").strip()
+        if not id_raw.isdigit():
+            continue
+        total_rows += 1
+        student_id = int(id_raw)
+        if student_id not in existing_student_ids:
+            skipped_id += 1
+            loader.skips.append(
+                f"line {line_no}: student_id {student_id} not found in students table -> row SKIPPED"
+            )
+            continue
 
-            date = (
-                parse_date(row[COL_DATE], min_year=2005, bound_today=True)
-                if len(row) > COL_DATE
-                else None
+        date = parse_date(row.get("Date", ""), min_year=2005, bound_today=True)
+        if date is None:
+            skipped_date += 1
+            loader.skips.append(
+                f"line {line_no} (student {student_id}): unparseable date "
+                f"{row.get('Date')!r} -> row SKIPPED"
             )
-            if date is None:
-                skipped_date += 1
-                loader.skips.append(
-                    f"line {line_no} (student {student_id}): unparseable date {row[COL_DATE]!r} -> row SKIPPED"
-                )
-                continue
+            continue
 
-            book_id_raw = (
-                collapse_ws(row[COL_BOOK_ID]) if len(row) > COL_BOOK_ID else ""
-            )
-            ref_book_raw = (
-                collapse_ws(row[COL_REF_BOOK]) if len(row) > COL_REF_BOOK else ""
-            )
-            loader.load_books(student_id, date, book_id_raw, ref_book_raw, line_no)
+        loader.load_book_usage(
+            student_id,
+            date,
+            row.get("Book ID", ""),
+            row.get("Book Name", ""),
+            backfill_titles,
+            line_no,
+        )
 
     loader.finalize_canonical_names()
     conn.commit()
@@ -279,7 +316,7 @@ def main():
         f.write("\n=== PER-ROW SKIPS (row or part of it was NOT loaded) ===\n")
         f.write("\n".join(loader.skips) + "\n")
         f.write(
-            "\n=== PER-ROW AUTO-CORRECTIONS (loaded, but adjusted from the raw CSV) ===\n"
+            "\n=== PER-ROW AUTO-CORRECTIONS (loaded, but adjusted from the cleaned CSV) ===\n"
         )
         f.write("\n".join(loader.autocorrections) + "\n")
         f.write(
