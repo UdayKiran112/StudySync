@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Trash2, Pencil, LogIn, LogOut, X } from "lucide-react";
+import { Trash2, Pencil } from "lucide-react";
 import {
   PageHeader,
   Spinner,
@@ -12,59 +12,40 @@ import {
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Field, Input, Select } from "../../components/ui/Form";
 import { Button } from "../../components/ui/Button";
-import { StudentPicker } from "../../components/ui/StudentPicker";
+import { StatusTab } from "../../components/ui/Tabs";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Modal } from "../../components/ui/Modal";
-import { StatusTab } from "../../components/ui/Tabs";
 import {
   useAttendanceList,
-  useCheckIn,
-  useCheckOut,
   useUpdateAttendance,
   useDeleteAttendance,
 } from "../../api/attendance";
 import { extractErrorMessage } from "../../api/client";
-import {
-  formatDate,
-  formatDuration,
-  todayIso,
-  nowHHMM,
-} from "../../lib/format";
-import type { Student, Attendance } from "../../api/types";
+import { formatDate, formatDuration } from "../../lib/format";
+import type { Attendance } from "../../api/types";
 
 const LIMIT = 20;
 
-function sessionTone(session: string): "forest" | "brass" | "slate" {
-  if (session === "Full Day") return "forest";
-  if (session === "Morning") return "brass";
-  return "slate";
-}
-
-export function AttendancePage() {
-  const [mode, setMode] = useState<"check-in" | "check-out">("check-in");
-  const [student, setStudent] = useState<Student | null>(null);
-  const [entryDate, setEntryDate] = useState(todayIso());
-  const [entryTime, setEntryTime] = useState(nowHHMM());
-  const [filterSession, setFilterSession] = useState("");
+export function AttendanceRecordsPage() {
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [session, setSession] = useState("");
+  const [studentId, setStudentId] = useState("");
   const [offset, setOffset] = useState(0);
   const [editing, setEditing] = useState<Attendance | undefined>(undefined);
   const [deleting, setDeleting] = useState<Attendance | undefined>(undefined);
   const [now, setNow] = useState(new Date());
 
-  const today = todayIso();
-
-  const checkIn = useCheckIn();
-  const checkOut = useCheckOut();
-  const deleteMutation = useDeleteAttendance();
-
-  // Backend takes a date range (date_from/date_to), not a single date, and
-  // no longer paginates this endpoint — it always returns everything
-  // matching the filter. A single-day filter is just date_from === date_to;
-  // paging happens client-side below with the full result set in hand.
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  const studentIdValue = studentId.trim();
+  const studentIdNumber = studentIdValue ? Number(studentIdValue) : undefined;
+  const studentIdFilter = Number.isFinite(studentIdNumber)
+    ? studentIdNumber
+    : undefined;
 
   const {
     data: allData,
@@ -72,16 +53,18 @@ export function AttendancePage() {
     isError,
     error,
   } = useAttendanceList({
-    date_from: today,
-    date_to: today,
-    session: filterSession || undefined,
+    date_from: dateFrom || undefined,
+    date_to: dateTo || undefined,
+    session: session || undefined,
+    student_id: studentIdFilter,
   });
 
-  const sortedTodayRecords = useMemo(
+  const sortedData = useMemo(
     () =>
       allData
         ? [...allData].sort(
             (a, b) =>
+              b.date.localeCompare(a.date) ||
               (a.check_in ?? "").localeCompare(b.check_in ?? "") ||
               a.attendance_id - b.attendance_id,
           )
@@ -89,45 +72,9 @@ export function AttendancePage() {
     [allData],
   );
 
-  const data = sortedTodayRecords?.slice(offset, offset + LIMIT);
-  const totalToday = allData?.length ?? 0;
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!student) {
-      toast.error("Pick a student first");
-      return;
-    }
-    if (!entryTime) {
-      toast.error("Enter a time");
-      return;
-    }
-    try {
-      if (mode === "check-in") {
-        // No session field — the backend derives it from check_in time
-        // (and may reclassify it to "Full Day" at check-out).
-        await checkIn.mutateAsync({
-          student_id: student.student_id,
-          date: entryDate || undefined,
-          check_in: entryTime,
-        });
-        toast.success(`Checked in ${student.name} at ${entryTime}`);
-      } else {
-        // No session/date needed either — the backend finds this
-        // student's one currently-open session automatically.
-        await checkOut.mutateAsync({
-          student_id: student.student_id,
-          check_out: entryTime,
-        });
-        toast.success(`Checked out ${student.name} at ${entryTime}`);
-      }
-      setStudent(null);
-      setEntryDate(todayIso());
-      setEntryTime(nowHHMM());
-    } catch (err) {
-      toast.error(extractErrorMessage(err));
-    }
-  }
+  const data = sortedData?.slice(offset, offset + LIMIT);
+  const total = allData?.length ?? 0;
+  const deleteMutation = useDeleteAttendance();
 
   async function handleDelete() {
     if (!deleting) return;
@@ -140,14 +87,20 @@ export function AttendancePage() {
     }
   }
 
-  const pending = checkIn.isPending || checkOut.isPending;
+  function resetFilters() {
+    setDateFrom("");
+    setDateTo("");
+    setSession("");
+    setStudentId("");
+    setOffset(0);
+  }
 
   return (
     <div>
       <PageHeader
         eyebrow="Front desk"
-        title="Attendance"
-        description="Log arrivals and departures. Today's attendance is shown below; historical records are available on a separate page."
+        title="Attendance records"
+        description="Search historical attendance by date range, session, or student ID. Edit or remove records from the same list."
         action={
           <div className="rounded-2xl border border-border bg-card px-4 py-3 text-right text-slate">
             <p className="text-[11px] uppercase tracking-[0.32em] text-slate-light">
@@ -168,117 +121,81 @@ export function AttendancePage() {
               })}
             </p>
             <Link
-              to="/attendance/records"
+              to="/attendance"
               className="mt-4 inline-flex items-center rounded-full bg-brass px-3 py-1.5 text-xs font-semibold text-ink shadow-sm transition hover:bg-brass/90"
             >
-              View attendance records
+              Back to today's attendance
             </Link>
           </div>
         }
       />
 
-      <div className="mb-8 rounded-lg border border-border bg-card p-6">
-        <div className="mb-4 flex gap-1 rounded-md bg-paper-dim p-1 w-fit">
-          <button
-            onClick={() => setMode("check-in")}
-            className={`flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-colors ${
-              mode === "check-in" ? "bg-card text-ink shadow-sm" : "text-slate"
-            }`}
-          >
-            <LogIn size={14} /> Check in
-          </button>
-          <button
-            onClick={() => setMode("check-out")}
-            className={`flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium transition-colors ${
-              mode === "check-out" ? "bg-card text-ink shadow-sm" : "text-slate"
-            }`}
-          >
-            <LogOut size={14} /> Check out
-          </button>
-        </div>
-
-        <form
-          onSubmit={handleSubmit}
-          className={
-            mode === "check-in"
-              ? "grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-[2fr_1fr_1fr_auto] lg:items-end"
-              : "grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_auto] lg:items-end"
-          }
-        >
-          <Field label="Student" required>
-            <StudentPicker value={student} onChange={setStudent} />
-          </Field>
-          {mode === "check-in" && (
-            <Field label="Date" required>
-              <Input
-                type="date"
-                value={entryDate}
-                onChange={(e) => setEntryDate(e.target.value)}
-              />
-            </Field>
-          )}
-          <Field
-            label={mode === "check-in" ? "Check-in time" : "Check-out time"}
-            required
-          >
-            <Input
-              type="time"
-              value={entryTime}
-              onChange={(e) => setEntryTime(e.target.value)}
-            />
-          </Field>
-          <Button type="submit" variant="primary" disabled={pending}>
-            {pending
-              ? "Saving…"
-              : mode === "check-in"
-                ? "Check in"
-                : "Check out"}
-          </Button>
-        </form>
-        {mode === "check-out" && (
-          <p className="mt-3 text-xs text-slate-light">
-            Checking out finds this student's one open session automatically —
-            no need to pick a date or session.
+      <div className="mb-6 grid gap-4 lg:grid-cols-[1fr_auto]">
+        <div className="rounded-2xl border border-border bg-paper p-4 text-sm text-slate">
+          <p className="font-medium text-ink">Search historic attendance</p>
+          <p className="mt-2">
+            {total === 0
+              ? "Use the filters to narrow the record set."
+              : `Found ${total} matching record${total === 1 ? "" : "s"}.`}
           </p>
-        )}
+        </div>
+        <div className="flex items-center gap-3">
+          <Button variant="secondary" size="sm" onClick={resetFilters}>
+            Clear filters
+          </Button>
+        </div>
       </div>
 
-      <div className="mb-4 grid gap-4 lg:grid-cols-[1fr_auto]">
-        <div className="rounded-2xl border border-border bg-paper p-4 text-sm text-slate">
-          <p className="font-medium text-ink">Today's attendance</p>
-          <p className="mt-2">
-            Showing {totalToday} record{totalToday === 1 ? "" : "s"} for today.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Select
-            value={filterSession}
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-[220px_220px_220px_1fr]">
+        <Field label="From">
+          <Input
+            type="date"
+            value={dateFrom}
             onChange={(e) => {
-              setFilterSession(e.target.value);
+              setDateFrom(e.target.value);
               setOffset(0);
             }}
-            className="w-44"
+          />
+        </Field>
+        <Field label="To">
+          <Input
+            type="date"
+            value={dateTo}
+            onChange={(e) => {
+              setDateTo(e.target.value);
+              setOffset(0);
+            }}
+          />
+        </Field>
+        <Field label="Session">
+          <Select
+            value={session}
+            onChange={(e) => {
+              setSession(e.target.value);
+              setOffset(0);
+            }}
           >
             <option value="">All sessions</option>
             <option value="Morning">Morning</option>
             <option value="Afternoon">Afternoon</option>
             <option value="Full Day">Full Day</option>
           </Select>
-          {filterSession && (
-            <button
-              onClick={() => {
-                setFilterSession("");
-                setOffset(0);
-              }}
-              className="flex items-center gap-1 rounded-full bg-brass/15 px-3 py-1 text-xs font-medium text-brass hover:bg-brass/25"
-            >
-              {filterSession} <X size={12} />
-            </button>
-          )}
-        </div>
+        </Field>
+        <Field label="Student ID">
+          <Input
+            type="number"
+            min="1"
+            value={studentId}
+            onChange={(e) => {
+              setStudentId(e.target.value);
+              setOffset(0);
+            }}
+            placeholder="e.g. 12345"
+          />
+        </Field>
       </div>
 
-      {isLoading && <Spinner label="Loading attendance…" />}
+      {isLoading && <Spinner label="Loading attendance records…" />}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
       {data && data.length === 0 && (
         <EmptyState title="No attendance records match these filters" />
@@ -297,37 +214,37 @@ export function AttendancePage() {
               <Th className="text-right">Actions</Th>
             </Thead>
             <tbody>
-              {data.map((a) => (
-                <Tr key={a.attendance_id}>
-                  <Td className="font-mono text-xs">{a.student_id}</Td>
-                  <Td>{formatDate(a.date)}</Td>
+              {data.map((record) => (
+                <Tr key={record.attendance_id}>
+                  <Td className="font-mono text-xs">{record.student_id}</Td>
+                  <Td>{formatDate(record.date)}</Td>
                   <Td>
-                    <StatusTab tone={sessionTone(a.session)}>
-                      {a.session}
+                    <StatusTab tone={sessionTone(record.session)}>
+                      {record.session}
                     </StatusTab>
                   </Td>
-                  <Td className="font-mono text-xs">{a.check_in ?? "—"}</Td>
+                  <Td className="font-mono text-xs">{record.check_in ?? "—"}</Td>
                   <Td className="font-mono text-xs">
-                    {a.check_out ?? (
+                    {record.check_out ?? (
                       <span className="text-brass">Still in</span>
                     )}
                   </Td>
                   <Td className="text-slate">
-                    {formatDuration(a.duration_minutes)}
+                    {formatDuration(record.duration_minutes)}
                   </Td>
                   <Td className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() => setEditing(a)}
+                        onClick={() => setEditing(record)}
                       >
                         <Pencil size={14} />
                       </Button>
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() => setDeleting(a)}
+                        onClick={() => setDeleting(record)}
                       >
                         <Trash2 size={14} className="text-rust" />
                       </Button>
@@ -341,7 +258,7 @@ export function AttendancePage() {
             offset={offset}
             limit={LIMIT}
             count={data.length}
-            total={allData?.length}
+            total={total}
             onOffsetChange={setOffset}
           />
         </>
@@ -365,6 +282,12 @@ export function AttendancePage() {
       />
     </div>
   );
+}
+
+function sessionTone(session: string): "forest" | "brass" | "slate" {
+  if (session === "Full Day") return "forest";
+  if (session === "Morning") return "brass";
+  return "slate";
 }
 
 function EditAttendanceModal({
