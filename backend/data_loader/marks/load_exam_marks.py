@@ -1,31 +1,39 @@
 #!/usr/bin/env python3
 """
-Load exam data into the library SQLite database from two sources:
+Load exam data into the library SQLite database from either or both of:
 
   1. The daily activity-log CSV's "Offline Exam" column (one row per
      student/date who sat an exam that day -- marks_obtained left NULL,
      since the daily activity CSV never records a numeric score, only a
-     topic).
-  2. An optional separate exam-marks register (--marks-csv) -- one row per
-     (student name, exam) -- which fills in marks_obtained (and
-     exams.max_marks) for exams that already exist (creating them if they
-     don't). This must be the ORGANIZED file produced by
-     organize_internal_marks.py, not the raw internal_marks.csv directly --
-     see that script's docstring for why (an Excel merged-cell export needs
-     validated forward-filling before it's one resolved fact per row) and
-     run it first:
+     topic). Optional -- see --csv below.
+  2. An exam-marks register (--marks-csv) -- one row per (student name,
+     exam) -- which fills in marks_obtained (and exams.max_marks) for
+     exams that already exist (creating them if they don't). This must be
+     the ORGANIZED file produced by organize_internal_marks.py, not the
+     raw internal_marks.csv directly -- see that script's docstring for
+     why (an Excel merged-cell export needs validated forward-filling
+     before it's one resolved fact per row) and run it first:
 
-        python3 organize_internal_marks.py --csv internal_marks.csv \\
-            --out internal_marks_organized.csv
+        python3 organize_internal_marks.py
+
+--csv and --marks-csv are each optional, but at least one is required.
+Run with --marks-csv alone if all you have is the organized register and
+there's no daily activity CSV to load first -- exams get created directly
+from --marks-csv in that case (get_or_create_exam), rather than relying on
+the Offline Exam column to have created them already.
 
 Usage:
+    python3 load_exam_marks.py --db library.db \\
+        --marks-csv internal_marks_organized.csv
+
+    # or, with the daily activity log too:
     python3 load_exam_marks.py --csv students_activity.csv --db library.db \\
-        [--marks-csv internal_marks_organized.csv]
+        --marks-csv internal_marks_organized.csv
 
 Requires that library.db already exists and its `students` table is already
 populated (e.g. via load_members.py). Attendance/library/coaching data is
 NOT touched by this script -- see load_student_activity.py, which reads the
-same CSV for those columns and keeps its own separate report.
+same --csv for those columns and keeps its own separate report.
 
 SCHEMA CHANGE THIS SCRIPT MAKES
 --------------------------------
@@ -45,28 +53,44 @@ An explicit alias table additionally handles abbreviations that
 edit-distance alone can't bridge (e.g. 'Ari & Rea' -> 'Arithmetic &
 Reasoning'). Deliberately NOT exhaustive: ambiguous short forms that could
 mean more than one real subject (e.g. 'G S' could be General Science or
-General Studies) are left OUT on purpose -- they become their own distinct
-topic rather than being guessed into the wrong one.
+General Studies, 'RRB' alone could be NTPC or Group D, 'SSC' alone could be
+GD or MTS, 'G K' could be General Awareness or something else) are left OUT
+on purpose -- they become their own distinct topic rather than being
+guessed into the wrong one. A stray leading/trailing '"' left over from an
+unescaped quote in the source spreadsheet is also stripped before matching.
+A raw topic that's actually a bare date (a stray column-shift in the
+source) is rejected rather than turned into a fake exam.
 
---marks-csv MATCHING
-----------------------
-Most rows in the register have no student ID, only a name, so matching is
-by exact normalized name (case/whitespace/'.'-vs-space-insensitive) against
-students.name. Ambiguous (2+ students share that name) or unmatched names
-are skipped and logged rather than guessed -- misattributing someone's
-marks is a worse error than leaving them unfilled. A few blocks of the
-register DO carry a numeric Student ID (organize_internal_marks.py captures
-this in its own "Student ID" column) -- that's used directly instead of
-name-matching whenever it's present and valid, since it's more reliable.
+--marks-csv MATCHING ("maximum compatibility" name search)
+-------------------------------------------------------------
+A few blocks of the register carry a numeric Student ID
+(organize_internal_marks.py captures this in its own "Student ID" column)
+-- that's used directly whenever it's present and valid, since it's more
+reliable than a name. Whenever the ID is missing, or given but not found in
+students, the row falls back to searching the database for the student's
+name, tried in increasing order of looseness so a real match isn't missed
+over a formatting quirk, but never guessed into an ambiguous one:
+
+  1. Exact match, case/whitespace/'.'-vs-space-insensitive.
+  2. Same words in a different order (e.g. 'B Siva' vs 'Siva B') --
+     that's a pure word-order difference, not a spelling guess.
+  3. Close-spelling fuzzy match against the roster (e.g. a typo'd
+     surname) -- only applied when exactly one roster name is a close
+     match; logged as an autocorrection either way so it's auditable,
+     not silent.
+
+At every tier, 2+ roster students matching the same name is treated as
+ambiguous and the row is skipped and logged rather than guessed --
+misattributing someone's marks is a worse error than leaving them unfilled.
 
 The organized file has already resolved Name of the Exam / Date / Max.
 Marks for every row (organize_internal_marks.py forward-filled them from
 each block's header row and validated each candidate value), so this
 script just canonicalizes the topic through the same canonicalizer as the
 Offline Exam column above, so a mark row lands on the SAME exams row that
-Offline Exam already created, by (canonical topic, date). marks_obtained
-and exams.max_marks are filled in (or updated, with the change logged)
-rather than duplicated.
+Offline Exam already created (or creates one directly if --csv wasn't
+run), by (canonical topic, date). marks_obtained and exams.max_marks are
+filled in (or updated, with the change logged) rather than duplicated.
 
 LOGGING
 --------
@@ -76,13 +100,14 @@ loading are handled by the other two scripts in this folder, each with
 their own report.
 
 Re-running this script against the same --db will insert exam rows again
-where no matching (topic, date) key exists yet, so run it once per fresh
-load. --marks-csv is safe to re-run: it only fills/updates rows, never
-duplicates them (UNIQUE(student_id, exam_id)).
+where no matching (topic, date) key exists yet, so run --csv once per
+fresh load. --marks-csv is safe to re-run: it only fills/updates rows,
+never duplicates them (UNIQUE(student_id, exam_id)).
 """
 
 import argparse
 import csv
+import difflib
 import re
 import sqlite3
 import sys
@@ -99,6 +124,11 @@ from common import (
 COL_DATE = 1
 COL_ID = 2
 COL_OFFLINE_EXAM = 14
+
+# A raw "Name of Exam" that is actually just a date (a stray column-shift
+# surviving from the source spreadsheet -- see organize_internal_marks.py)
+# should never become its own fake exam topic.
+BARE_DATE_RE = re.compile(r"^\d{1,2}[.\-/ ]\d{1,2}[.\-/ ]\d{2,4}$")
 
 # Exam-topic abbreviations that edit-distance/anagram matching can't bridge
 # (e.g. 'Ari & Rea' vs 'Arithmetic & Reasoning' share almost no characters
@@ -144,7 +174,14 @@ _EXAM_TOPIC_ALIAS_GROUPS = {
         "G. Science",
         "G.Sci",
     ],
-    "General Studies": ["General Studies", "G Studies", "Genaral Studies, G S"],
+    "General Studies": [
+        "General Studies",
+        "G Studies",
+        # NOTE: 'G S' is deliberately NOT included here -- see the
+        # ambiguity note above (could be General Science or General
+        # Studies). Only the unambiguous misspelling is aliased.
+        "Genaral Studies",
+    ],
     "Constable Grand Test": [
         "Constable Grand Test",
         "Constable G T",
@@ -183,6 +220,8 @@ class ExamLoader:
             "exam_marks_filled": 0,
             "exam_marks_updated": 0,
             "exam_max_marks_set": 0,
+            "student_name_reordered": 0,
+            "student_name_fuzzy_matched": 0,
         }
         self.review_notes = []
         self.exam_topic_canon = Canonicalizer(
@@ -208,14 +247,23 @@ class ExamLoader:
         either the daily activity CSV's Offline Exam column or a separate
         --marks-csv register) lands on the same (topic, date) key.
 
-        Tries, in order: (1) the explicit abbreviation alias table (handles
-        'Ari & Rea' -> 'Arithmetic & Reasoning', which edit-distance can't
-        bridge), (2) the generic fuzzy/anagram/exact canonicalizer (handles
-        plain typos like 'Reasoing' -> 'Reasoning').
+        Tries, in order: (0) strip a stray leading/trailing '"' left by an
+        unescaped quote in the source spreadsheet, and reject a bare date
+        (a stray column-shift, not a real topic); (1) the explicit
+        abbreviation alias table (handles 'Ari & Rea' -> 'Arithmetic &
+        Reasoning', which edit-distance can't bridge); (2) the generic
+        fuzzy/anagram/exact canonicalizer (handles plain typos like
+        'Reasoing' -> 'Reasoning').
         """
-        cleaned = collapse_ws(raw)
+        cleaned = collapse_ws(raw).strip('"').strip()
         if not cleaned:
             return cleaned
+        if BARE_DATE_RE.match(cleaned):
+            self.log(
+                f"{context}: Name of Exam {raw!r} looks like a date, not a "
+                f"topic -> row SKIPPED"
+            )
+            return ""
         stripped = strip_exam_suffix(cleaned)
         key = normalize_key(stripped) or normalize_key(cleaned)
         if key in EXAM_TOPIC_ALIASES:
@@ -244,24 +292,8 @@ class ExamLoader:
             self._name_index = idx
         return self._name_index
 
-    def match_student_by_name(self, name_raw, context):
-        """
-        Exact normalized (case/whitespace/'.'-vs-space-insensitive) name
-        match only -- deliberately no fuzzy matching here. A wrong guess
-        on a person's identity (attributing marks to the wrong student) is
-        a worse error than a wrong guess on an exam-topic label, so
-        anything not an unambiguous exact match is skipped and logged
-        rather than guessed.
-        """
-        name = collapse_ws(name_raw)
-        if not name:
-            return None
-        ids = self._student_name_index().get(self._normalize_person_name(name))
-        if not ids:
-            self.log(
-                f"{context}: student name {name!r} not found in students -> row SKIPPED"
-            )
-            return None
+    def _resolve_ids(self, ids, name, context):
+        """Shared ambiguity check for whichever tier found candidate(s)."""
         if len(ids) > 1:
             self.log(
                 f"{context}: student name {name!r} matches {len(ids)} different "
@@ -270,6 +302,91 @@ class ExamLoader:
             )
             return None
         return ids[0]
+
+    def match_student_by_name(self, name_raw, context):
+        """
+        "Maximum compatibility" name search against the students roster,
+        tried in increasing order of looseness so a real match isn't missed
+        over a formatting quirk, but never guessed into an ambiguous one:
+
+          1. Exact match, case/whitespace/'.'-vs-space-insensitive.
+          2. Same words in a different order (e.g. 'B Siva' vs 'Siva B') --
+             a pure word-order difference, not a spelling guess, so it's
+             applied silently just like tier 1.
+          3. Close-spelling fuzzy match against the roster -- only applied
+             when exactly one roster name is a close match. Logged as an
+             autocorrection so it's auditable, not silent (unlike tiers 1
+             and 2, this one really is a guess, just a well-supported one).
+
+        At every tier, 2+ roster students matching is ambiguous and the row
+        is skipped and logged -- misattributing someone's marks is a worse
+        error than leaving them unfilled. A name that matches nothing at
+        any tier is also skipped and logged.
+        """
+        name = collapse_ws(name_raw)
+        if not name:
+            return None
+        idx = self._student_name_index()
+        norm = self._normalize_person_name(name)
+
+        # Tier 1: exact normalized match.
+        ids = idx.get(norm)
+        if ids:
+            return self._resolve_ids(ids, name, context)
+
+        # Tier 2: same words, different order.
+        my_tokens = frozenset(norm.split())
+        if my_tokens:
+            token_matches = [
+                (key, cand_ids)
+                for key, cand_ids in idx.items()
+                if frozenset(key.split()) == my_tokens
+            ]
+            if len(token_matches) == 1:
+                key, cand_ids = token_matches[0]
+                result = self._resolve_ids(cand_ids, name, context)
+                if result is not None:
+                    self.log_auto(
+                        "student_name_reordered",
+                        f"{context}: name {name!r} matched roster entry "
+                        f"{key!r} by word order only -> used that match",
+                    )
+                return result
+            elif len(token_matches) > 1:
+                self.log(
+                    f"{context}: student name {name!r} matches "
+                    f"{len(token_matches)} different roster entries by word "
+                    f"order alone ({[k for k, _ in token_matches]}) -- "
+                    f"ambiguous -> row SKIPPED"
+                )
+                return None
+
+        # Tier 3: close-spelling fuzzy match, only when unambiguous.
+        close = difflib.get_close_matches(norm, idx.keys(), n=3, cutoff=0.84)
+        if len(close) == 1:
+            key = close[0]
+            result = self._resolve_ids(idx[key], name, context)
+            if result is not None:
+                self.log_auto(
+                    "student_name_fuzzy_matched",
+                    f"{context}: name {name!r} had no exact or word-order "
+                    f"match, fuzzy-matched to roster entry {key!r} -> used "
+                    f"that match, please spot-check",
+                )
+            return result
+        elif len(close) > 1:
+            self.log(
+                f"{context}: student name {name!r} has no exact/word-order "
+                f"match and {len(close)} close roster candidates {close} -- "
+                f"ambiguous -> row SKIPPED"
+            )
+            return None
+
+        self.log(
+            f"{context}: student name {name!r} not found in students "
+            f"(tried exact, word-order, and fuzzy matching) -> row SKIPPED"
+        )
+        return None
 
     def get_or_create_exam(self, topic, date):
         key = (topic, date)
@@ -446,6 +563,8 @@ def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
             topic = loader.canonicalize_exam_topic(
                 topic_raw, context=f"line {line_no} (marks)"
             )
+            if not topic:
+                continue  # already logged inside canonicalize_exam_topic
             exam_id = loader.get_or_create_exam(topic, date)
             loader.apply_exam_mark(
                 student_id, exam_id, marks_obtained, max_marks, line_no
@@ -459,7 +578,13 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--csv", required=True, type=Path, help="students_activity.csv")
+    ap.add_argument(
+        "--csv",
+        type=Path,
+        default=None,
+        help="Optional students_activity.csv (daily activity log's Offline "
+        "Exam column). Not required if you only want to load --marks-csv.",
+    )
     ap.add_argument("--db", required=True, type=Path)
     ap.add_argument("--report", type=Path, default=Path("exam_marks_load_report.txt"))
     ap.add_argument(
@@ -468,9 +593,12 @@ def main():
         default=None,
         help="Optional ORGANIZED exam-marks register (run organize_internal_marks.py "
         "on the raw internal_marks.csv first) to match against exams/exam_marks "
-        "and fill in marks_obtained.",
+        "and fill in marks_obtained. Can be used with or without --csv.",
     )
     args = ap.parse_args()
+
+    if not args.csv and not args.marks_csv:
+        ap.error("at least one of --csv or --marks-csv is required")
 
     if not args.db.exists():
         sys.exit(f"--db {args.db} does not exist. Load members into it first.")
@@ -491,37 +619,40 @@ def main():
     skipped_date = 0
     total_rows = 0
 
-    with args.csv.open(encoding="utf-8-sig", newline="") as f:
-        reader = csv.reader(f)
-        for line_no, row in enumerate(reader, start=1):
-            if len(row) <= COL_ID:
-                continue
-            id_raw = row[COL_ID].strip()
-            if not id_raw.isdigit():
-                continue  # header row / blank filler row / bad id, silently skipped
-            total_rows += 1
-            student_id = int(id_raw)
-            if student_id not in existing_student_ids:
-                skipped_id += 1
-                report.append(
-                    f"line {line_no}: student_id {student_id} not found in students table -> row SKIPPED"
-                )
-                continue
+    if args.csv:
+        if not args.csv.exists():
+            sys.exit(f"--csv {args.csv} does not exist.")
+        with args.csv.open(encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            for line_no, row in enumerate(reader, start=1):
+                if len(row) <= COL_ID:
+                    continue
+                id_raw = row[COL_ID].strip()
+                if not id_raw.isdigit():
+                    continue  # header row / blank filler row / bad id, silently skipped
+                total_rows += 1
+                student_id = int(id_raw)
+                if student_id not in existing_student_ids:
+                    skipped_id += 1
+                    report.append(
+                        f"line {line_no}: student_id {student_id} not found in students table -> row SKIPPED"
+                    )
+                    continue
 
-            date = (
-                parse_date(row[COL_DATE], min_year=2005, bound_today=True)
-                if len(row) > COL_DATE
-                else None
-            )
-            if date is None:
-                skipped_date += 1
-                report.append(
-                    f"line {line_no} (student {student_id}): unparseable date {row[COL_DATE]!r} -> row SKIPPED"
+                date = (
+                    parse_date(row[COL_DATE], min_year=2005, bound_today=True)
+                    if len(row) > COL_DATE
+                    else None
                 )
-                continue
+                if date is None:
+                    skipped_date += 1
+                    report.append(
+                        f"line {line_no} (student {student_id}): unparseable date {row[COL_DATE]!r} -> row SKIPPED"
+                    )
+                    continue
 
-            if len(row) > COL_OFFLINE_EXAM:
-                loader.load_exam(student_id, date, row[COL_OFFLINE_EXAM], line_no)
+                if len(row) > COL_OFFLINE_EXAM:
+                    loader.load_exam(student_id, date, row[COL_OFFLINE_EXAM], line_no)
 
     marks_named_rows = marks_applied = None
     if args.marks_csv:
@@ -540,9 +671,10 @@ def main():
     conn.close()
 
     with args.report.open("w") as f:
-        f.write(f"CSV data rows processed (Offline Exam column): {total_rows}\n")
-        f.write(f"Rows skipped (student_id not found): {skipped_id}\n")
-        f.write(f"Rows skipped (unparseable date): {skipped_date}\n\n")
+        if args.csv:
+            f.write(f"CSV data rows processed (Offline Exam column): {total_rows}\n")
+            f.write(f"Rows skipped (student_id not found): {skipped_id}\n")
+            f.write(f"Rows skipped (unparseable date): {skipped_date}\n\n")
         f.write("Rows inserted this run, by table:\n")
         for k, v in loader.counts.items():
             f.write(f"  {k}: {v}\n")
@@ -573,10 +705,11 @@ def main():
         )
         f.write("\n".join(loader.review_notes) + "\n")
 
-    print(f"Processed {total_rows} CSV rows (Offline Exam column).")
-    print(
-        f"Skipped: {skipped_id} (unknown student_id), {skipped_date} (unparseable date)"
-    )
+    if args.csv:
+        print(f"Processed {total_rows} CSV rows (Offline Exam column).")
+        print(
+            f"Skipped: {skipped_id} (unknown student_id), {skipped_date} (unparseable date)"
+        )
     print("Inserted this run:", loader.counts)
     print("Auto-corrected this run:", loader.autocorrection_counts)
     print(f"Possible duplicates flagged for review: {len(loader.review_notes)}")

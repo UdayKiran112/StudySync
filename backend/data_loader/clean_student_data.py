@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from common import Canonicalizer
+
 # --------------------------------------------------------------------------
 # CONFIG
 # --------------------------------------------------------------------------
@@ -758,6 +760,14 @@ def build_digital_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
 # (e.g. "1642. 1565"), as opposed to a decimal point or part of a code.
 BOOK_ID_DOT_SEPARATOR = re.compile(r"(\d)\s*\.\s*(\d)")
 
+# Matches a trailing '(<digits>)' on a Digital Class value, e.g. the
+# "(23)" in "Reasoning Class(23)" -- a headcount that got appended onto
+# the class name at data-entry time instead of being recorded separately.
+# Anchored to the end so a genuine parenthetical inside the name (e.g.
+# "Current Affairs(Feb)(23)") is left alone and only the trailing count is
+# stripped.
+CLASS_COUNT_SUFFIX = re.compile(r"\s*\(\s*(\d+)\s*\)\s*$")
+
 
 def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
     """Multiple comma-separated Book IDs mean the student took out multiple
@@ -881,11 +891,97 @@ def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
 
 
 def build_digital_class(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
+    """One row per Digital Class session.
+
+    Some Digital Class cells have a headcount tacked onto the end, e.g.
+    'Reasoning Class(23)' or 'Current Affairs (Feb)(23)' - that trailing
+    '(<number>)' is how many students were in the class, not part of the
+    class name, so it's split off into its own 'Student Count' column.
+    What's left of the name is then run through common.Canonicalizer so
+    near-duplicate spellings of the same class (typos, casing, 'Class'
+    suffix, extra spacing - e.g. 'Current Affairs' / 'Current Afairs' /
+    'Current Affiars') collapse onto one canonical name instead of each
+    becoming its own value downstream.
+    """
     mask = df["Digital Class"] != ""
     sub = df.loc[mask].copy()
 
+    # Canonicalizer logs corrections/review-flags through these callbacks;
+    # `current` holds the row currently being processed so the callbacks
+    # (which only receive a category/message) can still log full row
+    # context (excel row, student id/name) via ErrorLog.add.
+    current = {}
+
+    def log_auto(category, message):
+        row = current["row"]
+        log.add(
+            "digital_class",
+            "corrected",
+            row["Excel Row"],
+            row["Sl.No"],
+            row["ID NO"],
+            row["Name of the Student"],
+            message,
+        )
+
+    def log_review(message):
+        row = current["row"]
+        log.add(
+            "digital_class",
+            "review",
+            row["Excel Row"],
+            row["Sl.No"],
+            row["ID NO"],
+            row["Name of the Student"],
+            message,
+        )
+
+    canonicalizer = Canonicalizer(log_auto, log_review, category="Digital Class name")
+
+    class_names = []
+    student_counts = []
+
     for idx, row in sub.iterrows():
-        if row["Digital Class"].isdigit():
+        current["row"] = row
+        raw = row["Digital Class"]
+
+        count = ""
+        name_part = raw
+        m = CLASS_COUNT_SUFFIX.search(raw)
+        if m:
+            count = m.group(1)
+            name_part = raw[: m.start()].strip()
+            log.add(
+                "digital_class",
+                "corrected",
+                row["Excel Row"],
+                row["Sl.No"],
+                row["ID NO"],
+                row["Name of the Student"],
+                f"Trailing '({count})' removed from Digital Class value - this is a "
+                f"student headcount for the class, not part of the class name; moved "
+                f"to a separate 'Student Count' column",
+                raw,
+            )
+
+        if name_part == "":
+            # Nothing left but the headcount - no class name to work with.
+            log.add(
+                "digital_class",
+                "review",
+                row["Excel Row"],
+                row["Sl.No"],
+                row["ID NO"],
+                row["Name of the Student"],
+                "Digital Class value was only a headcount in parentheses, with no "
+                "class name - cannot be loaded until fixed",
+                raw,
+            )
+            class_names.append("")
+            student_counts.append(count)
+            continue
+
+        if name_part.isdigit():
             log.add(
                 "digital_class",
                 "review",
@@ -895,8 +991,17 @@ def build_digital_class(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
                 row["Name of the Student"],
                 "Digital Class value is purely numeric, which doesn't look like a class "
                 "name - please verify",
-                row["Digital Class"],
+                name_part,
             )
+            class_names.append(name_part)
+            student_counts.append(count)
+            continue
+
+        canonical = canonicalizer.canonicalize(
+            name_part, context=f"Excel row {row['Excel Row']}"
+        )
+        class_names.append(canonical)
+        student_counts.append(count)
 
     out = pd.DataFrame(
         {
@@ -906,7 +1011,8 @@ def build_digital_class(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
             .where(sub["Date_clean"].notna(), sub["Date"]),
             "Student ID": sub["ID NO"],
             "Student Name": sub["Name of the Student"],
-            "Class Name": sub["Digital Class"],
+            "Class Name": class_names,
+            "Student Count": student_counts,
         }
     )
     return out.reset_index(drop=True)
