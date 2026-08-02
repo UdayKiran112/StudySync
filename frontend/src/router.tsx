@@ -5,6 +5,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { StudentsList } from "./pages/students/StudentsList";
 import { StudentDetail } from "./pages/students/StudentDetail";
 import { AttendancePage } from "./pages/attendance/AttendancePage";
+import { AttendanceRecordsPage } from "./pages/attendance/AttendanceRecordsPage";
 import { DigitalLibraryPage } from "./pages/digital-library/DigitalLibraryPage";
 import { OfflineLibraryPage } from "./pages/offline-library/OfflineLibraryPage";
 import { BooksPage } from "./pages/books/BooksPage";
@@ -43,6 +44,7 @@ export const router = createBrowserRouter([
       { path: "students", element: <StudentsList /> },
       { path: "students/:studentId", element: <StudentDetail /> },
       { path: "attendance", element: <AttendancePage /> },
+      { path: "attendance/records", element: <AttendanceRecordsPage /> },
       { path: "digital-library", element: <DigitalLibraryPage /> },
       { path: "offline-library", element: <OfflineLibraryPage /> },
       { path: "books", element: <BooksPage /> },

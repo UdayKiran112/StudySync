@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import toast from "react-hot-toast";
 import { Trash2, LogIn, LogOut } from "lucide-react";
 import {
@@ -45,6 +45,7 @@ export function DigitalLibraryPage() {
   const [notes, setNotes] = useState("");
   const [entryDate, setEntryDate] = useState(todayIso());
   const [entryTime, setEntryTime] = useState(nowHHMM());
+  const [now, setNow] = useState(new Date());
 
   const [filterDate, setFilterDate] = useState("");
   const [offset, setOffset] = useState(0);
@@ -66,6 +67,11 @@ export function DigitalLibraryPage() {
   // When checking in against a library subscription, the platform is
   // whatever that subscription is called — staff shouldn't (and can't)
   // type a different one. Only "Own account" sessions need a manual name.
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const effectivePlatform =
     accountType === "Library Subscription"
       ? (selectedSubscription?.name ?? "")
@@ -150,6 +156,27 @@ export function DigitalLibraryPage() {
         eyebrow="Library"
         title="Digital library"
         description="Track sessions on JSTOR, Britannica Online, and other subscribed or self-owned platforms."
+        action={
+          <div className="rounded-2xl border border-border bg-card px-4 py-3 text-right text-slate">
+            <p className="text-[11px] uppercase tracking-[0.32em] text-slate-light">
+              Current time
+            </p>
+            <p className="mt-1 text-lg font-semibold text-ink">
+              {now.toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              })}
+            </p>
+            <p className="mt-1 text-sm text-slate">
+              {now.toLocaleDateString([], {
+                weekday: "long",
+                month: "long",
+                day: "numeric",
+              })}
+            </p>
+          </div>
+        }
       />
 
       <div className="mb-8 rounded-lg border border-border bg-card p-6">
