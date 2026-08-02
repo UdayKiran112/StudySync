@@ -39,16 +39,26 @@ so this script:
 Re-running this script against the same --db will insert the rows again
 (there's no dedup key), so run it once per fresh database.
 
-LOGGING: this script writes only to its own report (default
-members_load_report.txt) -- student-activity and exam-marks loading are
-handled by the other two scripts in this folder, each with their own report.
+LOGGING: this script writes to its own two reports:
+  - members_load_report.txt (default) -- skipped rows and DOB warnings.
+  - members_gender_report.txt (default) -- rows where gender could not be
+    derived from the Male/Female marker columns (stored as NULL).
+Both paths are overridable via --report / --gender-report.
+Student-activity and exam-marks loading are handled by the other two
+scripts in this folder, each with their own report(s).
 """
 
 import argparse
 import csv
 import sqlite3
 import sys
+import os
 from pathlib import Path
+
+common_dir = Path(__file__).parent.parent
+if str(common_dir) not in sys.path:
+    sys.path.insert(0, str(common_dir))
+
 
 from common import collapse_ws, parse_date, parse_member_id
 
@@ -86,6 +96,7 @@ def load_rows(csv_path: Path):
     """Yield (row_dict, warnings) for each usable data row, or record a skip."""
     skipped = []
     warnings_report = []
+    gender_warnings = []
     good_rows = []
     seen_ids = set()
 
@@ -133,7 +144,16 @@ def load_rows(csv_path: Path):
                 )
                 continue
 
-            gender = derive_gender(row[COL_MALE_MARKER], row[COL_FEMALE_MARKER])
+            male_marker_raw = row[COL_MALE_MARKER] if len(row) > COL_MALE_MARKER else ""
+            female_marker_raw = (
+                row[COL_FEMALE_MARKER] if len(row) > COL_FEMALE_MARKER else ""
+            )
+            gender = derive_gender(male_marker_raw, female_marker_raw)
+            if gender is None:
+                gender_warnings.append(
+                    f"line {line_no} ({name}): could not derive gender from markers "
+                    f"male={male_marker_raw!r} female={female_marker_raw!r} -> stored as NULL"
+                )
 
             good_rows.append(
                 {
@@ -154,7 +174,7 @@ def load_rows(csv_path: Path):
                 }
             )
 
-    return good_rows, skipped, warnings_report
+    return good_rows, skipped, warnings_report, gender_warnings
 
 
 def main():
@@ -165,6 +185,12 @@ def main():
     ap.add_argument("--db", required=True, type=Path)
     ap.add_argument("--schema", type=Path, default=Path("schema.sql"))
     ap.add_argument("--report", type=Path, default=Path("members_load_report.txt"))
+    ap.add_argument(
+        "--gender-report",
+        type=Path,
+        default=Path("members_gender_report.txt"),
+        help="Report of rows whose gender could not be derived from the marker columns",
+    )
     args = ap.parse_args()
 
     db_is_new = not args.db.exists()
@@ -183,7 +209,7 @@ def main():
     else:
         print(f"Using existing database {args.db} (schema not re-applied)")
 
-    rows, skipped, warnings_report = load_rows(args.csv)
+    rows, skipped, warnings_report, gender_warnings = load_rows(args.csv)
 
     conn.executemany(
         """
@@ -222,7 +248,18 @@ def main():
     print(
         f"{len(warnings_report)} rows had an unparseable DOB (stored as NULL, see {args.report})"
     )
+    with args.gender_report.open("w") as f:
+        f.write(
+            f"Rows with undetermined gender (stored as NULL): {len(gender_warnings)}\n\n"
+        )
+        if gender_warnings:
+            f.write("=== GENDER WARNINGS ===\n")
+            f.write("\n".join(gender_warnings) + "\n")
+
     print(f"Total rows in students table now: {total_students}")
+    print(
+        f"{len(gender_warnings)} rows had undetermined gender (stored as NULL, see {args.gender_report})"
+    )
 
 
 if __name__ == "__main__":

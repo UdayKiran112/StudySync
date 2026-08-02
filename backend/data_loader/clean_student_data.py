@@ -3,23 +3,35 @@ clean_student_data.py
 ======================
 
 Cleans the messy, inconsistent "Student details" export and splits it into
-four separate, well-formed section files:
+four separate, well-formed section files, each written directly into its
+own project folder (sibling to that section's load_*.py script):
 
-    1. digital_library.csv
-    2. offline_library.csv
-    3. digital_class.csv
-    4. attendance.csv
+    1. digital_library/digital_library.csv
+    2. offline_library/offline_library.csv
+    3. coaching/digital_class.csv
+    4. attendance/attendance.csv
 
 Every record that is missing, invalid, or irregular in a way that could not
-be safely auto-corrected is written to error_log.csv, with a plain-English
+be safely auto-corrected is written to that section's own
+error_log_<section>.log (with a corrections_log_<section>.log alongside it
+for changes that WERE auto-corrected), each with a plain-English
 description of the problem and a reference back to the original row in the
-source spreadsheet so it can be fixed by hand.
+source spreadsheet so it can be fixed by hand. The one exception is
+error_log_general.log / corrections_log_general.log (Student ID / Name /
+Date issues, which affect every section) -- those aren't specific to one
+folder, so they're written at the project root instead. See
+ErrorLog.SECTION_FOLDERS for the section -> folder mapping.
 
 USAGE
 -----
-    python clean_student_data.py input.csv output_folder/
+    python clean_student_data.py input.csv
 
-If output_folder is omitted, files are written to ./output/
+Writes into the project folders next to this script by default. Pass a
+second argument to redirect everything under a separate folder instead
+(each section still gets its own subfolder under it) -- useful for a test
+run without touching the real project folders:
+
+    python clean_student_data.py input.csv test_output/
 """
 
 import csv
@@ -135,6 +147,21 @@ class ErrorLog:
         ("attendance", "Attendance"),
     ]
 
+    # Which project folder each section's CSV/logs land in, matching the
+    # sibling folders that hold each domain's load_*.py script (see the
+    # tree at the project root). "digital_class" maps to "coaching" since
+    # that's the only remaining folder without an obvious section of its
+    # own -- rename this mapping if load_coaching.py actually expects a
+    # different file/folder. "general" has no folder of its own (its
+    # issues aren't specific to one section) and is written at the
+    # project root instead -- see write_all.
+    SECTION_FOLDERS = {
+        "digital_library": "digital_library",
+        "offline_library": "offline_library",
+        "digital_class": "coaching",
+        "attendance": "attendance",
+    }
+
     def __init__(self):
         self.rows = []
 
@@ -218,13 +245,22 @@ class ErrorLog:
 
         return "\n".join(lines) + "\n"
 
-    def write_all(self, output_dir: Path, source_file: str):
-        """Writes two .log files per section into output_dir:
+    def write_all(self, base_dir: Path, source_file: str):
+        """Writes two .log files per section:
         error_log_<section>.log       - needs manual review
         corrections_log_<section>.log - auto-corrected, FYI only
+
+        Each section's pair lands in its own project folder (see
+        SECTION_FOLDERS) alongside that section's load_*.py script.
+        "general" has no section folder of its own -- its pair is written
+        directly into base_dir instead.
         """
 
         for section_key, title in self.SECTIONS:
+            folder = self.SECTION_FOLDERS.get(section_key)
+            target_dir = (base_dir / folder) if folder else base_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
+
             review_entries = [
                 e
                 for e in self.rows
@@ -243,7 +279,7 @@ class ErrorLog:
                 source_file,
                 "No issues found for this section.",
             )
-            (output_dir / f"error_log_{section_key}.log").write_text(
+            (target_dir / f"error_log_{section_key}.log").write_text(
                 review_text, encoding="utf-8"
             )
 
@@ -254,7 +290,7 @@ class ErrorLog:
                 source_file,
                 "No auto-corrections were made for this section.",
             )
-            (output_dir / f"corrections_log_{section_key}.log").write_text(
+            (target_dir / f"corrections_log_{section_key}.log").write_text(
                 corrections_text, encoding="utf-8"
             )
 
@@ -1122,12 +1158,27 @@ def build_attendance(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python clean_student_data.py <input.csv> [output_folder]")
+        print("Usage: python clean_student_data.py <input.csv> [base_folder]")
         sys.exit(1)
 
     input_path = Path(sys.argv[1])
-    output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("output")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Base directory the project's per-domain folders live under. Default is
+    # this script's own folder -- the project root, sibling to
+    # digital_library/, offline_library/, coaching/, attendance/ -- so each
+    # cleaned CSV lands directly next to the loader that consumes it. Pass
+    # an explicit folder as the 2nd arg to redirect everything under a
+    # separate test/staging tree instead (the same section subfolders are
+    # still created under it).
+    base_dir = (
+        Path(sys.argv[2]) if len(sys.argv) > 2 else Path(__file__).resolve().parent
+    )
+
+    section_dirs = {
+        section: base_dir / folder
+        for section, folder in ErrorLog.SECTION_FOLDERS.items()
+    }
+    for d in section_dirs.values():
+        d.mkdir(parents=True, exist_ok=True)
 
     log = ErrorLog()
 
@@ -1154,19 +1205,27 @@ def main():
     attendance = build_attendance(df, log)
 
     digital_library.to_csv(
-        output_dir / "digital_library.csv", index=False, quoting=csv.QUOTE_MINIMAL
+        section_dirs["digital_library"] / "digital_library.csv",
+        index=False,
+        quoting=csv.QUOTE_MINIMAL,
     )
     offline_library.to_csv(
-        output_dir / "offline_library.csv", index=False, quoting=csv.QUOTE_MINIMAL
+        section_dirs["offline_library"] / "offline_library.csv",
+        index=False,
+        quoting=csv.QUOTE_MINIMAL,
     )
     digital_class.to_csv(
-        output_dir / "digital_class.csv", index=False, quoting=csv.QUOTE_MINIMAL
+        section_dirs["digital_class"] / "digital_class.csv",
+        index=False,
+        quoting=csv.QUOTE_MINIMAL,
     )
     attendance.to_csv(
-        output_dir / "attendance.csv", index=False, quoting=csv.QUOTE_MINIMAL
+        section_dirs["attendance"] / "attendance.csv",
+        index=False,
+        quoting=csv.QUOTE_MINIMAL,
     )
 
-    log.write_all(output_dir, str(input_path))
+    log.write_all(base_dir, str(input_path))
 
     review_counts = {key: 0 for key, _ in ErrorLog.SECTIONS}
     corrected_counts = {key: 0 for key, _ in ErrorLog.SECTIONS}
@@ -1181,18 +1240,32 @@ def main():
 
     print()
     print("Done. Rows written:")
-    print(f"  Digital Library : {len(digital_library)}")
-    print(f"  Offline Library : {len(offline_library)}")
-    print(f"  Digital Class   : {len(digital_class)}")
-    print(f"  Attendance      : {len(attendance)}")
+    print(
+        f"  Digital Library ({section_dirs['digital_library'] / 'digital_library.csv'}): {len(digital_library)}"
+    )
+    print(
+        f"  Offline Library ({section_dirs['offline_library'] / 'offline_library.csv'}): {len(offline_library)}"
+    )
+    print(
+        f"  Digital Class   ({section_dirs['digital_class'] / 'digital_class.csv'}): {len(digital_class)}"
+    )
+    print(
+        f"  Attendance      ({section_dirs['attendance'] / 'attendance.csv'}): {len(attendance)}"
+    )
     print()
     print(f"Needs manual review ({total_review} total):")
     for key, title in ErrorLog.SECTIONS:
-        print(f"  {review_counts[key]:>5}  error_log_{key}.log  ({title})")
+        folder = ErrorLog.SECTION_FOLDERS.get(key)
+        loc = (base_dir / folder) if folder else base_dir
+        print(f"  {review_counts[key]:>5}  {loc / f'error_log_{key}.log'}  ({title})")
     print()
     print(f"Auto-corrected by the script ({total_corrected} total):")
     for key, title in ErrorLog.SECTIONS:
-        print(f"  {corrected_counts[key]:>5}  corrections_log_{key}.log  ({title})")
+        folder = ErrorLog.SECTION_FOLDERS.get(key)
+        loc = (base_dir / folder) if folder else base_dir
+        print(
+            f"  {corrected_counts[key]:>5}  {loc / f'corrections_log_{key}.log'}  ({title})"
+        )
 
 
 if __name__ == "__main__":
