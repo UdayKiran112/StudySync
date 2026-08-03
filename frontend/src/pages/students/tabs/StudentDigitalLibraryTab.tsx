@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { Spinner, ErrorBanner, EmptyState } from "../../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../../components/ui/Table";
 import { useDigitalLibraryList } from "../../../api/digitalLibrary";
@@ -6,6 +7,12 @@ import { formatDate, formatDuration } from "../../../lib/format";
 
 export function StudentDigitalLibraryTab({ studentId }: { studentId: number }) {
   const { data, isLoading, isError, error } = useDigitalLibraryList({ student_id: studentId, limit: 100 });
+
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   if (isLoading) return <Spinner label="Loading digital library sessions…" />;
   if (isError) return <ErrorBanner message={extractErrorMessage(error)} />;
@@ -22,16 +29,31 @@ export function StudentDigitalLibraryTab({ studentId }: { studentId: number }) {
         <Th>Duration</Th>
       </Thead>
       <tbody>
-        {data.map((u) => (
-          <Tr key={u.usage_id}>
-            <Td>{formatDate(u.date)}</Td>
-            <Td className="font-medium">{u.platform_name}</Td>
-            <Td className="text-slate">{u.account_type === "Library Subscription" ? u.subscription_id : "Own account"}</Td>
-            <Td className="font-mono text-xs">{u.in_time}</Td>
-            <Td className="font-mono text-xs">{u.out_time ?? <span className="text-brass">Still in</span>}</Td>
-            <Td className="text-slate">{formatDuration(u.duration_minutes)}</Td>
-          </Tr>
-        ))}
+        {data.map((u) => {
+          const inDate = u.in_time ? new Date(`${u.date}T${u.in_time}`) : null;
+          const outDate = u.out_time ? new Date(`${u.date}T${u.out_time}`) : null;
+          const effectiveOutDate = outDate ?? now;
+          const inDisplay = inDate
+            ? inDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+            : "—";
+          const outDisplay = outDate
+            ? outDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+            : (inDate ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—");
+          const durationMinutes = inDate
+            ? Math.max(0, Math.round((effectiveOutDate.getTime() - inDate.getTime()) / 60000))
+            : (u.duration_minutes ?? 0);
+
+          return (
+            <Tr key={u.usage_id}>
+              <Td>{formatDate(u.date)}</Td>
+              <Td className="font-medium">{u.platform_name}</Td>
+              <Td className="text-slate">{u.account_type === "Library Subscription" ? u.subscription_id : "Own account"}</Td>
+              <Td className="font-mono text-xs">{inDisplay}</Td>
+              <Td className="font-mono text-xs">{u.out_time ? outDisplay : <span className="text-brass">{outDisplay}</span>}</Td>
+              <Td className="text-slate">{formatDuration(durationMinutes)}</Td>
+            </Tr>
+          );
+        })}
       </tbody>
     </Table>
   );

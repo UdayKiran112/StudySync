@@ -344,34 +344,47 @@ export function DigitalLibraryPage() {
               <Th className="text-right">Actions</Th>
             </Thead>
             <tbody>
-              {data.map((u) => (
-                <Tr key={u.usage_id}>
-                  <Td className="font-mono text-xs">{u.student_id}</Td>
-                  <Td>{formatDate(u.date)}</Td>
-                  <Td className="font-medium">{u.platform_name}</Td>
-                  <Td className="text-slate">
-                    {u.account_type === "Library Subscription"
-                      ? u.subscription_id
-                      : "Own account"}
-                  </Td>
-                  <Td className="font-mono text-xs">{u.in_time}</Td>
-                  <Td className="font-mono text-xs">
-                    {u.out_time ?? <span className="text-brass">Still in</span>}
-                  </Td>
-                  <Td className="text-slate">
-                    {formatDuration(u.duration_minutes)}
-                  </Td>
-                  <Td className="text-right">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setDeleting(u)}
-                    >
-                      <Trash2 size={14} className="text-rust" />
-                    </Button>
-                  </Td>
-                </Tr>
-              ))}
+              {data.map((u) => {
+                const inDate = u.in_time ? new Date(`${u.date}T${u.in_time}`) : null;
+                const outDate = u.out_time ? new Date(`${u.date}T${u.out_time}`) : null;
+                const effectiveOutDate = outDate ?? now;
+                const inDisplay = inDate
+                  ? inDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                  : "—";
+                const outDisplay = outDate
+                  ? outDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                  : (inDate ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—");
+                const durationMinutes = inDate
+                  ? Math.max(0, Math.round((effectiveOutDate.getTime() - inDate.getTime()) / 60000))
+                  : (u.duration_minutes ?? 0);
+
+                return (
+                  <Tr key={u.usage_id}>
+                    <Td className="font-mono text-xs">{u.student_id}</Td>
+                    <Td>{formatDate(u.date)}</Td>
+                    <Td className="font-medium">{u.platform_name}</Td>
+                    <Td className="text-slate">
+                      {u.account_type === "Library Subscription"
+                        ? u.subscription_id
+                        : "Own account"}
+                    </Td>
+                    <Td className="font-mono text-xs">{inDisplay}</Td>
+                    <Td className="font-mono text-xs">
+                      {u.out_time ? outDisplay : <span className="text-brass">{outDisplay}</span>}
+                    </Td>
+                    <Td className="text-slate">{formatDuration(durationMinutes)}</Td>
+                    <Td className="text-right">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setDeleting(u)}
+                      >
+                        <Trash2 size={14} className="text-rust" />
+                      </Button>
+                    </Td>
+                  </Tr>
+                );
+              })}
             </tbody>
           </Table>
           <Pagination
