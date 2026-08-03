@@ -297,44 +297,55 @@ export function AttendancePage() {
               <Th className="text-right">Actions</Th>
             </Thead>
             <tbody>
-              {data.map((a) => (
-                <Tr key={a.attendance_id}>
-                  <Td className="font-mono text-xs">{a.student_id}</Td>
-                  <Td>{formatDate(a.date)}</Td>
-                  <Td>
-                    <StatusTab tone={sessionTone(a.session)}>
-                      {a.session}
-                    </StatusTab>
-                  </Td>
-                  <Td className="font-mono text-xs">{a.check_in ?? "—"}</Td>
-                  <Td className="font-mono text-xs">
-                    {a.check_out ?? (
-                      <span className="text-brass">Still in</span>
-                    )}
-                  </Td>
-                  <Td className="text-slate">
-                    {formatDuration(a.duration_minutes)}
-                  </Td>
-                  <Td className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setEditing(a)}
-                      >
-                        <Pencil size={14} />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setDeleting(a)}
-                      >
-                        <Trash2 size={14} className="text-rust" />
-                      </Button>
-                    </div>
-                  </Td>
-                </Tr>
-              ))}
+              {data.map((a) => {
+                const checkInDate = a.check_in ? new Date(`${a.date}T${a.check_in}`) : null;
+                const checkOutDate = a.check_out ? new Date(`${a.date}T${a.check_out}`) : null;
+                const effectiveCheckOutDate = checkOutDate ?? now;
+                const checkInDisplay = checkInDate
+                  ? checkInDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                  : "—";
+                const checkOutDisplay = checkOutDate
+                  ? checkOutDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                  : (checkInDate ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—");
+                const durationMinutes = checkInDate
+                  ? Math.max(0, Math.round((effectiveCheckOutDate.getTime() - checkInDate.getTime()) / 60000))
+                  : (a.duration_minutes ?? 0);
+
+                return (
+                  <Tr key={a.attendance_id}>
+                    <Td className="font-mono text-xs">{a.student_id}</Td>
+                    <Td>{formatDate(a.date)}</Td>
+                    <Td>
+                      <StatusTab tone={sessionTone(a.session)}>
+                        {a.session}
+                      </StatusTab>
+                    </Td>
+                    <Td className="font-mono text-xs">{checkInDisplay}</Td>
+                    <Td className="font-mono text-xs">
+                      {a.check_out ? checkOutDisplay : <span className="text-brass">{checkOutDisplay}</span>}
+                    </Td>
+                    <Td className="text-slate">{formatDuration(durationMinutes)}</Td>
+                    <Td className="text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setEditing(a)}
+                        >
+                          <Pencil size={14} />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setDeleting(a)}
+                        >
+                          <Trash2 size={14} className="text-rust" />
+                        </Button>
+                      </div>
+                    </Td>
+                  </Tr>
+                );
+              })}
             </tbody>
           </Table>
           <Pagination
