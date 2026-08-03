@@ -58,7 +58,13 @@ import argparse
 import csv
 import sqlite3
 import sys
+import os
 from pathlib import Path
+
+common_dir = Path(__file__).parent.parent
+if str(common_dir) not in sys.path:
+    sys.path.insert(0, str(common_dir))
+
 
 from common import collapse_ws, parse_date
 

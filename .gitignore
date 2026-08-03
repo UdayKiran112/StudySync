@@ -235,6 +235,7 @@ backend/data_loader/coaching/coaching_load_report.txt
 backend/data_loader/digital_library/digital_library_load_report.txt
 backend/data_loader/exam_marks/exam_marks_load_report.txt
 backend/data_loader/internal_marks.csv
+backend/data_loader/marks/internal_marks_organized.csv
 backend/data_loader/members/member_details.csv
 backend/data_loader/members/members_load_report.txt
 backend/data_loader/members/members_gender_report.txt
@@ -244,4 +245,5 @@ backend/data_loader/attendance/attendance.csv
 backend/data_loader/coaching/digital_class.csv
 backend/data_loader/digital_library/digital_library.csv
 backend/data_loader/offline_library/offline_library.csv
+backend/data_loader/marks/exam_marks_load_report*
 

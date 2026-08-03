@@ -1,46 +1,33 @@
 #!/usr/bin/env python3
 """
-Load exam data into the library SQLite database from either or both of:
+Load exam marks into the library SQLite database from an exam-marks
+register (--csv) -- one row per (student name, exam) -- filling in
+marks_obtained (and exams.max_marks) for exams that already exist, or
+creating them directly (get_or_create_exam) if they don't.
 
-  1. The daily activity-log CSV's "Offline Exam" column (one row per
-     student/date who sat an exam that day -- marks_obtained left NULL,
-     since the daily activity CSV never records a numeric score, only a
-     topic). Optional -- see --csv below.
-  2. An exam-marks register (--marks-csv) -- one row per (student name,
-     exam) -- which fills in marks_obtained (and exams.max_marks) for
-     exams that already exist (creating them if they don't). This must be
-     the ORGANIZED file produced by organize_internal_marks.py, not the
-     raw internal_marks.csv directly -- see that script's docstring for
-     why (an Excel merged-cell export needs validated forward-filling
-     before it's one resolved fact per row) and run it first:
+This must be the ORGANIZED file produced by organize_internal_marks.py,
+not the raw internal_marks.csv directly -- see that script's docstring
+for why (an Excel merged-cell export needs validated forward-filling
+before it's one resolved fact per row) and run it first:
 
-        python3 organize_internal_marks.py
+    python3 organize_internal_marks.py
 
---csv and --marks-csv are each optional, but at least one is required.
-Run with --marks-csv alone if all you have is the organized register and
-there's no daily activity CSV to load first -- exams get created directly
-from --marks-csv in that case (get_or_create_exam), rather than relying on
-the Offline Exam column to have created them already.
+Expected columns (organize_internal_marks.py's output): Sl.No, ID, Name
+of Student, Date of Exam, Name of Exam, Marks Obtained, Max Marks.
 
 Usage:
     python3 load_exam_marks.py --db library.db \\
-        --marks-csv internal_marks_organized.csv
+        --csv internal_marks_organized.csv
 
-    # or, with the daily activity log too:
-    python3 load_exam_marks.py --csv students_activity.csv --db library.db \\
-        --marks-csv internal_marks_organized.csv
-
-Requires that library.db already exists and its `students` table is already
-populated (e.g. via load_members.py). Attendance/library/coaching data is
-NOT touched by this script -- see load_student_activity.py, which reads the
-same --csv for those columns and keeps its own separate report.
+Requires that library.db already exists and its `students` table is
+already populated (e.g. via load_members.py).
 
 SCHEMA CHANGE THIS SCRIPT MAKES
 --------------------------------
 exams.max_marks and exam_marks.marks_obtained are NOT NULL in schema.sql,
-but neither CSV source here always supplies those numbers. The first time
-this script runs against a given database, it relaxes those (and the
-matching quizzes/quiz_scores columns, since they're migrated together) to
+but the CSV doesn't always supply those numbers. The first time this
+script runs against a given database, it relaxes those (and the matching
+quizzes/quiz_scores columns, since they're migrated together) to
 nullable -- see common.relax_marks_schema. It's a no-op if a database has
 already been migrated.
 
@@ -61,12 +48,12 @@ unescaped quote in the source spreadsheet is also stripped before matching.
 A raw topic that's actually a bare date (a stray column-shift in the
 source) is rejected rather than turned into a fake exam.
 
---marks-csv MATCHING ("maximum compatibility" name search)
+STUDENT MATCHING ("maximum compatibility" name search)
 -------------------------------------------------------------
-A few blocks of the register carry a numeric Student ID
-(organize_internal_marks.py captures this in its own "Student ID" column)
--- that's used directly whenever it's present and valid, since it's more
-reliable than a name. Whenever the ID is missing, or given but not found in
+A few blocks of the register carry a numeric ID
+(organize_internal_marks.py captures this in its own "ID" column) -- that's
+used directly whenever it's present and valid, since it's more reliable
+than a name. Whenever the ID is missing, or given but not found in
 students, the row falls back to searching the database for the student's
 name, tried in increasing order of looseness so a real match isn't missed
 over a formatting quirk, but never guessed into an ambiguous one:
@@ -86,23 +73,18 @@ misattributing someone's marks is a worse error than leaving them unfilled.
 The organized file has already resolved Name of the Exam / Date / Max.
 Marks for every row (organize_internal_marks.py forward-filled them from
 each block's header row and validated each candidate value), so this
-script just canonicalizes the topic through the same canonicalizer as the
-Offline Exam column above, so a mark row lands on the SAME exams row that
-Offline Exam already created (or creates one directly if --csv wasn't
-run), by (canonical topic, date). marks_obtained and exams.max_marks are
-filled in (or updated, with the change logged) rather than duplicated.
+script just canonicalizes the topic, then looks up/creates the matching
+exams row by (canonical topic, date). marks_obtained and exams.max_marks
+are filled in (or updated, with the change logged) rather than duplicated.
 
 LOGGING
 --------
-This script writes only to its own report (default
-exam_marks_load_report.txt) -- member and attendance/library/coaching
-loading are handled by the other two scripts in this folder, each with
-their own report.
+This script writes a summary report (default exam_marks_load_report.txt)
+plus one detail file per error type (date/student_match/topic/marks/
+conflict -- see ERROR_CATEGORIES and write_error_logs) next to it.
 
-Re-running this script against the same --db will insert exam rows again
-where no matching (topic, date) key exists yet, so run --csv once per
-fresh load. --marks-csv is safe to re-run: it only fills/updates rows,
-never duplicates them (UNIQUE(student_id, exam_id)).
+Safe to re-run against the same --db: it only fills/updates rows, never
+duplicates them (UNIQUE(student_id, exam_id)).
 """
 
 import argparse
@@ -111,7 +93,12 @@ import difflib
 import re
 import sqlite3
 import sys
+import os
 from pathlib import Path
+
+common_dir = Path(__file__).parent.parent
+if str(common_dir) not in sys.path:
+    sys.path.insert(0, str(common_dir))
 
 from common import (
     Canonicalizer,
@@ -120,10 +107,6 @@ from common import (
     parse_date,
     relax_marks_schema,
 )
-
-COL_DATE = 1
-COL_ID = 2
-COL_OFFLINE_EXAM = 14
 
 # A raw "Name of Exam" that is actually just a date (a stray column-shift
 # surviving from the source spreadsheet -- see organize_internal_marks.py)
@@ -208,10 +191,27 @@ def strip_exam_suffix(cleaned: str) -> str:
     return s or cleaned
 
 
+# Error categories -- each gets its own log file (see write_error_logs).
+# Keep these as the single source of truth for valid category names.
+ERR_DATE = "date"
+ERR_STUDENT_MATCH = "student_match"
+ERR_TOPIC = "topic"
+ERR_MARKS = "marks"
+ERR_CONFLICT = "conflict"
+
+ERROR_CATEGORIES = {
+    ERR_DATE: "Unparseable / missing dates",
+    ERR_STUDENT_MATCH: "Student identification problems (unknown ID, "
+    "ambiguous or unmatched name)",
+    ERR_TOPIC: "Invalid or missing exam topic",
+    ERR_MARKS: "Non-numeric or unusable marks values",
+    ERR_CONFLICT: "Existing DB value conflicts with the row's value",
+}
+
+
 class ExamLoader:
-    def __init__(self, conn, report):
+    def __init__(self, conn):
         self.conn = conn
-        self.report = report
         self.exam_cache = {}  # (topic, date) -> exam_id
         self.counts = {"exam_marks": 0}
         self.autocorrections = []
@@ -224,13 +224,47 @@ class ExamLoader:
             "student_name_fuzzy_matched": 0,
         }
         self.review_notes = []
+        # Per-category error messages, so each type of error can be written
+        # to its own file -- see write_error_logs().
+        self.errors_by_category = {cat: [] for cat in ERROR_CATEGORIES}
         self.exam_topic_canon = Canonicalizer(
             self.log_auto, self.log_review, "exam_topic_merged"
         )
         self._name_index = None  # lazily built by _student_name_index()
 
-    def log(self, msg):
-        self.report.append(msg)
+    def log(self, msg, category):
+        if category not in self.errors_by_category:
+            raise ValueError(f"unknown error category {category!r}")
+        self.errors_by_category[category].append(msg)
+
+    def all_errors_count(self):
+        return sum(len(v) for v in self.errors_by_category.values())
+
+    def write_error_logs(self, base_path):
+        """Write one file per error category, alongside base_path, e.g.
+
+            exam_marks_load_report.txt -> exam_marks_load_report_errors_date.txt,
+            exam_marks_load_report_errors_student_match.txt, ...
+
+        Only categories with at least one message get a file, so a clean
+        run doesn't leave a pile of empty files behind. Returns the list of
+        Paths actually written (in ERROR_CATEGORIES order), for the summary
+        report to reference.
+        """
+        written = []
+        stem = base_path.stem
+        parent = base_path.parent
+        for cat, description in ERROR_CATEGORIES.items():
+            msgs = self.errors_by_category[cat]
+            if not msgs:
+                continue
+            path = parent / f"{stem}_errors_{cat}.txt"
+            with path.open("w") as f:
+                f.write(f"{description} ({len(msgs)} rows)\n")
+                f.write("=" * 60 + "\n\n")
+                f.write("\n".join(msgs) + "\n")
+            written.append(path)
+        return written
 
     def log_auto(self, category, msg):
         self.autocorrection_counts[category] = (
@@ -261,7 +295,8 @@ class ExamLoader:
         if BARE_DATE_RE.match(cleaned):
             self.log(
                 f"{context}: Name of Exam {raw!r} looks like a date, not a "
-                f"topic -> row SKIPPED"
+                f"topic -> row SKIPPED",
+                ERR_TOPIC,
             )
             return ""
         stripped = strip_exam_suffix(cleaned)
@@ -298,7 +333,8 @@ class ExamLoader:
             self.log(
                 f"{context}: student name {name!r} matches {len(ids)} different "
                 f"students {ids} -- ambiguous, can't tell which one this mark "
-                f"belongs to -> row SKIPPED"
+                f"belongs to -> row SKIPPED",
+                ERR_STUDENT_MATCH,
             )
             return None
         return ids[0]
@@ -357,7 +393,8 @@ class ExamLoader:
                     f"{context}: student name {name!r} matches "
                     f"{len(token_matches)} different roster entries by word "
                     f"order alone ({[k for k, _ in token_matches]}) -- "
-                    f"ambiguous -> row SKIPPED"
+                    f"ambiguous -> row SKIPPED",
+                    ERR_STUDENT_MATCH,
                 )
                 return None
 
@@ -378,13 +415,15 @@ class ExamLoader:
             self.log(
                 f"{context}: student name {name!r} has no exact/word-order "
                 f"match and {len(close)} close roster candidates {close} -- "
-                f"ambiguous -> row SKIPPED"
+                f"ambiguous -> row SKIPPED",
+                ERR_STUDENT_MATCH,
             )
             return None
 
         self.log(
             f"{context}: student name {name!r} not found in students "
-            f"(tried exact, word-order, and fuzzy matching) -> row SKIPPED"
+            f"(tried exact, word-order, and fuzzy matching) -> row SKIPPED",
+            ERR_STUDENT_MATCH,
         )
         return None
 
@@ -429,7 +468,8 @@ class ExamLoader:
                 self.log(
                     f"line {line_no}: exam_id {exam_id} already has max_marks "
                     f"{current_max}, this row says {max_marks} -- kept {current_max}, "
-                    f"please review"
+                    f"please review",
+                    ERR_CONFLICT,
                 )
 
         existing = self.conn.execute(
@@ -461,25 +501,10 @@ class ExamLoader:
             self.log(
                 f"line {line_no}: student {student_id}, exam_id {exam_id} already "
                 f"has marks_obtained {existing[0]}, this row says {marks_obtained} "
-                f"-- kept {existing[0]}, please review"
+                f"-- kept {existing[0]}, please review",
+                ERR_CONFLICT,
             )
         # else: identical value already recorded, nothing to do
-
-    def load_exam(self, student_id, date, topic_raw, line_no):
-        topic = self.canonicalize_exam_topic(
-            topic_raw, context=f"line {line_no} (exam)"
-        )
-        if not topic:
-            return
-        exam_id = self.get_or_create_exam(topic, date)
-        try:
-            self.conn.execute(
-                "INSERT INTO exam_marks (student_id, exam_id, marks_obtained) VALUES (?, ?, NULL)",
-                (student_id, exam_id),
-            )
-            self.counts["exam_marks"] += 1
-        except sqlite3.IntegrityError:
-            pass
 
 
 def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
@@ -492,8 +517,8 @@ def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
     is already one fully-resolved (student, exam, marks) fact, so this
     function only has to do the DB-side work: match the student,
     canonicalize the topic, and apply the mark. See the module docstring's
-    --marks-csv section for the name-matching rule, and
-    organize_internal_marks.py's own docstring for what "Student ID" (a
+    STUDENT MATCHING section for the name-matching rule, and
+    organize_internal_marks.py's own docstring for what the "ID" column (a
     few blocks of this register give one directly, more reliable than
     name-matching) means below.
     """
@@ -514,14 +539,16 @@ def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
             if date is None:
                 loader.log(
                     f"line {line_no} ({name!r}): unparseable Date of Exam "
-                    f"{row.get('Date of Exam')!r} -> row SKIPPED"
+                    f"{row.get('Date of Exam')!r} -> row SKIPPED",
+                    ERR_DATE,
                 )
                 continue
 
             topic_raw = collapse_ws(row.get("Name of Exam", ""))
             if not topic_raw:
                 loader.log(
-                    f"line {line_no} ({name!r}): missing Name of Exam -> row SKIPPED"
+                    f"line {line_no} ({name!r}): missing Name of Exam -> row SKIPPED",
+                    ERR_TOPIC,
                 )
                 continue
 
@@ -533,7 +560,8 @@ def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
             except ValueError:
                 loader.log(
                     f"line {line_no} ({name!r}): Marks Obtained {marks_raw!r} isn't "
-                    f"numeric -> row SKIPPED"
+                    f"numeric -> row SKIPPED",
+                    ERR_MARKS,
                 )
                 continue
 
@@ -544,14 +572,15 @@ def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
                 max_marks = None
 
             student_id = None
-            id_override = collapse_ws(row.get("Student ID", ""))
+            id_override = collapse_ws(row.get("ID", ""))
             if id_override:
                 if id_override.isdigit() and int(id_override) in existing_student_ids:
                     student_id = int(id_override)
                 else:
                     loader.log(
-                        f"line {line_no} ({name!r}): Student ID override {id_override!r} "
-                        f"not found in students table -- falling back to name match"
+                        f"line {line_no} ({name!r}): ID override {id_override!r} "
+                        f"not found in students table -- falling back to name match",
+                        ERR_STUDENT_MATCH,
                     )
             if student_id is None:
                 student_id = loader.match_student_by_name(
@@ -580,25 +609,18 @@ def main():
     )
     ap.add_argument(
         "--csv",
+        required=True,
         type=Path,
-        default=None,
-        help="Optional students_activity.csv (daily activity log's Offline "
-        "Exam column). Not required if you only want to load --marks-csv.",
+        help="ORGANIZED exam-marks register (run organize_internal_marks.py "
+        "on the raw internal_marks.csv first) to match against exams/exam_marks "
+        "and fill in marks_obtained.",
     )
     ap.add_argument("--db", required=True, type=Path)
     ap.add_argument("--report", type=Path, default=Path("exam_marks_load_report.txt"))
-    ap.add_argument(
-        "--marks-csv",
-        type=Path,
-        default=None,
-        help="Optional ORGANIZED exam-marks register (run organize_internal_marks.py "
-        "on the raw internal_marks.csv first) to match against exams/exam_marks "
-        "and fill in marks_obtained. Can be used with or without --csv.",
-    )
     args = ap.parse_args()
 
-    if not args.csv and not args.marks_csv:
-        ap.error("at least one of --csv or --marks-csv is required")
+    if not args.csv.exists():
+        sys.exit(f"--csv {args.csv} does not exist.")
 
     if not args.db.exists():
         sys.exit(f"--db {args.db} does not exist. Load members into it first.")
@@ -612,56 +634,9 @@ def main():
         r[0] for r in conn.execute("SELECT student_id FROM students")
     }
 
-    report = []
-    loader = ExamLoader(conn, report)
+    loader = ExamLoader(conn)
 
-    skipped_id = 0
-    skipped_date = 0
-    total_rows = 0
-
-    if args.csv:
-        if not args.csv.exists():
-            sys.exit(f"--csv {args.csv} does not exist.")
-        with args.csv.open(encoding="utf-8-sig", newline="") as f:
-            reader = csv.reader(f)
-            for line_no, row in enumerate(reader, start=1):
-                if len(row) <= COL_ID:
-                    continue
-                id_raw = row[COL_ID].strip()
-                if not id_raw.isdigit():
-                    continue  # header row / blank filler row / bad id, silently skipped
-                total_rows += 1
-                student_id = int(id_raw)
-                if student_id not in existing_student_ids:
-                    skipped_id += 1
-                    report.append(
-                        f"line {line_no}: student_id {student_id} not found in students table -> row SKIPPED"
-                    )
-                    continue
-
-                date = (
-                    parse_date(row[COL_DATE], min_year=2005, bound_today=True)
-                    if len(row) > COL_DATE
-                    else None
-                )
-                if date is None:
-                    skipped_date += 1
-                    report.append(
-                        f"line {line_no} (student {student_id}): unparseable date {row[COL_DATE]!r} -> row SKIPPED"
-                    )
-                    continue
-
-                if len(row) > COL_OFFLINE_EXAM:
-                    loader.load_exam(student_id, date, row[COL_OFFLINE_EXAM], line_no)
-
-    marks_named_rows = marks_applied = None
-    if args.marks_csv:
-        if not args.marks_csv.exists():
-            print(f"--marks-csv {args.marks_csv} does not exist -- skipping.")
-        else:
-            marks_named_rows, marks_applied = load_marks_csv(
-                args.marks_csv, loader, existing_student_ids
-            )
+    named_rows, marks_applied = load_marks_csv(args.csv, loader, existing_student_ids)
 
     conn.commit()
 
@@ -670,11 +645,16 @@ def main():
         totals[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
     conn.close()
 
+    # Each error type gets its own file next to --report (e.g.
+    # exam_marks_load_report_errors_date.txt), rather than one shared
+    # "PER-ROW SKIPS" dump -- makes it easy to hand just the "date" file to
+    # whoever fixes source-CSV dates, etc. Categories with zero rows this
+    # run don't get a file.
+    error_files = loader.write_error_logs(args.report)
+
     with args.report.open("w") as f:
-        if args.csv:
-            f.write(f"CSV data rows processed (Offline Exam column): {total_rows}\n")
-            f.write(f"Rows skipped (student_id not found): {skipped_id}\n")
-            f.write(f"Rows skipped (unparseable date): {skipped_date}\n\n")
+        f.write(f"CSV rows with a student name: {named_rows}\n")
+        f.write(f"Marks applied: {marks_applied}\n\n")
         f.write("Rows inserted this run, by table:\n")
         for k, v in loader.counts.items():
             f.write(f"  {k}: {v}\n")
@@ -689,13 +669,16 @@ def main():
         f.write(
             f"\nPossible duplicates NOT auto-merged (need manual review): {len(loader.review_notes)}\n"
         )
-        if marks_named_rows is not None:
-            f.write(
-                f"\n--marks-csv: {marks_named_rows} rows with a student name, "
-                f"{marks_applied} marks applied\n"
-            )
-        f.write("\n=== PER-ROW SKIPS (row or part of it was NOT loaded) ===\n")
-        f.write("\n".join(report) + "\n")
+        f.write(
+            f"\nRows skipped this run, by error type ({loader.all_errors_count()} total):\n"
+        )
+        for cat, description in ERROR_CATEGORIES.items():
+            count = len(loader.errors_by_category[cat])
+            f.write(f"  {cat} ({description}): {count}\n")
+        if error_files:
+            f.write("\nPer-row detail for each error type written to:\n")
+            for p in error_files:
+                f.write(f"  {p}\n")
         f.write(
             "\n=== PER-ROW AUTO-CORRECTIONS (loaded, but adjusted from the raw CSV) ===\n"
         )
@@ -705,20 +688,17 @@ def main():
         )
         f.write("\n".join(loader.review_notes) + "\n")
 
-    if args.csv:
-        print(f"Processed {total_rows} CSV rows (Offline Exam column).")
-        print(
-            f"Skipped: {skipped_id} (unknown student_id), {skipped_date} (unparseable date)"
-        )
+    print(
+        f"Processed {named_rows} CSV rows with a student name, {marks_applied} marks applied."
+    )
     print("Inserted this run:", loader.counts)
     print("Auto-corrected this run:", loader.autocorrection_counts)
     print(f"Possible duplicates flagged for review: {len(loader.review_notes)}")
-    if marks_named_rows is not None:
-        print(
-            f"--marks-csv: {marks_named_rows} rows with a student name, "
-            f"{marks_applied} marks applied"
-        )
-    print(f"Full details in {args.report}")
+    if error_files:
+        print(f"Skipped rows logged by error type ({loader.all_errors_count()} total):")
+        for p in error_files:
+            print(f"  {p}")
+    print(f"Full summary in {args.report}")
 
 
 if __name__ == "__main__":
