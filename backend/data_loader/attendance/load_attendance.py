@@ -84,7 +84,7 @@ common_dir = Path(__file__).parent.parent
 if str(common_dir) not in sys.path:
     sys.path.insert(0, str(common_dir))
 
-from common import parse_date, parse_time
+from common import parse_date, parse_time, parse_member_id
 
 LUNCH_START_MIN = 13 * 60  # 13:00
 LUNCH_END_MIN = 14 * 60  # 14:00
@@ -201,11 +201,15 @@ def main():
     with args.csv.open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for line_no, row in enumerate(reader, start=2):  # +1 for header row
-            id_raw = (row.get("Student ID") or "").strip()
-            if not id_raw.isdigit():
-                continue
             total_rows += 1
-            student_id = int(id_raw)
+            id_raw = (row.get("Student ID") or "").strip()
+            student_id = parse_member_id(id_raw)
+            if student_id is None:
+                skipped_id += 1
+                errors_by_category[ERR_STUDENT_MATCH].append(
+                    f"line {line_no}: Student ID {id_raw!r} not parseable -> row SKIPPED"
+                )
+                continue
             if student_id not in student_status:
                 skipped_id += 1
                 errors_by_category[ERR_STUDENT_MATCH].append(
