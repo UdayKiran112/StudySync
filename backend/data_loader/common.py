@@ -84,13 +84,33 @@ def parse_date(
 
 
 def parse_time(raw: str):
-    """Normalize to zero-padded HH:MM (24h), matching the schema's GLOB check."""
+    """Normalize to zero-padded HH:MM (24h), matching the schema's GLOB check.
+
+    Tolerates the recoverable typos this dataset actually contains:
+      - a separator other than ':' (';', '.', '"') between hour and minute
+        (e.g. '14.05', '14;05' -> '14:05')
+      - a missing leading zero on the minute (e.g. '16:5' -> '16:05')
+      - a missing separator entirely, with 3 or 4 digits total
+        (e.g. '930' -> '09:30', '1752' -> '17:52')
+    Anything else (no hour digits at all, a bare trailing separator, an
+    ambiguous digit count like a stray 5-digit run) is left unparseable
+    and returns None so the caller can log/skip it rather than guess.
+    """
     if not raw:
         return None
-    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", raw)
-    if not m:
-        return None
-    h, mnt = int(m.group(1)), int(m.group(2))
+    s = raw.strip()
+    m = re.match(r'^(\d{1,2})[:;."](\d{1,2})$', s)
+    if m:
+        h, mnt = int(m.group(1)), int(m.group(2))
+    else:
+        m2 = re.match(r"^(\d{3,4})$", s)
+        if not m2:
+            return None
+        digits = m2.group(1)
+        if len(digits) == 3:
+            h, mnt = int(digits[0]), int(digits[1:])
+        else:
+            h, mnt = int(digits[:2]), int(digits[2:])
     if not (0 <= h <= 23) or not (0 <= mnt <= 59):
         return None
     return f"{h:02d}:{mnt:02d}"
