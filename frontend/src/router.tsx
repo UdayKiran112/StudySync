@@ -59,7 +59,10 @@ export const router = createBrowserRouter([
       { path: "coaching-classes", element: <CoachingClassesPage /> },
       { path: "coaching-classes/:classId", element: <CoachingClassDetail /> },
       { path: "other-activities", element: <OtherActivitiesPage /> },
-      { path: "other-activities/:activityId", element: <OtherActivityDetail /> },
+      {
+        path: "other-activities/:activityId",
+        element: <OtherActivityDetail />,
+      },
     ],
   },
 ]);

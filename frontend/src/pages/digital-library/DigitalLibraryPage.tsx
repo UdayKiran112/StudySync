@@ -45,6 +45,11 @@ export function DigitalLibraryPage() {
   const [notes, setNotes] = useState("");
   const [entryDate, setEntryDate] = useState(todayIso());
   const [entryTime, setEntryTime] = useState(nowHHMM());
+  // Tracks whether staff has manually edited the date/time fields. While
+  // untouched, they keep following the live clock below; once edited, we
+  // stop overwriting what the user typed.
+  const [dateTouched, setDateTouched] = useState(false);
+  const [timeTouched, setTimeTouched] = useState(false);
   const [now, setNow] = useState(new Date());
 
   const [filterDate, setFilterDate] = useState("");
@@ -72,6 +77,16 @@ export function DigitalLibraryPage() {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  // Keep the check-in/out date & time fields following the live IST clock
+  // until the staff member edits one manually. Previously these were only
+  // ever set once on mount, so the form silently went stale until a page
+  // refresh (or a successful submit, which happened to reset them).
+  useEffect(() => {
+    if (!dateTouched) setEntryDate(todayIso(now));
+    if (!timeTouched) setEntryTime(nowHHMM(now));
+  }, [now, dateTouched, timeTouched]);
+
   const effectivePlatform =
     accountType === "Library Subscription"
       ? (selectedSubscription?.name ?? "")
@@ -132,6 +147,8 @@ export function DigitalLibraryPage() {
       setStudent(null);
       setEntryDate(todayIso());
       setEntryTime(nowHHMM());
+      setDateTouched(false);
+      setTimeTouched(false);
     } catch (err) {
       toast.error(extractErrorMessage(err));
     }
@@ -286,7 +303,10 @@ export function DigitalLibraryPage() {
                 <Input
                   type="date"
                   value={entryDate}
-                  onChange={(e) => setEntryDate(e.target.value)}
+                  onChange={(e) => {
+                    setEntryDate(e.target.value);
+                    setDateTouched(true);
+                  }}
                 />
               </Field>
             )}
@@ -297,7 +317,10 @@ export function DigitalLibraryPage() {
               <Input
                 type="time"
                 value={entryTime}
-                onChange={(e) => setEntryTime(e.target.value)}
+                onChange={(e) => {
+                  setEntryTime(e.target.value);
+                  setTimeTouched(true);
+                }}
               />
             </Field>
           </div>
@@ -345,17 +368,40 @@ export function DigitalLibraryPage() {
             </Thead>
             <tbody>
               {data.map((u) => {
-                const inDate = u.in_time ? new Date(`${u.date}T${u.in_time}`) : null;
-                const outDate = u.out_time ? new Date(`${u.date}T${u.out_time}`) : null;
+                const inDate = u.in_time
+                  ? new Date(`${u.date}T${u.in_time}`)
+                  : null;
+                const outDate = u.out_time
+                  ? new Date(`${u.date}T${u.out_time}`)
+                  : null;
                 const effectiveOutDate = outDate ?? now;
                 const inDisplay = inDate
-                  ? inDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                  ? inDate.toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })
                   : "—";
                 const outDisplay = outDate
-                  ? outDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-                  : (inDate ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—");
+                  ? outDate.toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })
+                  : inDate
+                    ? now.toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })
+                    : "—";
                 const durationMinutes = inDate
-                  ? Math.max(0, Math.round((effectiveOutDate.getTime() - inDate.getTime()) / 60000))
+                  ? Math.max(
+                      0,
+                      Math.round(
+                        (effectiveOutDate.getTime() - inDate.getTime()) / 60000,
+                      ),
+                    )
                   : (u.duration_minutes ?? 0);
 
                 return (
@@ -370,9 +416,15 @@ export function DigitalLibraryPage() {
                     </Td>
                     <Td className="font-mono text-xs">{inDisplay}</Td>
                     <Td className="font-mono text-xs">
-                      {u.out_time ? outDisplay : <span className="text-brass">{outDisplay}</span>}
+                      {u.out_time ? (
+                        outDisplay
+                      ) : (
+                        <span className="text-brass">{outDisplay}</span>
+                      )}
                     </Td>
-                    <Td className="text-slate">{formatDuration(durationMinutes)}</Td>
+                    <Td className="text-slate">
+                      {formatDuration(durationMinutes)}
+                    </Td>
                     <Td className="text-right">
                       <Button
                         size="sm"

@@ -45,6 +45,11 @@ export function AttendancePage() {
   const [student, setStudent] = useState<Student | null>(null);
   const [entryDate, setEntryDate] = useState(todayIso());
   const [entryTime, setEntryTime] = useState(nowHHMM());
+  // Tracks whether staff has manually edited the date/time fields. While
+  // untouched, they keep following the live clock below; once edited, we
+  // stop overwriting what the user typed.
+  const [dateTouched, setDateTouched] = useState(false);
+  const [timeTouched, setTimeTouched] = useState(false);
   const [filterSession, setFilterSession] = useState("");
   const [offset, setOffset] = useState(0);
   const [editing, setEditing] = useState<Attendance | undefined>(undefined);
@@ -65,6 +70,15 @@ export function AttendancePage() {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  // Keep the check-in/out date & time fields following the live IST clock
+  // until the staff member edits one manually. Previously these were only
+  // ever set once on mount, so the form silently went stale until a page
+  // refresh (or a successful submit, which happened to reset them).
+  useEffect(() => {
+    if (!dateTouched) setEntryDate(todayIso(now));
+    if (!timeTouched) setEntryTime(nowHHMM(now));
+  }, [now, dateTouched, timeTouched]);
 
   const {
     data: allData,
@@ -124,6 +138,8 @@ export function AttendancePage() {
       setStudent(null);
       setEntryDate(todayIso());
       setEntryTime(nowHHMM());
+      setDateTouched(false);
+      setTimeTouched(false);
     } catch (err) {
       toast.error(extractErrorMessage(err));
     }
@@ -213,7 +229,10 @@ export function AttendancePage() {
               <Input
                 type="date"
                 value={entryDate}
-                onChange={(e) => setEntryDate(e.target.value)}
+                onChange={(e) => {
+                  setEntryDate(e.target.value);
+                  setDateTouched(true);
+                }}
               />
             </Field>
           )}
@@ -224,7 +243,10 @@ export function AttendancePage() {
             <Input
               type="time"
               value={entryTime}
-              onChange={(e) => setEntryTime(e.target.value)}
+              onChange={(e) => {
+                setEntryTime(e.target.value);
+                setTimeTouched(true);
+              }}
             />
           </Field>
           <Button type="submit" variant="primary" disabled={pending}>
@@ -298,17 +320,42 @@ export function AttendancePage() {
             </Thead>
             <tbody>
               {data.map((a) => {
-                const checkInDate = a.check_in ? new Date(`${a.date}T${a.check_in}`) : null;
-                const checkOutDate = a.check_out ? new Date(`${a.date}T${a.check_out}`) : null;
+                const checkInDate = a.check_in
+                  ? new Date(`${a.date}T${a.check_in}`)
+                  : null;
+                const checkOutDate = a.check_out
+                  ? new Date(`${a.date}T${a.check_out}`)
+                  : null;
                 const effectiveCheckOutDate = checkOutDate ?? now;
                 const checkInDisplay = checkInDate
-                  ? checkInDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                  ? checkInDate.toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })
                   : "—";
                 const checkOutDisplay = checkOutDate
-                  ? checkOutDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-                  : (checkInDate ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—");
+                  ? checkOutDate.toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })
+                  : checkInDate
+                    ? now.toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })
+                    : "—";
                 const durationMinutes = checkInDate
-                  ? Math.max(0, Math.round((effectiveCheckOutDate.getTime() - checkInDate.getTime()) / 60000))
+                  ? Math.max(
+                      0,
+                      Math.round(
+                        (effectiveCheckOutDate.getTime() -
+                          checkInDate.getTime()) /
+                          60000,
+                      ),
+                    )
                   : (a.duration_minutes ?? 0);
 
                 return (
@@ -322,9 +369,15 @@ export function AttendancePage() {
                     </Td>
                     <Td className="font-mono text-xs">{checkInDisplay}</Td>
                     <Td className="font-mono text-xs">
-                      {a.check_out ? checkOutDisplay : <span className="text-brass">{checkOutDisplay}</span>}
+                      {a.check_out ? (
+                        checkOutDisplay
+                      ) : (
+                        <span className="text-brass">{checkOutDisplay}</span>
+                      )}
                     </Td>
-                    <Td className="text-slate">{formatDuration(durationMinutes)}</Td>
+                    <Td className="text-slate">
+                      {formatDuration(durationMinutes)}
+                    </Td>
                     <Td className="text-right">
                       <div className="flex justify-end gap-1">
                         <Button
