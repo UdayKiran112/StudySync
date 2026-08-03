@@ -30,7 +30,6 @@ export function AttendanceRecordsPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [session, setSession] = useState("");
-  const [studentId, setStudentId] = useState("");
   const [offset, setOffset] = useState(0);
   const [editing, setEditing] = useState<Attendance | undefined>(undefined);
   const [deleting, setDeleting] = useState<Attendance | undefined>(undefined);
@@ -41,11 +40,6 @@ export function AttendanceRecordsPage() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const studentIdValue = studentId.trim();
-  const studentIdNumber = studentIdValue ? Number(studentIdValue) : undefined;
-  const studentIdFilter = Number.isFinite(studentIdNumber)
-    ? studentIdNumber
-    : undefined;
 
   const {
     data: allData,
@@ -56,7 +50,6 @@ export function AttendanceRecordsPage() {
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
     session: session || undefined,
-    student_id: studentIdFilter,
   });
 
   const sortedData = useMemo(
@@ -91,16 +84,15 @@ export function AttendanceRecordsPage() {
     setDateFrom("");
     setDateTo("");
     setSession("");
-    setStudentId("");
-    setOffset(0);
-  }
+      setOffset(0);
+    }
 
   return (
     <div>
       <PageHeader
         eyebrow="Front desk"
         title="Attendance records"
-        description="Search historical attendance by date range, session, or student ID. Edit or remove records from the same list."
+        description="Search historical attendance by date range or session. Edit or remove records from the same list."
         action={
           <div className="rounded-2xl border border-border bg-card px-4 py-3 text-right text-slate">
             <p className="text-[11px] uppercase tracking-[0.32em] text-slate-light">
@@ -146,7 +138,7 @@ export function AttendanceRecordsPage() {
         </div>
       </div>
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-[220px_220px_220px_1fr]">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-[220px_220px_1fr]">
         <Field label="From">
           <Input
             type="date"
@@ -181,18 +173,6 @@ export function AttendanceRecordsPage() {
             <option value="Full Day">Full Day</option>
           </Select>
         </Field>
-        <Field label="Student ID">
-          <Input
-            type="number"
-            min="1"
-            value={studentId}
-            onChange={(e) => {
-              setStudentId(e.target.value);
-              setOffset(0);
-            }}
-            placeholder="e.g. 12345"
-          />
-        </Field>
       </div>
 
       {isLoading && <Spinner label="Loading attendance records…" />}
@@ -214,44 +194,55 @@ export function AttendanceRecordsPage() {
               <Th className="text-right">Actions</Th>
             </Thead>
             <tbody>
-              {data.map((record) => (
-                <Tr key={record.attendance_id}>
-                  <Td className="font-mono text-xs">{record.student_id}</Td>
-                  <Td>{formatDate(record.date)}</Td>
-                  <Td>
-                    <StatusTab tone={sessionTone(record.session)}>
-                      {record.session}
-                    </StatusTab>
-                  </Td>
-                  <Td className="font-mono text-xs">{record.check_in ?? "—"}</Td>
-                  <Td className="font-mono text-xs">
-                    {record.check_out ?? (
-                      <span className="text-brass">Still in</span>
-                    )}
-                  </Td>
-                  <Td className="text-slate">
-                    {formatDuration(record.duration_minutes)}
-                  </Td>
-                  <Td className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setEditing(record)}
-                      >
-                        <Pencil size={14} />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setDeleting(record)}
-                      >
-                        <Trash2 size={14} className="text-rust" />
-                      </Button>
-                    </div>
-                  </Td>
-                </Tr>
-              ))}
+              {data.map((record) => {
+                              const checkInDate = record.check_in ? new Date(`${record.date}T${record.check_in}`) : null;
+                              const checkOutDate = record.check_out ? new Date(`${record.date}T${record.check_out}`) : null;
+                              const effectiveCheckOutDate = checkOutDate ?? now;
+                              const checkInDisplay = checkInDate
+                                ? checkInDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                                : "—";
+                              const checkOutDisplay = checkOutDate
+                                ? checkOutDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+                                : (checkInDate ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—");
+                              const durationMinutes = checkInDate
+                                ? Math.max(0, Math.round((effectiveCheckOutDate.getTime() - checkInDate.getTime()) / 60000))
+                                : (record.duration_minutes ?? 0);
+
+                              return (
+                                <Tr key={record.attendance_id}>
+                                  <Td className="font-mono text-xs">{record.student_id}</Td>
+                                  <Td>{formatDate(record.date)}</Td>
+                                  <Td>
+                                    <StatusTab tone={sessionTone(record.session)}>
+                                      {record.session}
+                                    </StatusTab>
+                                  </Td>
+                                  <Td className="font-mono text-xs">{checkInDisplay}</Td>
+                                  <Td className="font-mono text-xs">
+                                    {record.check_out ? checkOutDisplay : <span className="text-brass">{checkOutDisplay}</span>}
+                                  </Td>
+                                  <Td className="text-slate">{formatDuration(durationMinutes)}</Td>
+                                  <Td className="text-right">
+                                    <div className="flex justify-end gap-1">
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => setEditing(record)}
+                                      >
+                                        <Pencil size={14} />
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => setDeleting(record)}
+                                      >
+                                        <Trash2 size={14} className="text-rust" />
+                                      </Button>
+                                    </div>
+                                  </Td>
+                                </Tr>
+                              );
+                            })}
             </tbody>
           </Table>
           <Pagination
