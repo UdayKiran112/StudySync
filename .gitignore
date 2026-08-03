@@ -246,4 +246,5 @@ backend/data_loader/coaching/digital_class.csv
 backend/data_loader/digital_library/digital_library.csv
 backend/data_loader/offline_library/offline_library.csv
 backend/data_loader/marks/exam_marks_load_report*
+backend/data_loader/attendance/attendance_load_report*
 
