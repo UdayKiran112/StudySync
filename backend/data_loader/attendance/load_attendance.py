@@ -62,10 +62,12 @@ WHAT GETS SKIPPED (and logged to the report)
 
 LOGGING
 --------
-This script writes only to its own report (default
-attendance_load_report.txt). Offline library, digital library, coaching,
-and exam marks are handled by the other loader scripts in this folder,
-each with their own separate report.
+This script writes a summary report (default attendance_load_report.txt)
+plus one detail file per error type (student_match/date/time/duration/
+insert_conflict -- see ERROR_CATEGORIES and write_error_logs) next to it.
+Offline library, digital library, coaching, and exam marks are handled by
+the other loader scripts in this folder, each with their own separate
+report.
 
 Re-running this script against the same --db will insert everything again
 (no dedup key across runs), so run it once per fresh load.
@@ -86,6 +88,47 @@ from common import parse_date, parse_time
 
 LUNCH_START_MIN = 13 * 60  # 13:00
 LUNCH_END_MIN = 14 * 60  # 14:00
+
+# Error categories -- each gets its own log file (see write_error_logs).
+ERR_STUDENT_MATCH = "student_match"
+ERR_DATE = "date"
+ERR_TIME = "time"
+ERR_DURATION = "duration"
+ERR_INSERT = "insert_conflict"
+
+ERROR_CATEGORIES = {
+    ERR_STUDENT_MATCH: "Unknown student_id (not found in students table)",
+    ERR_DATE: "Unparseable / missing dates",
+    ERR_TIME: "No usable check-in time (can't derive a session)",
+    ERR_DURATION: "check_out not after check_in (duration_minutes left NULL)",
+    ERR_INSERT: "Attendance insert failed a UNIQUE/FK constraint",
+}
+
+
+def write_error_logs(errors_by_category, base_path: Path):
+    """Write one file per error category, alongside base_path, e.g.
+
+        attendance_load_report.txt -> attendance_load_report_errors_date.txt,
+        attendance_load_report_errors_student_match.txt, ...
+
+    Only categories with at least one message get a file. Returns the list
+    of Paths actually written (in ERROR_CATEGORIES order), for the summary
+    report to reference.
+    """
+    written = []
+    stem = base_path.stem
+    parent = base_path.parent
+    for cat, description in ERROR_CATEGORIES.items():
+        msgs = errors_by_category[cat]
+        if not msgs:
+            continue
+        path = parent / f"{stem}_errors_{cat}.txt"
+        with path.open("w") as f:
+            f.write(f"{description} ({len(msgs)} rows)\n")
+            f.write("=" * 60 + "\n\n")
+            f.write("\n".join(msgs) + "\n")
+        written.append(path)
+    return written
 
 
 def compute_duration_minutes(check_in, check_out):
@@ -138,15 +181,17 @@ def main():
     conn = sqlite3.connect(args.db)
     conn.execute("PRAGMA foreign_keys = ON;")
 
-    existing_student_ids = {
-        r[0] for r in conn.execute("SELECT student_id FROM students")
+    student_status = {
+        r[0]: r[1] for r in conn.execute("SELECT student_id, status FROM students")
     }
 
-    skips = []
+    errors_by_category = {cat: [] for cat in ERROR_CATEGORIES}
+    autocorrections = []
     counts = {"attendance": 0}
     autocorrection_counts = {
         "lunch_break_excluded": 0,
         "duration_left_null_no_checkout": 0,
+        "student_reactivated": 0,
     }
 
     skipped_id = 0
@@ -161,17 +206,29 @@ def main():
                 continue
             total_rows += 1
             student_id = int(id_raw)
-            if student_id not in existing_student_ids:
+            if student_id not in student_status:
                 skipped_id += 1
-                skips.append(
+                errors_by_category[ERR_STUDENT_MATCH].append(
                     f"line {line_no}: student_id {student_id} not found in students table -> row SKIPPED"
                 )
                 continue
 
+            if student_status[student_id] == "Inactive":
+                conn.execute(
+                    "UPDATE students SET status = 'Active' WHERE student_id = ?",
+                    (student_id,),
+                )
+                student_status[student_id] = "Active"
+                autocorrection_counts["student_reactivated"] += 1
+                autocorrections.append(
+                    f"line {line_no}: student_id {student_id} was Inactive -> "
+                    f"reactivated (status set to Active) before recording attendance"
+                )
+
             date = parse_date(row.get("Date", ""), min_year=2005, bound_today=True)
             if date is None:
                 skipped_date += 1
-                skips.append(
+                errors_by_category[ERR_DATE].append(
                     f"line {line_no} (student {student_id}): unparseable date "
                     f"{row.get('Date')!r} -> row SKIPPED"
                 )
@@ -182,7 +239,7 @@ def main():
 
             session = derive_session(check_in, check_out)
             if session is None:
-                skips.append(
+                errors_by_category[ERR_TIME].append(
                     f"line {line_no}: no usable check-in time -> attendance SKIPPED"
                 )
                 continue
@@ -193,7 +250,7 @@ def main():
             if check_out is None:
                 autocorrection_counts["duration_left_null_no_checkout"] += 1
             elif duration is None:
-                skips.append(
+                errors_by_category[ERR_DURATION].append(
                     f"line {line_no} (student {student_id}, {date}): check_out {check_out} "
                     f"not after check_in {check_in} -> duration_minutes left NULL"
                 )
@@ -207,13 +264,21 @@ def main():
                 )
                 counts["attendance"] += 1
             except sqlite3.IntegrityError as e:
-                skips.append(
+                errors_by_category[ERR_INSERT].append(
                     f"line {line_no}: attendance insert failed ({e}) -> SKIPPED"
                 )
 
     conn.commit()
     total_attendance = conn.execute("SELECT COUNT(*) FROM attendance").fetchone()[0]
     conn.close()
+
+    # Each error type gets its own file next to --report (e.g.
+    # attendance_load_report_errors_date.txt), rather than one shared
+    # "PER-ROW SKIPS" dump -- makes it easy to hand just the "date" file to
+    # whoever fixes source-CSV dates, etc. Categories with zero rows this
+    # run don't get a file.
+    error_files = write_error_logs(errors_by_category, args.report)
+    total_errors = sum(len(v) for v in errors_by_category.values())
 
     with args.report.open("w") as f:
         f.write(f"CSV data rows processed: {total_rows}\n")
@@ -228,8 +293,17 @@ def main():
         )
         for k, v in autocorrection_counts.items():
             f.write(f"  {k}: {v}\n")
-        f.write("\n=== PER-ROW SKIPS / NOTES ===\n")
-        f.write("\n".join(skips) + "\n")
+        f.write(f"\nRows skipped this run, by error type ({total_errors} total):\n")
+        for cat, description in ERROR_CATEGORIES.items():
+            f.write(f"  {cat} ({description}): {len(errors_by_category[cat])}\n")
+        if error_files:
+            f.write("\nPer-row detail for each error type written to:\n")
+            for p in error_files:
+                f.write(f"  {p}\n")
+        f.write(
+            "\n=== PER-ROW AUTO-CORRECTIONS (loaded, but adjusted from the raw CSV) ===\n"
+        )
+        f.write("\n".join(autocorrections) + "\n")
 
     print(f"Processed {total_rows} CSV rows.")
     print(
@@ -238,7 +312,11 @@ def main():
     print("Inserted this run:", counts)
     print("Auto-corrected this run:", autocorrection_counts)
     print(f"Total rows in attendance table now: {total_attendance}")
-    print(f"Full details in {args.report}")
+    if error_files:
+        print(f"Skipped rows logged by error type ({total_errors} total):")
+        for p in error_files:
+            print(f"  {p}")
+    print(f"Full summary in {args.report}")
 
 
 if __name__ == "__main__":
