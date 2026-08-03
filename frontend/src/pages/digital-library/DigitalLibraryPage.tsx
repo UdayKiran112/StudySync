@@ -45,6 +45,7 @@ export function DigitalLibraryPage() {
   const [notes, setNotes] = useState("");
   const [entryDate, setEntryDate] = useState(todayIso());
   const [entryTime, setEntryTime] = useState(nowHHMM());
+  const [entryTimeTouched, setEntryTimeTouched] = useState(false);
   const [now, setNow] = useState(new Date());
 
   const [filterDate, setFilterDate] = useState("");
@@ -72,6 +73,13 @@ export function DigitalLibraryPage() {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  // Keep the entryTime input in sync with the live clock unless the user
+  // has interacted with it.
+  useEffect(() => {
+    if (!entryTimeTouched) setEntryTime(nowHHMM());
+  }, [now, entryTimeTouched]);
+
   const effectivePlatform =
     accountType === "Library Subscription"
       ? (selectedSubscription?.name ?? "")
@@ -297,7 +305,11 @@ export function DigitalLibraryPage() {
               <Input
                 type="time"
                 value={entryTime}
-                onChange={(e) => setEntryTime(e.target.value)}
+                onChange={(e) => {
+                  setEntryTime(e.target.value);
+                  setEntryTimeTouched(true);
+                }}
+                onFocus={() => setEntryTimeTouched(true)}
               />
             </Field>
           </div>

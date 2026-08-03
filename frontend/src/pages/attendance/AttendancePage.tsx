@@ -45,6 +45,7 @@ export function AttendancePage() {
   const [student, setStudent] = useState<Student | null>(null);
   const [entryDate, setEntryDate] = useState(todayIso());
   const [entryTime, setEntryTime] = useState(nowHHMM());
+  const [entryTimeTouched, setEntryTimeTouched] = useState(false);
   const [filterSession, setFilterSession] = useState("");
   const [offset, setOffset] = useState(0);
   const [editing, setEditing] = useState<Attendance | undefined>(undefined);
@@ -65,6 +66,22 @@ export function AttendancePage() {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  // Keep the entryTime input in sync with live clock unless the user has
+  // interacted with it (touched). This avoids surprising the user while
+  // still providing an up-to-date default value.
+  useEffect(() => {
+    if (!entryTimeTouched) {
+      setEntryTime(nowHHMM());
+    }
+  }, [now, entryTimeTouched]);
+
+  // Reset the touched state when switching modes so the default time
+  // follows the clock again.
+  useEffect(() => {
+    setEntryTime(nowHHMM());
+    setEntryTimeTouched(false);
+  }, [mode]);
 
   const {
     data: allData,
@@ -124,6 +141,7 @@ export function AttendancePage() {
       setStudent(null);
       setEntryDate(todayIso());
       setEntryTime(nowHHMM());
+      setEntryTimeTouched(false);
     } catch (err) {
       toast.error(extractErrorMessage(err));
     }
@@ -224,7 +242,11 @@ export function AttendancePage() {
             <Input
               type="time"
               value={entryTime}
-              onChange={(e) => setEntryTime(e.target.value)}
+              onChange={(e) => {
+                setEntryTime(e.target.value);
+                setEntryTimeTouched(true);
+              }}
+              onFocus={() => setEntryTimeTouched(true)}
             />
           </Field>
           <Button type="submit" variant="primary" disabled={pending}>
