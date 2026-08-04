@@ -3,18 +3,18 @@ routers/sync.py
 ------------------
 Pushes the SQLite database to Google Sheets, one tab per dataset:
     1. Attendance
-    2. Library Usage   (digital + offline combined, matching how the
-                         original spreadsheet tracked both side by side)
-    3. Exams
-    4. Quizzes
-    5. Students
+    2. Digital Library (digital library usage)
+    3. Offline Library (offline library / book usage)
+    4. Exams
+    5. Quizzes
+    6. Students
 
 Each sheet is a FULL REWRITE on every sync (clear + rewrite all current
 rows), not an incremental append -- see sheets_client.py for why.
 
-Each of the 5 sheets is attempted independently -- one sheet failing
-(e.g. a transient API hiccup) doesn't block the other four. The overall
-result is "Success" if all five wrote cleanly, "Partial" if some did,
+Each of the 6 sheets is attempted independently -- one sheet failing
+(e.g. a transient API hiccup) doesn't block the others. The overall
+result is "Success" if all six wrote cleanly, "Partial" if some did,
 "Failed" if none did. Every attempt is recorded in sync_log regardless
 of outcome, so sync history is never lost even on failure.
 """
@@ -73,8 +73,8 @@ def _sync_attendance(db: sqlite3.Connection) -> SheetSyncResult:
     )
 
 
-def _sync_library_usage(db: sqlite3.Connection) -> SheetSyncResult:
-    digital_rows = db.execute("""
+def _sync_digital_library(db: sqlite3.Connection) -> SheetSyncResult:
+    rows = db.execute("""
         SELECT digital_library_usage.date, students.student_id, students.name,
                digital_library_usage.in_time, digital_library_usage.out_time,
                digital_library_usage.duration_minutes, digital_library_usage.account_type,
@@ -82,70 +82,78 @@ def _sync_library_usage(db: sqlite3.Connection) -> SheetSyncResult:
                digital_library_usage.notes
         FROM digital_library_usage
         JOIN students ON students.student_id = digital_library_usage.student_id
+        ORDER BY digital_library_usage.date, students.student_id
         """).fetchall()
-    offline_rows = db.execute("""
-        SELECT offline_library_usage.date, students.student_id, students.name,
-               offline_library_usage.book_id, books.title AS book_title
-        FROM offline_library_usage
-        JOIN students ON students.student_id = offline_library_usage.student_id
-        LEFT JOIN books ON books.book_id = offline_library_usage.book_id
-        """).fetchall()
-
     headers = [
         "Date",
         "Student ID",
         "Student Name",
-        "Usage Type",
         "In Time",
         "Out Time",
         "Duration (min)",
-        "Account Type / Platform",
+        "Account Type",
+        "Platform",
         "Purpose",
-        "Book ID",
-        "Book Title",
         "Notes",
     ]
-    data = []
-    for r in digital_rows:
-        data.append(
-            [
-                r["date"],
-                r["student_id"],
-                r["name"],
-                "Digital",
-                r["in_time"] or "",
-                r["out_time"] or "",
-                r["duration_minutes"] if r["duration_minutes"] is not None else "",
-                f"{r['account_type']} - {r['platform_name']}",
-                r["purpose"] or "",
-                "",
-                "",
-                r["notes"] or "",
-            ]
-        )
-    for r in offline_rows:
-        data.append(
-            [
-                r["date"],
-                r["student_id"],
-                r["name"],
-                "Offline",
-                "",
-                "",
-                "",
-                "",
-                "",
-                r["book_id"] or "",
-                r["book_title"] or "Self-study",
-                "",
-            ]
-        )
-
-    data.sort(key=lambda row: (row[0], row[1]))  # chronological, then student
-
-    synced = write_sheet("Library Usage", headers, data)
+    data = [
+        [
+            r["date"],
+            r["student_id"],
+            r["name"],
+            r["in_time"] or "",
+            r["out_time"] or "",
+            r["duration_minutes"] if r["duration_minutes"] is not None else "",
+            r["account_type"] or "",
+            r["platform_name"] or "",
+            r["purpose"] or "",
+            r["notes"] or "",
+        ]
+        for r in rows
+    ]
+    synced = write_sheet("Digital Library", headers, data)
     return SheetSyncResult(
-        sheet_name="Library Usage", status="Success", rows_synced=synced
+        sheet_name="Digital Library", status="Success", rows_synced=synced
+    )
+
+
+def _sync_offline_library(db: sqlite3.Connection) -> SheetSyncResult:
+    rows = db.execute("""
+        SELECT offline_library_usage.date, students.student_id, students.name,
+               offline_library_usage.book_id, books.title AS book_title,
+               offline_library_usage.in_time, offline_library_usage.out_time,
+               offline_library_usage.duration_minutes
+        FROM offline_library_usage
+        JOIN students ON students.student_id = offline_library_usage.student_id
+        LEFT JOIN books ON books.book_id = offline_library_usage.book_id
+        ORDER BY offline_library_usage.date, students.student_id
+        """).fetchall()
+    headers = [
+        "Date",
+        "Student ID",
+        "Student Name",
+        "Book ID",
+        "Book Title",
+        "In Time",
+        "Out Time",
+        "Duration (min)",
+    ]
+    data = [
+        [
+            r["date"],
+            r["student_id"],
+            r["name"],
+            r["book_id"] or "",
+            r["book_title"] or "Self-study",
+            r["in_time"] or "",
+            r["out_time"] or "",
+            r["duration_minutes"] if r["duration_minutes"] is not None else "",
+        ]
+        for r in rows
+    ]
+    synced = write_sheet("Offline Library", headers, data)
+    return SheetSyncResult(
+        sheet_name="Offline Library", status="Success", rows_synced=synced
     )
 
 
@@ -264,7 +272,8 @@ def _sync_students(db: sqlite3.Connection) -> SheetSyncResult:
 
 SYNC_TASKS = [
     ("Attendance", _sync_attendance),
-    ("Library Usage", _sync_library_usage),
+    ("Digital Library", _sync_digital_library),
+    ("Offline Library", _sync_offline_library),
     ("Exams", _sync_exams),
     ("Quizzes", _sync_quizzes),
     ("Students", _sync_students),
@@ -275,7 +284,7 @@ SYNC_TASKS = [
 def sync_to_sheets(db: sqlite3.Connection = Depends(get_db_dependency)):
     """
     Push the full current database to Google Sheets, one tab per
-    dataset. Each of the 5 sheets is attempted independently so one
+    dataset. Each of the 6 sheets is attempted independently so one
     failure doesn't block the rest.
     """
     results: List[SheetSyncResult] = []
