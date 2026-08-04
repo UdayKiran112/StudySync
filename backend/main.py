@@ -17,6 +17,9 @@ printed to the console on startup below, so you don't have to look it
 up yourself.
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import asyncio
 import contextlib
 import logging
