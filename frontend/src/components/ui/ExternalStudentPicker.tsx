@@ -5,23 +5,41 @@ import type { ExternalParticipant } from "../../api/types";
 
 const RECENT_KEY = "studysync.recent-external-students";
 const MAX_RECENT = 10;
+const RECENT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+interface StoredRecent {
+  student: ExternalParticipant;
+  ts: number;
+}
 
 function readRecent(): ExternalParticipant[] {
   try {
-    return JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const now = Date.now();
+    const valid: StoredRecent[] = parsed.filter(
+      (item: StoredRecent) => item.ts && now - item.ts < RECENT_TTL_MS,
+    );
+    if (valid.length < parsed.length) {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(valid));
+    }
+    return valid.map((item) => item.student);
   } catch {
     return [];
   }
 }
 function saveRecent(student: ExternalParticipant) {
-  const recent = [
-    student,
-    ...readRecent().filter(
-      (item) =>
-        item.external_participant_id !== student.external_participant_id,
-    ),
-  ].slice(0, MAX_RECENT);
-  localStorage.setItem(RECENT_KEY, JSON.stringify(recent));
+  const recents: StoredRecent[] = readRecent()
+    .map((s) => ({ student: s, ts: Date.now() }))
+    .filter((item) => Date.now() - item.ts < RECENT_TTL_MS);
+  const deduped = recents.filter(
+    (item) =>
+      item.student.external_participant_id !== student.external_participant_id,
+  );
+  const updated = [{ student, ts: Date.now() }, ...deduped].slice(0, MAX_RECENT);
+  localStorage.setItem(RECENT_KEY, JSON.stringify(updated));
 }
 function Highlight({ text, query }: { text: string; query: string }) {
   const position = text.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());

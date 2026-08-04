@@ -38,7 +38,7 @@ function loadInitial(): Settings {
   }
   return {
     baseUrl: DEFAULT_BASE_URL,
-    apiKey: import.meta.env.VITE_API_KEY ?? "",
+    apiKey: "",
   };
 }
 
@@ -51,7 +51,17 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const value: SettingsContextValue = {
     ...settings,
-    setBaseUrl: (v) => setSettings((s) => ({ ...s, baseUrl: v })),
+    setBaseUrl: (v) => {
+      const trimmed = v.trim();
+      try {
+        const u = new URL(trimmed);
+        if (u.protocol === "http:" || u.protocol === "https:") {
+          setSettings((s) => ({ ...s, baseUrl: u.origin }));
+          return;
+        }
+      } catch { /* invalid URL, fall through */ }
+      setSettings((s) => ({ ...s, baseUrl: trimmed }));
+    },
     setApiKey: (v) => setSettings((s) => ({ ...s, apiKey: v })),
     isConfigured: Boolean(settings.baseUrl && settings.apiKey),
   };

@@ -13,15 +13,38 @@ export function SettingsPage() {
   const [localApiKey, setLocalApiKey] = useState(apiKey);
   const [testState, setTestState] = useState<"idle" | "testing" | "ok" | "fail">("idle");
   const [testMessage, setTestMessage] = useState("");
+  const [urlError, setUrlError] = useState("");
+
+  function validateUrl(value: string): boolean {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setUrlError("URL is required");
+      return false;
+    }
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        setUrlError("Only http and https URLs are allowed");
+        return false;
+      }
+      setUrlError("");
+      return true;
+    } catch {
+      setUrlError("Enter a valid URL (e.g. http://localhost:8000)");
+      return false;
+    }
+  }
 
   function handleSave(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!validateUrl(localBaseUrl)) return;
     setBaseUrl(localBaseUrl.trim());
     setApiKey(localApiKey.trim());
     toast.success("Settings saved");
   }
 
   async function handleTest() {
+    if (!validateUrl(localBaseUrl)) return;
     setBaseUrl(localBaseUrl.trim());
     setApiKey(localApiKey.trim());
     setTestState("testing");
@@ -44,10 +67,10 @@ export function SettingsPage() {
       />
 
       <form onSubmit={handleSave} className="max-w-lg space-y-5 rounded-lg border border-border bg-card p-6">
-        <Field label="API base URL" required hint="The address where the FastAPI backend is running, e.g. http://localhost:8000 or your LAN IP.">
+        <Field label="API base URL" required error={urlError || undefined} hint="The address where the FastAPI backend is running, e.g. http://localhost:8000 or your LAN IP.">
           <Input
             value={localBaseUrl}
-            onChange={(e) => setLocalBaseUrl(e.target.value)}
+            onChange={(e) => { setLocalBaseUrl(e.target.value); setUrlError(""); }}
             placeholder="http://localhost:8000"
           />
         </Field>

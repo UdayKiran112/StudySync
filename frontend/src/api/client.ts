@@ -8,7 +8,17 @@ function readSettings(): { baseUrl: string; apiKey: string } {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      return { baseUrl: parsed.baseUrl || "http://localhost:8000", apiKey: parsed.apiKey || "" };
+      const url = (parsed.baseUrl || "http://localhost:8000").replace(/\/+$/, "");
+      let sanitizedUrl = url;
+      try {
+        const u = new URL(url);
+        if (u.protocol === "http:" || u.protocol === "https:") {
+          sanitizedUrl = u.origin;
+        }
+      } catch {
+        sanitizedUrl = "http://localhost:8000";
+      }
+      return { baseUrl: sanitizedUrl, apiKey: parsed.apiKey || "" };
     }
   } catch {
     // ignore
