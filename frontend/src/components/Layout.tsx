@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Users,
@@ -52,7 +52,13 @@ const NAV_SECTIONS = [
   },
   {
     label: "Coaching",
-    items: [{ to: "/coaching-classes", icon: Presentation, label: "Coaching classes" }],
+    items: [
+      {
+        to: "/coaching-classes",
+        icon: Presentation,
+        label: "Coaching classes",
+      },
+    ],
   },
   {
     label: "Activities",
@@ -77,6 +83,7 @@ function getInitialOpen(): boolean {
 
 export function Layout() {
   const { isConfigured } = useSettings();
+  const location = useLocation();
   const [open, setOpen] = useState(getInitialOpen);
 
   // Remember the toggle choice, but only for desktop — mobile always starts closed.
@@ -252,7 +259,10 @@ export function Layout() {
             </span>
           </div>
         )}
-        <div className="mx-auto max-w-6xl px-4 py-6 print-area sm:px-6 sm:py-8">
+        <div
+          key={location.pathname}
+          className="anim-fade-up mx-auto max-w-6xl px-4 py-6 print-area sm:px-6 sm:py-8"
+        >
           <Outlet />
         </div>
       </main>

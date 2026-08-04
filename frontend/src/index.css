@@ -36,6 +36,7 @@
   :focus-visible {
     outline: 2px solid var(--color-brass);
     outline-offset: 2px;
+    border-radius: 2px;
   }
 }
 
@@ -59,6 +60,66 @@
   .scrollbar-thin::-webkit-scrollbar-thumb {
     background-color: var(--color-border);
     border-radius: 4px;
+  }
+
+  /* Shared entrance motion for modals/dropdowns/menus — one timing curve
+     used everywhere so nothing feels like it's animating on its own clock. */
+  .anim-backdrop {
+    animation: fade-in 0.15s ease-out;
+  }
+  .anim-pop {
+    animation: pop-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .anim-fade-up {
+    animation: fade-up 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .skeleton-shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--color-paper-dim) 25%,
+      var(--color-border) 37%,
+      var(--color-paper-dim) 63%
+    );
+    background-size: 400% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-backdrop,
+  .anim-pop,
+  .anim-fade-up,
+  .skeleton-shimmer {
+    animation: none !important;
   }
 }
 

@@ -321,6 +321,28 @@ export interface ApiErrorBody {
 }
 
 // ---------------------------------------------------------------------
+// ZKTeco attendance device (mirrors backend/models/zkteco.py)
+// ---------------------------------------------------------------------
+
+export interface ZkDeviceStatus {
+  ok: boolean;
+  error: string | null;
+}
+
+export interface ZkSyncResult {
+  /** Raw swipes pulled from the device buffer. */
+  pulled: number;
+  /** Swipes applied as check-ins or check-outs. */
+  imported: number;
+  /** Re-read swipes skipped (e.g. a punch not later than the open check_in). */
+  duplicates: number;
+  /** Swipes whose device user_id didn't match any student. */
+  unknown_students: number;
+  /** Always 0 — a lone punch is an open session, not a dropped punch. */
+  incomplete: number;
+}
+
+// ---------------------------------------------------------------------
 // Student profile dashboard (mirrors backend/models/dashboard.py)
 // ---------------------------------------------------------------------
 

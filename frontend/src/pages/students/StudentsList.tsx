@@ -4,10 +4,10 @@ import toast from "react-hot-toast";
 import { Plus, Search, Pencil, Trash2, RefreshCw } from "lucide-react";
 import {
   PageHeader,
-  Spinner,
   ErrorBanner,
   EmptyState,
   Pagination,
+  TableSkeletonRows,
 } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Field, Input, Select } from "../../components/ui/Form";
@@ -152,7 +152,18 @@ export function StudentsList() {
         </Select>
       </div>
 
-      {isLoading && <Spinner label="Loading students…" />}
+      {isLoading && (
+        <Table>
+          <Thead>
+            <Th>Student</Th>
+            <Th>Contact</Th>
+            <Th>Joined</Th>
+            <Th>Status</Th>
+            <Th className="text-right">Actions</Th>
+          </Thead>
+          <TableSkeletonRows rows={6} columns={5} />
+        </Table>
+      )}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
 
       {data && data.length === 0 && (

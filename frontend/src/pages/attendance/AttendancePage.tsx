@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Trash2, Pencil, LogIn, LogOut, X } from "lucide-react";
+import { Trash2, Pencil, LogIn, LogOut, RefreshCw, X } from "lucide-react";
 import {
   PageHeader,
   Spinner,
@@ -24,6 +24,7 @@ import {
   useDeleteAttendance,
 } from "../../api/attendance";
 import { extractErrorMessage } from "../../api/client";
+import { useZkSync } from "../../api/zkteco";
 import {
   formatDate,
   formatDuration,
@@ -61,6 +62,7 @@ export function AttendancePage() {
   const checkIn = useCheckIn();
   const checkOut = useCheckOut();
   const deleteMutation = useDeleteAttendance();
+  const zkSync = useZkSync();
 
   // Backend takes a date range (date_from/date_to), not a single date, and
   // no longer paginates this endpoint — it always returns everything
@@ -156,6 +158,23 @@ export function AttendancePage() {
     }
   }
 
+  async function handleZkSync() {
+    try {
+      const result = await zkSync.mutateAsync();
+      toast.success(
+        `Applied ${result.imported} swipe${result.imported === 1 ? "" : "s"} from the device`,
+      );
+      if (result.unknown_students > 0) {
+        toast(
+          `${result.unknown_students} swipe${result.unknown_students === 1 ? "" : "s"} didn't match a student and were skipped.`,
+          { icon: "⚠️" },
+        );
+      }
+    } catch (err) {
+      toast.error(extractErrorMessage(err));
+    }
+  }
+
   const pending = checkIn.isPending || checkOut.isPending;
 
   return (
@@ -189,6 +208,20 @@ export function AttendancePage() {
             >
               View attendance records
             </Link>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={handleZkSync}
+              disabled={zkSync.isPending}
+              className="mt-3 w-full"
+            >
+              <RefreshCw
+                size={14}
+                className={zkSync.isPending ? "animate-spin" : ""}
+              />
+              {zkSync.isPending ? "Syncing…" : "Sync from device"}
+            </Button>
           </div>
         }
       />

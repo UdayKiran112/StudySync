@@ -12,7 +12,7 @@ export function Table({ children }: { children: ReactNode }) {
 
 export function Thead({ children }: { children: ReactNode }) {
   return (
-    <thead className="border-b border-border bg-paper-dim/60 text-left text-xs font-semibold uppercase tracking-wide text-slate">
+    <thead className="sticky top-0 z-10 border-b border-border bg-paper-dim/95 text-left text-xs font-semibold uppercase tracking-wide text-slate backdrop-blur-sm">
       <tr>{children}</tr>
     </thead>
   );
@@ -42,7 +42,7 @@ export function Tr({
   return (
     <tr
       onClick={onClick}
-      className={`border-b border-border last:border-0 ${onClick ? "cursor-pointer hover:bg-paper-dim/50" : ""}`}
+      className={`border-b border-border transition-colors last:border-0 ${onClick ? "cursor-pointer hover:bg-paper-dim/50" : ""}`}
     >
       {children}
     </tr>

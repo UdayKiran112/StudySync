@@ -37,6 +37,9 @@ export function useAttendanceList(params: AttendanceListParams) {
       });
       return data;
     },
+    // Live refresh: the ZKTeco poller imports swipes in the background, so
+    // keep the visible table current without a manual reload.
+    refetchInterval: 5000,
   });
 }
 

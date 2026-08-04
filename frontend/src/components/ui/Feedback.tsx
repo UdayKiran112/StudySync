@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import {
   Loader2,
   Inbox,
@@ -13,6 +13,63 @@ export function Spinner({ label = "Loading…" }: { label?: string }) {
     <div className="flex items-center justify-center gap-2 py-16 text-sm text-slate">
       <Loader2 size={18} className="animate-spin" />
       {label}
+    </div>
+  );
+}
+
+/** A shimmering placeholder bar. Compose these to build skeletons that
+ *  roughly match the shape of the content they'll be replaced by, so the
+ *  layout doesn't jump when real data arrives. */
+export function Skeleton({
+  className,
+  style,
+}: {
+  className?: string;
+  style?: CSSProperties;
+}) {
+  return (
+    <div
+      className={`skeleton-shimmer rounded ${className ?? "h-4 w-full"}`}
+      style={style}
+    />
+  );
+}
+
+/** Drop-in replacement for a table's <tbody> while its data is loading. */
+export function TableSkeletonRows({
+  rows = 5,
+  columns = 4,
+}: {
+  rows?: number;
+  columns?: number;
+}) {
+  return (
+    <tbody>
+      {Array.from({ length: rows }).map((_, r) => (
+        <tr key={r} className="border-b border-border last:border-0">
+          {Array.from({ length: columns }).map((_, c) => (
+            <td key={c} className="px-4 py-3">
+              <Skeleton
+                className="h-4"
+                style={{ width: c === 0 ? "60%" : "80%" }}
+              />
+            </td>
+          ))}
+        </tr>
+      ))}
+    </tbody>
+  );
+}
+
+/** Matches Dashboard-style stat/quick-action cards while their data loads. */
+export function CardSkeleton({ className }: { className?: string }) {
+  return (
+    <div
+      className={`rounded-lg border border-border bg-card p-5 ${className ?? ""}`}
+    >
+      <Skeleton className="h-4 w-24" />
+      <Skeleton className="mt-3 h-8 w-16" />
+      <Skeleton className="mt-2 h-3 w-32" />
     </div>
   );
 }

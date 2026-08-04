@@ -7,3 +7,4 @@ python-multipart==0.0.12
 httpx==0.28.1
 reportlab==4.2.5
 matplotlib==3.10.8
+pyzk==0.9

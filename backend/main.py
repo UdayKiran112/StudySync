@@ -17,6 +17,8 @@ printed to the console on startup below, so you don't have to look it
 up yourself.
 """
 
+import asyncio
+import contextlib
 import os
 import socket
 from contextlib import asynccontextmanager
@@ -25,6 +27,7 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import apply_runtime_schema_guards
+from zkteco.poller import zkteco_poller_loop
 
 from routers import (
     students,
@@ -38,6 +41,7 @@ from routers import (
     dashboard,
     coaching,
     other_activities,
+    zkteco,
 )
 
 
@@ -58,7 +62,17 @@ async def lifespan(_: FastAPI):
     if lan_ip:
         print(f"\n  On this network, reach the API at: http://{lan_ip}:8000/docs")
         print(f"  (Point the frontend's API base URL at: http://{lan_ip}:8000)\n")
-    yield
+    # Background ZKTeco sync: auto-imports swipe pairs while the app runs.
+    # It exits itself when ZK_DEVICE_IP is unset, so no work to skip here.
+    stop_event = asyncio.Event()
+    poller_task = asyncio.create_task(zkteco_poller_loop(stop_event))
+    try:
+        yield
+    finally:
+        stop_event.set()
+        poller_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await poller_task
 
 
 # Always allow the local dev servers on this machine.
@@ -128,6 +142,7 @@ app.include_router(quizzes.scores_router)
 app.include_router(dashboard.router)
 app.include_router(coaching.router)
 app.include_router(other_activities.router)
+app.include_router(zkteco.router)
 
 
 @app.get("/", tags=["Health"])
