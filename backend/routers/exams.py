@@ -17,6 +17,10 @@ from models.exams import (
 )
 from security import require_api_key
 
+# Fields permitted in dynamic UPDATE SET clauses (defense-in-depth).
+_EXAM_UPDATABLE_FIELDS = frozenset({"exam_name", "exam_date", "subject", "max_marks"})
+_EXAM_MARK_UPDATABLE_FIELDS = frozenset({"marks_obtained", "remarks"})
+
 
 router = APIRouter(
     prefix="/api/exams", tags=["Exams"], dependencies=[Depends(require_api_key)]
@@ -149,10 +153,16 @@ def update_exam(
             ),
         )
 
-    set_clause = ", ".join(f"{field} = ?" for field in updates)
+    safe_fields = updates.keys() & _EXAM_UPDATABLE_FIELDS
+    if not safe_fields:
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided to update"
+        )
+
+    set_clause = ", ".join(f"{field} = ?" for field in safe_fields)
     db.execute(
         f"UPDATE exams SET {set_clause} WHERE exam_id = ?",
-        [*updates.values(), exam_id],
+        [updates[field] for field in safe_fields] + [exam_id],
     )
     return dict(_get_exam(db, exam_id))
 
@@ -272,10 +282,16 @@ def update_exam_mark(
             db, existing["exam_id"], updates["marks_obtained"], exam["max_marks"]
         )
 
-    set_clause = ", ".join(f"{field} = ?" for field in updates)
+    safe_fields = updates.keys() & _EXAM_MARK_UPDATABLE_FIELDS
+    if not safe_fields:
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided to update"
+        )
+
+    set_clause = ", ".join(f"{field} = ?" for field in safe_fields)
     db.execute(
         f"UPDATE exam_marks SET {set_clause} WHERE mark_id = ?",
-        [*updates.values(), mark_id],
+        [updates[field] for field in safe_fields] + [mark_id],
     )
     return dict(_get_mark(db, mark_id))
 

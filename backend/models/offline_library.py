@@ -28,14 +28,14 @@ class OfflineLibraryCreate(RequestModel):
     """
 
     student_id: int
-    book_id: Optional[str] = Field(None, min_length=1)
+    book_id: Optional[str] = Field(None, min_length=1, max_length=50)
     date: Optional[date_type] = None
 
 
 class OfflineLibraryUpdate(RequestModel):
     """Correction of a mistaken entry — e.g. wrong book_id or date typed in."""
 
-    book_id: Optional[str] = Field(None, min_length=1)
+    book_id: Optional[str] = Field(None, min_length=1, max_length=50)
     date: Optional[date_type] = None
 
 

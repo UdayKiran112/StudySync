@@ -9,16 +9,16 @@ from models.common import RequestModel
 
 
 class QuizCreate(RequestModel):
-    quiz_name: str = Field(..., min_length=1)
+    quiz_name: str = Field(..., min_length=1, max_length=300)
     quiz_date: Optional[date_type] = None
-    subject: Optional[str] = None
+    subject: Optional[str] = Field(None, max_length=200)
     max_marks: float = Field(..., gt=0)
 
 
 class QuizUpdate(RequestModel):
-    quiz_name: Optional[str] = Field(None, min_length=1)
+    quiz_name: Optional[str] = Field(None, min_length=1, max_length=300)
     quiz_date: Optional[date_type] = None
-    subject: Optional[str] = None
+    subject: Optional[str] = Field(None, max_length=200)
     max_marks: Optional[float] = Field(None, gt=0)
 
 
@@ -33,12 +33,12 @@ class QuizResponse(BaseModel):
 class QuizScoreCreate(RequestModel):
     student_id: int
     score: float = Field(..., ge=0)
-    remarks: Optional[str] = None
+    remarks: Optional[str] = Field(None, max_length=1000)
 
 
 class QuizScoreUpdate(RequestModel):
     score: Optional[float] = Field(None, ge=0)
-    remarks: Optional[str] = None
+    remarks: Optional[str] = Field(None, max_length=1000)
 
 
 class QuizScoreResponse(BaseModel):

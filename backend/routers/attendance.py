@@ -23,6 +23,7 @@ guarantees a student can have at most one open session at a time. This
 mirrors the same open-session pattern already used for digital_library.
 """
 
+import logging
 import sqlite3
 from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException
@@ -35,8 +36,18 @@ from models.attendance import (
     AttendanceUpdate,
     AttendanceResponse,
 )
+from security import require_api_key
 
-router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
+logger = logging.getLogger("studysync.attendance")
+
+router = APIRouter(
+    prefix="/api/attendance",
+    tags=["Attendance"],
+    dependencies=[Depends(require_api_key)],
+)
+
+# Fields permitted in dynamic UPDATE SET clauses (defense-in-depth).
+_ATTENDANCE_UPDATABLE_FIELDS = frozenset({"check_in", "check_out"})
 
 # The lunch break window. Time spent here is never counted as study time,
 # and a stay that spans across it entirely gets reclassified as "Full Day".
@@ -97,7 +108,7 @@ def _has_other_activity_on_date(
     - Coaching class enrollment (on that date)
     - Other activities attendance (on that date)
     - Offline library with book (not auto-created self-study)
-    
+
     Returns True if any of these exist, False if only attendance or nothing.
     """
     # Check digital library
@@ -187,7 +198,11 @@ def _auto_fill_offline_if_needed(
             (student_id, session_date),
         )
     except sqlite3.Error:
-        pass
+        logger.exception(
+            "Auto-fill offline library failed for student %s on %s",
+            student_id,
+            session_date,
+        )
 
 
 def _cleanup_auto_filled_offline_if_needed(
@@ -229,7 +244,16 @@ def _cleanup_auto_filled_offline_if_needed(
                  SELECT 1 FROM offline_library_usage 
                  WHERE student_id = ? AND date = ? AND book_id IS NOT NULL
                ) LIMIT 1""",
-            (student_id, session_date, student_id, session_date, student_id, session_date, student_id, session_date),
+            (
+                student_id,
+                session_date,
+                student_id,
+                session_date,
+                student_id,
+                session_date,
+                student_id,
+                session_date,
+            ),
         ).fetchone()
 
         if has_other_activity:
@@ -240,7 +264,11 @@ def _cleanup_auto_filled_offline_if_needed(
                     (entry["usage_id"],),
                 )
     except sqlite3.Error:
-        pass
+        logger.exception(
+            "Cleanup auto-filled offline records failed for student %s on %s",
+            student_id,
+            session_date,
+        )
 
 
 @router.post("/check-in", response_model=AttendanceResponse, status_code=201)
@@ -427,8 +455,14 @@ def correct_attendance(
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided to update")
 
-    set_clause = ", ".join(f"{field} = ?" for field in updates.keys())
-    values = list(updates.values()) + [attendance_id]
+    safe_fields = updates.keys() & _ATTENDANCE_UPDATABLE_FIELDS
+    if not safe_fields:
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided to update"
+        )
+
+    set_clause = ", ".join(f"{field} = ?" for field in safe_fields)
+    values = [updates[field] for field in safe_fields] + [attendance_id]
     db.execute(f"UPDATE attendance SET {set_clause} WHERE attendance_id = ?", values)
 
     new_check_in = updates.get("check_in", existing["check_in"])

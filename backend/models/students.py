@@ -16,18 +16,18 @@ class StudentCreate(RequestModel):
     """Shape of data required to create a new student."""
 
     student_id: int = Field(..., description="Unique student ID, e.g. 4351")
-    name: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1, max_length=200)
     gender: Optional[Literal["Male", "Female", "Other"]] = None
     date_of_birth: Optional[date] = None
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    father_name: Optional[str] = None
-    qualification: Optional[str] = None
-    goal: Optional[str] = None
-    preparing_for: Optional[str] = None
-    address: Optional[str] = None
+    phone: Optional[str] = Field(None, max_length=20)
+    email: Optional[str] = Field(None, max_length=254)
+    father_name: Optional[str] = Field(None, max_length=200)
+    qualification: Optional[str] = Field(None, max_length=200)
+    goal: Optional[str] = Field(None, max_length=500)
+    preparing_for: Optional[str] = Field(None, max_length=500)
+    address: Optional[str] = Field(None, max_length=1000)
     join_date: date
-    photo_path: Optional[str] = None
+    photo_path: Optional[str] = Field(None, max_length=500)
     status: Literal["Active", "Inactive"] = "Active"
     renewal_count: Optional[int] = Field(
         0,
@@ -42,17 +42,17 @@ class StudentUpdate(RequestModel):
     update might only change one or two fields (e.g. just status).
     """
 
-    name: Optional[str] = Field(None, min_length=1)
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
     gender: Optional[Literal["Male", "Female", "Other"]] = None
     date_of_birth: Optional[date] = None
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    father_name: Optional[str] = None
-    qualification: Optional[str] = None
-    goal: Optional[str] = None
-    preparing_for: Optional[str] = None
-    address: Optional[str] = None
-    photo_path: Optional[str] = None
+    phone: Optional[str] = Field(None, max_length=20)
+    email: Optional[str] = Field(None, max_length=254)
+    father_name: Optional[str] = Field(None, max_length=200)
+    qualification: Optional[str] = Field(None, max_length=200)
+    goal: Optional[str] = Field(None, max_length=500)
+    preparing_for: Optional[str] = Field(None, max_length=500)
+    address: Optional[str] = Field(None, max_length=1000)
+    photo_path: Optional[str] = Field(None, max_length=500)
     status: Optional[Literal["Active", "Inactive"]] = None
     renewal_count: Optional[int] = Field(None, ge=0)
 

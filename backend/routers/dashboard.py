@@ -1,6 +1,7 @@
 """Aggregated student profile data for the staff dashboard."""
 
 import io
+import logging
 import sqlite3
 from datetime import date, timedelta
 from statistics import mean
@@ -31,6 +32,7 @@ from database import get_db_dependency
 from models.dashboard import StudentDashboardResponse
 from security import require_api_key
 
+logger = logging.getLogger("studysync.dashboard")
 
 router = APIRouter(
     prefix="/api/dashboard", tags=["Dashboard"], dependencies=[Depends(require_api_key)]
@@ -110,15 +112,13 @@ def _batch_averages(
     viewed, then looked up per-assessment when building that student's
     exam/quiz list.
     """
-    rows = db.execute(
-        f"""
+    rows = db.execute(f"""
         SELECT {marks_table}.{id_col} AS assessment_id,
                AVG({marks_table}.{score_col} * 100.0 / {catalog_table}.max_marks) AS batch_avg
         FROM {marks_table}
         JOIN {catalog_table} ON {catalog_table}.{catalog_id_col} = {marks_table}.{id_col}
         GROUP BY {marks_table}.{id_col}
-        """
-    ).fetchall()
+        """).fetchall()
     return {row["assessment_id"]: round(row["batch_avg"], 2) for row in rows}
 
 
@@ -322,9 +322,16 @@ def _build_dashboard_data(db: sqlite3.Connection, student_id: int) -> dict:
     coaching_minutes_by_date: dict = {}
     for row in coaching_usage:
         if row["duration_minutes"] is not None:
-            coaching_minutes_by_date[row["date"]] = coaching_minutes_by_date.get(row["date"], 0) + row["duration_minutes"]
+            coaching_minutes_by_date[row["date"]] = (
+                coaching_minutes_by_date.get(row["date"], 0) + row["duration_minutes"]
+            )
     estimated_offline_minutes = sum(
-        max(att_minutes - digital_minutes_by_date.get(d, 0) - coaching_minutes_by_date.get(d, 0), 0)
+        max(
+            att_minutes
+            - digital_minutes_by_date.get(d, 0)
+            - coaching_minutes_by_date.get(d, 0),
+            0,
+        )
         for d, att_minutes in attendance_minutes_by_date.items()
     )
 
@@ -346,9 +353,9 @@ def _build_dashboard_data(db: sqlite3.Connection, student_id: int) -> dict:
             "completed_sessions": sum(
                 row["check_out"] is not None for row in attendance
             ),
-            "average_duration_minutes": round(mean(all_durations), 2)
-            if all_durations
-            else None,
+            "average_duration_minutes": (
+                round(mean(all_durations), 2) if all_durations else None
+            ),
             "trend": attendance_trend,
             "trend_delta_minutes": attendance_delta,
             "attendance_rate_last_30_days_percent": attendance_rate_30d,
@@ -357,17 +364,17 @@ def _build_dashboard_data(db: sqlite3.Connection, student_id: int) -> dict:
         },
         "exams": {
             "total_exams": len(exam_percentages),
-            "average_percentage": round(mean(exam_percentages), 2)
-            if exam_percentages
-            else None,
+            "average_percentage": (
+                round(mean(exam_percentages), 2) if exam_percentages else None
+            ),
             "trend": exam_trend,
             "trend_delta_percentage_points": exam_delta,
         },
         "quizzes": {
             "total_quizzes": len(quiz_percentages),
-            "average_percentage": round(mean(quiz_percentages), 2)
-            if quiz_percentages
-            else None,
+            "average_percentage": (
+                round(mean(quiz_percentages), 2) if quiz_percentages else None
+            ),
             "trend": quiz_trend,
             "trend_delta_percentage_points": quiz_delta,
         },
@@ -375,9 +382,9 @@ def _build_dashboard_data(db: sqlite3.Connection, student_id: int) -> dict:
         "digital_library": {
             "total_sessions": len(digital_usage),
             "total_duration_minutes": sum(digital_durations),
-            "average_duration_minutes": round(mean(digital_durations), 2)
-            if digital_durations
-            else None,
+            "average_duration_minutes": (
+                round(mean(digital_durations), 2) if digital_durations else None
+            ),
         },
         "offline_library": {
             "total_sessions": len(offline_usage),
@@ -387,8 +394,23 @@ def _build_dashboard_data(db: sqlite3.Connection, student_id: int) -> dict:
         },
         "coaching": {
             "total_sessions": len(coaching_usage),
-            "total_duration_minutes": sum(row["duration_minutes"] or 0 for row in coaching_usage),
-            "average_duration_minutes": round(mean([row["duration_minutes"] for row in coaching_usage if row["duration_minutes"] is not None]), 2) if any(row["duration_minutes"] is not None for row in coaching_usage) else None,
+            "total_duration_minutes": sum(
+                row["duration_minutes"] or 0 for row in coaching_usage
+            ),
+            "average_duration_minutes": (
+                round(
+                    mean(
+                        [
+                            row["duration_minutes"]
+                            for row in coaching_usage
+                            if row["duration_minutes"] is not None
+                        ]
+                    ),
+                    2,
+                )
+                if any(row["duration_minutes"] is not None for row in coaching_usage)
+                else None
+            ),
         },
     }
 
@@ -1014,7 +1036,8 @@ def get_student_report_pdf(
     data = _build_dashboard_data(db, student_id)
     pdf_bytes = _render_report_pdf(data)
 
-    filename = f"student_{student_id}_performance_report.pdf"
+    safe_id = str(student_id).replace('"', "").replace("\\", "")
+    filename = f"student_{safe_id}_performance_report.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

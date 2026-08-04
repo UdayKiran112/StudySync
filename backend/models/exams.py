@@ -9,16 +9,16 @@ from models.common import RequestModel
 
 
 class ExamCreate(RequestModel):
-    exam_name: str = Field(..., min_length=1)
+    exam_name: str = Field(..., min_length=1, max_length=300)
     exam_date: Optional[date_type] = None
-    subject: Optional[str] = None
+    subject: Optional[str] = Field(None, max_length=200)
     max_marks: float = Field(..., gt=0)
 
 
 class ExamUpdate(RequestModel):
-    exam_name: Optional[str] = Field(None, min_length=1)
+    exam_name: Optional[str] = Field(None, min_length=1, max_length=300)
     exam_date: Optional[date_type] = None
-    subject: Optional[str] = None
+    subject: Optional[str] = Field(None, max_length=200)
     max_marks: Optional[float] = Field(None, gt=0)
 
 
@@ -40,12 +40,12 @@ class ExamResponse(BaseModel):
 class ExamMarkCreate(RequestModel):
     student_id: int
     marks_obtained: float = Field(..., ge=0)
-    remarks: Optional[str] = None
+    remarks: Optional[str] = Field(None, max_length=1000)
 
 
 class ExamMarkUpdate(RequestModel):
     marks_obtained: Optional[float] = Field(None, ge=0)
-    remarks: Optional[str] = None
+    remarks: Optional[str] = Field(None, max_length=1000)
 
 
 class ExamMarkResponse(BaseModel):

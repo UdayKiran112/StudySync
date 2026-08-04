@@ -24,11 +24,18 @@ from models.common import RequestModel
 
 class SubscriptionCreate(RequestModel):
     subscription_id: str = Field(
-        ..., min_length=1, description="Staff-assigned code, e.g. 'SUB001'"
+        ...,
+        min_length=1,
+        max_length=50,
+        description="Staff-assigned code, e.g. 'SUB001'",
     )
-    name: str = Field(..., min_length=1, description="e.g. 'JSTOR', 'Sreedhar CCE'")
+    name: str = Field(
+        ..., min_length=1, max_length=300, description="e.g. 'JSTOR', 'Sreedhar CCE'"
+    )
     type: str | None = Field(
-        default=None, description="e.g. 'Online Learning', 'Video Platform'"
+        default=None,
+        max_length=200,
+        description="e.g. 'Online Learning', 'Video Platform'",
     )
     cost: float | None = Field(default=None, ge=0)
     start_date: date_type = Field(
@@ -41,8 +48,8 @@ class SubscriptionCreate(RequestModel):
 class SubscriptionUpdate(RequestModel):
     """All fields optional -- only supplied fields are changed."""
 
-    name: str | None = Field(default=None, min_length=1)
-    type: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=300)
+    type: str | None = Field(None, max_length=200)
     cost: float | None = Field(None, ge=0)
     start_date: date_type | None = None
     validity_days: int | None = Field(None, gt=0)

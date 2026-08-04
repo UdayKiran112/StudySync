@@ -17,6 +17,25 @@ from database import get_db_dependency
 from models.students import StudentCreate, StudentUpdate, StudentResponse
 from security import require_api_key
 
+# Fields permitted in dynamic UPDATE SET clauses (defense-in-depth).
+_STUDENT_UPDATABLE_FIELDS = frozenset(
+    {
+        "name",
+        "gender",
+        "date_of_birth",
+        "phone",
+        "email",
+        "father_name",
+        "qualification",
+        "goal",
+        "preparing_for",
+        "address",
+        "photo_path",
+        "status",
+        "renewal_count",
+    }
+)
+
 router = APIRouter(
     prefix="/api/students", tags=["Students"], dependencies=[Depends(require_api_key)]
 )
@@ -255,8 +274,14 @@ def update_student(
     if "name" in updates and updates["name"] is None:
         raise HTTPException(status_code=422, detail="name cannot be null")
 
-    set_clause = ", ".join(f"{field} = ?" for field in updates.keys())
-    values = list(updates.values()) + [student_id]
+    safe_fields = updates.keys() & _STUDENT_UPDATABLE_FIELDS
+    if not safe_fields:
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided to update"
+        )
+
+    set_clause = ", ".join(f"{field} = ?" for field in safe_fields)
+    values = [updates[field] for field in safe_fields] + [student_id]
 
     db.execute(f"UPDATE students SET {set_clause} WHERE student_id = ?", values)
 

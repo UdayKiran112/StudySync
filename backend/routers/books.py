@@ -19,6 +19,9 @@ from database import get_db_dependency
 from models.books import BookCreate, BookUpdate, BookResponse
 from security import require_api_key
 
+# Fields permitted in dynamic UPDATE SET clauses (defense-in-depth).
+_BOOK_UPDATABLE_FIELDS = frozenset({"title", "category", "author", "added_date"})
+
 router = APIRouter(
     prefix="/api/books", tags=["Books"], dependencies=[Depends(require_api_key)]
 )
@@ -106,8 +109,14 @@ def update_book(
     if "title" in updates and updates["title"] is None:
         raise HTTPException(status_code=422, detail="title cannot be null")
 
-    set_clause = ", ".join(f"{field} = ?" for field in updates.keys())
-    values = list(updates.values()) + [book_id]
+    safe_fields = updates.keys() & _BOOK_UPDATABLE_FIELDS
+    if not safe_fields:
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided to update"
+        )
+
+    set_clause = ", ".join(f"{field} = ?" for field in safe_fields)
+    values = [updates[field] for field in safe_fields] + [book_id]
 
     db.execute(f"UPDATE books SET {set_clause} WHERE book_id = ?", values)
 

@@ -16,6 +16,7 @@ Subscription validation, per your answer: for account_type =
 "doesn't exist" and say nothing about "expired".
 """
 
+import logging
 import sqlite3
 from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -28,6 +29,8 @@ from models.digital_library import (
     DigitalLibraryResponse,
 )
 from security import require_api_key
+
+logger = logging.getLogger("studysync.digital_library")
 
 router = APIRouter(
     prefix="/api/digital-library",
@@ -170,7 +173,7 @@ def check_out(
 
     404 if the student has no open session. 400 if out_time isn't later
     than in_time (schema's CHECK constraint, translated to a clean error).
-    
+
     After check-out, if auto-created offline library records exist for the
     same date, they are cleaned up since the student now has a recorded
     digital library activity.
@@ -201,9 +204,15 @@ def check_out(
     # Clean up auto-created self-study offline records for this date
     try:
         from routers.attendance import _cleanup_auto_filled_offline_if_needed
-        _cleanup_auto_filled_offline_if_needed(db, payload.student_id, open_session["date"])
+
+        _cleanup_auto_filled_offline_if_needed(
+            db, payload.student_id, open_session["date"]
+        )
     except Exception:
-        pass  # Cleanup is a side effect; don't let failures block check-out
+        logger.exception(
+            "Auto-fill cleanup failed for student %s after digital library checkout",
+            payload.student_id,
+        )
 
     row = db.execute(
         "SELECT * FROM digital_library_usage WHERE usage_id = ?",

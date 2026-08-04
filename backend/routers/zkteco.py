@@ -25,6 +25,7 @@ NOTE: the ZKTeco wire protocol (TCP/UDP 4370) is not encrypted and the
 a trusted network segment; do not expose port 4370 to the open internet.
 """
 
+import logging
 import sqlite3
 from datetime import date
 from typing import List, Optional
@@ -44,6 +45,8 @@ from models.zkteco import (
     ZkSyncResult,
     ZkUser,
 )
+
+logger = logging.getLogger("studysync.zkteco")
 
 router = APIRouter(
     prefix="/api/zkteco",
@@ -68,7 +71,8 @@ def _config_or_503():
 
 def _device_error(exc: Exception):
     """Turn a ZkError into a 502 so internal details stay out of the response."""
-    raise HTTPException(status_code=502, detail=str(exc)) from exc
+    logger.warning("ZKTeco device error: %s", exc)
+    raise HTTPException(status_code=502, detail="ZKTeco device error") from exc
 
 
 @router.get("/status", response_model=ZkDeviceStatus)
@@ -78,7 +82,8 @@ def zk_status():
     try:
         device.device_status(config)
     except device.ZkError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+        logger.warning("ZKTeco status check failed: %s", e)
+        raise HTTPException(status_code=502, detail="ZKTeco device unreachable") from e
     return ZkDeviceStatus(ok=True)
 
 

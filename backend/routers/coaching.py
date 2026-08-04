@@ -1,10 +1,23 @@
+import logging
 import sqlite3
 from datetime import date
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from database import get_db_dependency
-from models.coaching import *
+from models.coaching import (
+    InstructorCreate,
+    InstructorResponse,
+    ExternalParticipantCreate,
+    ExternalParticipantResponse,
+    CoachingClassCreate,
+    CoachingClassUpdate,
+    CoachingClassResponse,
+    CoachingEnrollmentCreate,
+    CoachingEnrollmentResponse,
+)
 from security import require_api_key
+
+logger = logging.getLogger("studysync.coaching")
 
 router = APIRouter(
     prefix="/api/coaching-classes",
@@ -179,6 +192,10 @@ def enroll(
                 db, p.student_id, class_row_data["class_date"]
             )
         except Exception:
-            pass  # Cleanup is a side effect; don't let failures block enrollment
+            logger.exception(
+                "Auto-fill cleanup failed for student %s, class %s",
+                p.student_id,
+                class_id,
+            )
 
     return dict(roster_row(db, c.lastrowid))

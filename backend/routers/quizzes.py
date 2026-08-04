@@ -17,12 +17,18 @@ from models.quizzes import (
 )
 from security import require_api_key
 
+# Fields permitted in dynamic UPDATE SET clauses (defense-in-depth).
+_QUIZ_UPDATABLE_FIELDS = frozenset({"quiz_name", "quiz_date", "subject", "max_marks"})
+_QUIZ_SCORE_UPDATABLE_FIELDS = frozenset({"score", "remarks"})
+
 
 router = APIRouter(
     prefix="/api/quizzes", tags=["Quizzes"], dependencies=[Depends(require_api_key)]
 )
 scores_router = APIRouter(
-    prefix="/api/quiz-scores", tags=["Quiz Scores"], dependencies=[Depends(require_api_key)]
+    prefix="/api/quiz-scores",
+    tags=["Quiz Scores"],
+    dependencies=[Depends(require_api_key)],
 )
 
 
@@ -122,10 +128,16 @@ def update_quiz(
             ),
         )
 
-    set_clause = ", ".join(f"{field} = ?" for field in updates)
+    safe_fields = updates.keys() & _QUIZ_UPDATABLE_FIELDS
+    if not safe_fields:
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided to update"
+        )
+
+    set_clause = ", ".join(f"{field} = ?" for field in safe_fields)
     db.execute(
         f"UPDATE quizzes SET {set_clause} WHERE quiz_id = ?",
-        [*updates.values(), quiz_id],
+        [updates[field] for field in safe_fields] + [quiz_id],
     )
     return dict(_get_quiz(db, quiz_id))
 
@@ -165,7 +177,9 @@ def create_quiz_score(
             status_code=409,
             detail=f"Student {score.student_id} already has a score for quiz {quiz_id}",
         )
-    row = db.execute("SELECT * FROM quiz_scores WHERE score_id = ?", (cursor.lastrowid,)).fetchone()
+    row = db.execute(
+        "SELECT * FROM quiz_scores WHERE score_id = ?", (cursor.lastrowid,)
+    ).fetchone()
     return dict(row)
 
 
@@ -209,7 +223,9 @@ def list_quiz_scores(
 
 
 def _get_score(db: sqlite3.Connection, score_id: int) -> sqlite3.Row:
-    row = db.execute("SELECT * FROM quiz_scores WHERE score_id = ?", (score_id,)).fetchone()
+    row = db.execute(
+        "SELECT * FROM quiz_scores WHERE score_id = ?", (score_id,)
+    ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail=f"Quiz score {score_id} not found")
     return row
@@ -236,16 +252,24 @@ def update_quiz_score(
         quiz = _get_quiz(db, existing["quiz_id"])
         _ensure_score_within_max(updates["score"], quiz["max_marks"])
 
-    set_clause = ", ".join(f"{field} = ?" for field in updates)
+    safe_fields = updates.keys() & _QUIZ_SCORE_UPDATABLE_FIELDS
+    if not safe_fields:
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided to update"
+        )
+
+    set_clause = ", ".join(f"{field} = ?" for field in safe_fields)
     db.execute(
         f"UPDATE quiz_scores SET {set_clause} WHERE score_id = ?",
-        [*updates.values(), score_id],
+        [updates[field] for field in safe_fields] + [score_id],
     )
     return dict(_get_score(db, score_id))
 
 
 @scores_router.delete("/{score_id}", status_code=204)
-def delete_quiz_score(score_id: int, db: sqlite3.Connection = Depends(get_db_dependency)):
+def delete_quiz_score(
+    score_id: int, db: sqlite3.Connection = Depends(get_db_dependency)
+):
     _get_score(db, score_id)
     db.execute("DELETE FROM quiz_scores WHERE score_id = ?", (score_id,))
     return None

@@ -27,22 +27,25 @@ from fastapi import APIRouter, Depends
 
 from database import get_db_dependency
 from models.sync import SheetSyncResult, SyncResponse, SyncLogEntry
+from security import require_api_key
 from sheets_client import write_sheet, SheetsConfigError
 
-router = APIRouter(prefix="/api/sync", tags=["Sync"])
+router = APIRouter(
+    prefix="/api/sync",
+    tags=["Sync"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 def _sync_attendance(db: sqlite3.Connection) -> SheetSyncResult:
-    rows = db.execute(
-        """
+    rows = db.execute("""
         SELECT attendance.date, students.student_id, students.name,
                attendance.session, attendance.check_in, attendance.check_out,
                attendance.duration_minutes
         FROM attendance
         JOIN students ON students.student_id = attendance.student_id
         ORDER BY attendance.date, students.student_id, attendance.session
-        """
-    ).fetchall()
+        """).fetchall()
     headers = [
         "Date",
         "Student ID",
@@ -71,8 +74,7 @@ def _sync_attendance(db: sqlite3.Connection) -> SheetSyncResult:
 
 
 def _sync_library_usage(db: sqlite3.Connection) -> SheetSyncResult:
-    digital_rows = db.execute(
-        """
+    digital_rows = db.execute("""
         SELECT digital_library_usage.date, students.student_id, students.name,
                digital_library_usage.in_time, digital_library_usage.out_time,
                digital_library_usage.duration_minutes, digital_library_usage.account_type,
@@ -80,17 +82,14 @@ def _sync_library_usage(db: sqlite3.Connection) -> SheetSyncResult:
                digital_library_usage.notes
         FROM digital_library_usage
         JOIN students ON students.student_id = digital_library_usage.student_id
-        """
-    ).fetchall()
-    offline_rows = db.execute(
-        """
+        """).fetchall()
+    offline_rows = db.execute("""
         SELECT offline_library_usage.date, students.student_id, students.name,
                offline_library_usage.book_id, books.title AS book_title
         FROM offline_library_usage
         JOIN students ON students.student_id = offline_library_usage.student_id
         LEFT JOIN books ON books.book_id = offline_library_usage.book_id
-        """
-    ).fetchall()
+        """).fetchall()
 
     headers = [
         "Date",
@@ -151,8 +150,7 @@ def _sync_library_usage(db: sqlite3.Connection) -> SheetSyncResult:
 
 
 def _sync_exams(db: sqlite3.Connection) -> SheetSyncResult:
-    rows = db.execute(
-        """
+    rows = db.execute("""
         SELECT exams.exam_date, students.student_id, students.name,
                exams.exam_name, exams.subject, exam_marks.marks_obtained,
                exams.max_marks, exam_marks.remarks
@@ -160,8 +158,7 @@ def _sync_exams(db: sqlite3.Connection) -> SheetSyncResult:
         JOIN exams ON exams.exam_id = exam_marks.exam_id
         JOIN students ON students.student_id = exam_marks.student_id
         ORDER BY exams.exam_date, students.student_id
-        """
-    ).fetchall()
+        """).fetchall()
     headers = [
         "Date",
         "Student ID",
@@ -192,8 +189,7 @@ def _sync_exams(db: sqlite3.Connection) -> SheetSyncResult:
 
 
 def _sync_quizzes(db: sqlite3.Connection) -> SheetSyncResult:
-    rows = db.execute(
-        """
+    rows = db.execute("""
         SELECT quizzes.quiz_date, students.student_id, students.name,
                quizzes.quiz_name, quizzes.subject, quiz_scores.score,
                quizzes.max_marks, quiz_scores.remarks
@@ -201,8 +197,7 @@ def _sync_quizzes(db: sqlite3.Connection) -> SheetSyncResult:
         JOIN quizzes ON quizzes.quiz_id = quiz_scores.quiz_id
         JOIN students ON students.student_id = quiz_scores.student_id
         ORDER BY quizzes.quiz_date, students.student_id
-        """
-    ).fetchall()
+        """).fetchall()
     headers = [
         "Date",
         "Student ID",

@@ -19,15 +19,23 @@ up yourself.
 
 import asyncio
 import contextlib
+import logging
 import os
 import socket
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
 from database import apply_runtime_schema_guards
 from zkteco.poller import zkteco_poller_loop
+
+logger = logging.getLogger("studysync")
 
 from routers import (
     students,
@@ -104,7 +112,7 @@ LAN_ORIGIN_REGEX = (
     r"|10(?:\.\d{1,3}){3}"
     r"|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}"
     r"|192\.168(?:\.\d{1,3}){2}"
-    r")(?::\d+)?$"
+    r")(?::(?:5173|3000))?$"
 )
 
 app = FastAPI(
@@ -113,6 +121,13 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# --- Rate limiting ---
+# Global limiter keyed by client IP. 60 req/min for general endpoints,
+# tighter limits applied per-endpoint where needed (login, sync, PDF gen).
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS: explicit origins above (localhost + anything from
 # STUDYSYNC_ALLOWED_ORIGINS) plus the private-LAN regex for local network
@@ -126,6 +141,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --- Security headers ---
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 
 # Mount routers. Each new module (attendance, books, exams, etc.) gets
 # added here as it's built.

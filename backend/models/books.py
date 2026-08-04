@@ -17,21 +17,26 @@ from models.common import RequestModel
 
 
 class BookCreate(RequestModel):
-    book_id: str = Field(..., min_length=1, description="Staff-assigned code, e.g. '1556' or 'P247'")
-    title: str = Field(..., min_length=1)
-    category: Optional[str] = Field(
-        None, description="e.g. 'Polity', 'Arithmetic', 'S&T'"
+    book_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        description="Staff-assigned code, e.g. '1556' or 'P247'",
     )
-    author: Optional[str] = None
+    title: str = Field(..., min_length=1, max_length=500)
+    category: Optional[str] = Field(
+        None, max_length=200, description="e.g. 'Polity', 'Arithmetic', 'S&T'"
+    )
+    author: Optional[str] = Field(None, max_length=300)
     added_date: Optional[date_type] = None
 
 
 class BookUpdate(RequestModel):
     """All fields optional — only supplied fields are changed."""
 
-    title: Optional[str] = Field(None, min_length=1)
-    category: Optional[str] = None
-    author: Optional[str] = None
+    title: Optional[str] = Field(None, min_length=1, max_length=500)
+    category: Optional[str] = Field(None, max_length=200)
+    author: Optional[str] = Field(None, max_length=300)
     added_date: Optional[date_type] = None
 
 

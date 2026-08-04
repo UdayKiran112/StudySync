@@ -14,6 +14,7 @@ explicitly here for a clean 404, rather than surfacing a raw
 sqlite3.IntegrityError from the FK constraint.
 """
 
+import logging
 import sqlite3
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -26,6 +27,11 @@ from models.offline_library import (
     OfflineLibraryResponse,
 )
 from security import require_api_key
+
+logger = logging.getLogger("studysync.offline_library")
+
+# Fields permitted in dynamic UPDATE SET clauses (defense-in-depth).
+_OFFLINE_LIBRARY_UPDATABLE_FIELDS = frozenset({"book_id", "date"})
 
 router = APIRouter(
     prefix="/api/offline-library",
@@ -62,7 +68,7 @@ def create_offline_usage(
     404 if the student doesn't exist. If book_id is provided, 404 if that
     book isn't in the catalog. book_id may be omitted entirely for
     self-material reading — no further detail is captured in that case.
-    
+
     If this entry has a book_id (not a self-study entry) and auto-created
     self-study records exist for this date, they will be cleaned up.
     """
@@ -85,9 +91,14 @@ def create_offline_usage(
     if payload.book_id is not None:
         try:
             from routers.attendance import _cleanup_auto_filled_offline_if_needed
+
             _cleanup_auto_filled_offline_if_needed(db, payload.student_id, record_date)
         except Exception:
-            pass  # Cleanup is a side effect; don't let failures block creation
+            logger.exception(
+                "Auto-fill cleanup failed for student %s on %s",
+                payload.student_id,
+                record_date,
+            )
 
     row = db.execute(
         "SELECT * FROM offline_library_usage WHERE usage_id = ?",
@@ -171,8 +182,14 @@ def update_offline_usage(
     if "book_id" in updates and updates["book_id"] is not None:
         _ensure_book_exists(db, updates["book_id"])
 
-    set_clause = ", ".join(f"{field} = ?" for field in updates.keys())
-    values = list(updates.values()) + [usage_id]
+    safe_fields = updates.keys() & _OFFLINE_LIBRARY_UPDATABLE_FIELDS
+    if not safe_fields:
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided to update"
+        )
+
+    set_clause = ", ".join(f"{field} = ?" for field in safe_fields)
+    values = [updates[field] for field in safe_fields] + [usage_id]
 
     db.execute(
         f"UPDATE offline_library_usage SET {set_clause} WHERE usage_id = ?", values

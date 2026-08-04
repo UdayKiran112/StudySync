@@ -18,8 +18,24 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from database import get_db_dependency
-from models.subscriptions import SubscriptionCreate, SubscriptionResponse, SubscriptionUpdate
+from models.subscriptions import (
+    SubscriptionCreate,
+    SubscriptionResponse,
+    SubscriptionUpdate,
+)
 from security import require_api_key
+
+# Fields permitted in dynamic UPDATE SET clauses (defense-in-depth).
+_SUBSCRIPTION_UPDATABLE_FIELDS = frozenset(
+    {
+        "name",
+        "type",
+        "cost",
+        "start_date",
+        "validity_days",
+        "status",
+    }
+)
 
 router = APIRouter(
     prefix="/api/subscriptions",
@@ -180,9 +196,11 @@ def subscription_summary(
         "active": totals["active"] or 0,
         "expired": totals["expired"] or 0,
         "total_cost": totals["total_cost"] or 0,
-        "average_validity_days": round(totals["average_validity"], 1)
-        if totals["average_validity"] is not None
-        else None,
+        "average_validity_days": (
+            round(totals["average_validity"], 1)
+            if totals["average_validity"] is not None
+            else None
+        ),
         "expiring": totals["expiring"] or 0,
         "used_today": usage["used_today"] or 0,
         "type_distribution": [dict(row) for row in type_rows],
@@ -234,8 +252,14 @@ def update_subscription(
     if not updates:
         raise HTTPException(status_code=400, detail="No fields provided to update")
 
-    set_clause = ", ".join(f"{field} = ?" for field in updates.keys())
-    values = list(updates.values()) + [subscription_id]
+    safe_fields = updates.keys() & _SUBSCRIPTION_UPDATABLE_FIELDS
+    if not safe_fields:
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided to update"
+        )
+
+    set_clause = ", ".join(f"{field} = ?" for field in safe_fields)
+    values = [updates[field] for field in safe_fields] + [subscription_id]
 
     db.execute(
         f"UPDATE subscriptions SET {set_clause} WHERE subscription_id = ?", values

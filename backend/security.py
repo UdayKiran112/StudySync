@@ -8,6 +8,8 @@ from fastapi.security import APIKeyHeader
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
+_MIN_KEY_LENGTH = 32
+
 
 def require_api_key(api_key: str | None = Security(api_key_header)) -> None:
     """Require the key supplied through the STUDYSYNC_API_KEY environment variable."""
@@ -16,6 +18,11 @@ def require_api_key(api_key: str | None = Security(api_key_header)) -> None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Server API key is not configured",
+        )
+    if len(configured_key) < _MIN_KEY_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server API key does not meet minimum length requirement",
         )
     if not api_key or not secrets.compare_digest(api_key, configured_key):
         raise HTTPException(

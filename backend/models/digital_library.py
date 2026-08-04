@@ -38,10 +38,15 @@ class DigitalLibraryCheckIn(RequestModel):
 
     student_id: int
     account_type: Literal["Library Subscription", "Own Account"]
-    subscription_id: Optional[str] = Field(None, min_length=1)
-    platform_name: str = Field(..., min_length=1, description="e.g. 'JSTOR', 'Britannica Online'")
-    purpose: Optional[str] = None
-    notes: Optional[str] = None
+    subscription_id: Optional[str] = Field(None, min_length=1, max_length=50)
+    platform_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="e.g. 'JSTOR', 'Britannica Online'",
+    )
+    purpose: Optional[str] = Field(None, max_length=500)
+    notes: Optional[str] = Field(None, max_length=2000)
     date: Optional[date_type] = None
     in_time: Optional[str] = Field(
         None, description="HH:MM 24-hour. Defaults to current server time."
