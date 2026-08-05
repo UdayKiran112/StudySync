@@ -538,8 +538,8 @@ def fix_operating_hours(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
         rather than loaded with nonsense times.
       - A check-out before its check-in that a 12-hour clock explains
         ('01:00' meant 13:00) -> +12h.
-      - A check-out past 18:00 (the library's latest closing) is a
-        data-entry overrun -> clamped to 18:00.
+      - A check-out past 19:00 (the library's latest closing) is a
+        data-entry overrun -> clamped to 19:00.
 
     Runs once, before the per-section builders, so attendance and digital
     library both see the corrected times and each correction is logged only

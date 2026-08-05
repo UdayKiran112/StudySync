@@ -107,6 +107,23 @@ sc start StudySyncAPI
 - The pre-restore database is kept at `data\library.db.pre-restore`.
 - If the restore fails mid-way, the previous database is restored automatically.
 
+## Shipping a database change (new seed data)
+
+Made edits in the database (students, books, marks, ...) and want fresh installs
+to start with them? No rebuild of the code is needed - just:
+
+1. Update the database (either `backend\library.db` in this repo, or the live
+   install at `C:\ProgramData\StudySync\data\library.db`).
+2. **Double-click `deploy\make-installer.cmd`** (or run
+   `deploy\make-installer.ps1`). It picks the newest database, verifies
+   integrity, copies it into the package as the seed, and rebuilds
+   `deploy\installer\output\StudySync-Setup.exe` - nothing else.
+3. Hand out the new `StudySync-Setup.exe`. A fresh install seeds from it.
+
+> Re-running the installer on a machine that already has data never overwrites
+> that data - the seed only applies when no database exists yet. For CODE
+> changes use `build-package.ps1` + `build-installer.ps1` instead.
+
 ## Update (new version of the app)
 
 Ship the updated package (produced by `build-package.ps1`) to the machine, then:

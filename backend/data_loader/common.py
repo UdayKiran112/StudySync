@@ -142,11 +142,11 @@ def parse_time(raw: str):
 # digital library, and offline library loaders and by clean_student_data)
 # --------------------------------------------------------------------------
 
-# The library opens at 09:00 and closes at 18:00 at the latest (usually
-# 17:30). These bounds drive the PM-clock-slip correction and the closing
-# clamp below.
+# The library opens at 09:00 and closes at 19:00 at the latest (usually
+# 17:30, but students genuinely stay past 18:00). These bounds drive the
+# PM-clock-slip correction and the closing clamp below.
 OPEN_TIME = "09:00"
-CLOSE_TIME = "18:00"
+CLOSE_TIME = "19:00"
 
 
 def _time_to_min(t: str) -> int:
@@ -211,8 +211,8 @@ def fix_checkout_pm_offset(check_in: str, check_out: str) -> str | None:
 
 def clamp_out_time(check_out: str) -> str | None:
     """Clamp a check-out past the library's closing time to the closing
-    time itself (e.g. '18:03' -> '18:00'). The library is never open past
-    18:00, so an out time beyond it is a data-entry overrun, not a real
+    time itself (e.g. '19:03' -> '19:00'). The library is never open past
+    19:00, so an out time beyond it is a data-entry overrun, not a real
     stay. Returns the corrected 'HH:MM', or None if nothing to clamp."""
     if check_out and check_out > CLOSE_TIME:
         return CLOSE_TIME
