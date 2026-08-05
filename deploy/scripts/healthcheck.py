@@ -33,7 +33,15 @@ def log(msg: str) -> None:
 
 
 def service_state(name: str) -> str:
-    out = subprocess.run(["sc", "query", name], capture_output=True, text=True).stdout
+    # CREATE_NO_WINDOW: this exe is built windowless (PyInstaller --noconsole),
+    # so any console child it spawns would flash a new Command Prompt window.
+    # sc.exe is a console app; without this flag it pops a window on every run.
+    out = subprocess.run(
+        ["sc", "query", name],
+        capture_output=True,
+        text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    ).stdout
     for line in out.splitlines():
         if "STATE" in line:
             # sc output:  "        STATE              : 4  RUNNING"
@@ -45,7 +53,12 @@ def service_state(name: str) -> str:
 
 def try_restart(name: str) -> None:
     log(f"Attempting restart of {name}...")
-    subprocess.run(["sc", "start", name], capture_output=True, text=True)
+    subprocess.run(
+        ["sc", "start", name],
+        capture_output=True,
+        text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
     time.sleep(5)
 
 
