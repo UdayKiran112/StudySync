@@ -9,17 +9,22 @@ installer is produced and what it does.
 ```
 Browser (this PC or any LAN PC)
    |
-   |  http://<this-PC-IP>          port 80
+   |  http://studysync.local / http://<this-PC-IP>     port 80
    v
 Caddy  (service: StudySyncCaddy)
    |  serves static React build (app\frontend)
    |  reverse-proxies /api/*  ->  127.0.0.1:8000
    v
 FastAPI / Uvicorn, PyInstaller-bundled  (service: StudySyncAPI)
-   |
+   |  also advertises "studysync.local" over mDNS (UDP 5353) via zeroconf
    v
 SQLite database (WAL)   C:\ProgramData\StudySync\data\library.db
 ```
+
+The API service advertises the LAN name **`http://studysync.local`** over mDNS
+(no PC rename needed). Apple/Android devices resolve it natively; Windows PCs
+need Apple Bonjour (bundled in the installer and auto-installed on the server,
+plus kept at `tools\Bonjour64.msi` for staff PCs). See OPERATIONS.md.
 
 No Python, Node, or npm is needed on the target machine. Everything ships inside
 the installer as compiled executables (PyInstaller bundle + Caddy binary).
@@ -38,6 +43,7 @@ Everything lives under `C:\ProgramData\StudySync`:
 | `data\mplcache\` | Matplotlib font cache (must be writable; frozen exe crashes without it) |
 | `backups\` | Nightly `studysync_<timestamp>.zip` backups |
 | `scripts\` | `backup.exe`, `restore.exe`, `healthcheck.exe`, `install.ps1`, `update.ps1`, `uninstall.ps1` |
+| `tools\` | `Bonjour64.msi` (Apple Bonjour for Windows - mDNS name resolution) |
 | `logs\` | `api\`, `caddy\`, `winsw\`, `backup\`, `health\`, `installer\` |
 
 ## Windows services
@@ -103,20 +109,26 @@ The Inno script (`deploy\installer\studysync.iss`) is deliberately thin:
 3. `[Run]` executes `install.ps1 -PackageDir {tmp}\package` elevated, with
    output logged to `logs\installer\inno-install.log`.
 4. `install.ps1` is the single source of truth. It:
-   - stops existing services (if WinSW binaries exist),
-   - copies `app`, `config`, `scripts` into `C:\ProgramData\StudySync`,
+   - stops existing services (if WinSW binaries exist), also stopping the
+     scheduled tasks and killing any running `healthcheck.exe` / `backup.exe`
+     so the file copy can never hit a locked exe,
+   - copies `app`, `config`, `scripts`, `tools` into `C:\ProgramData\StudySync`,
    - seeds `data\library.db` ONLY if none exists,
    - preserves/generates `.env`,
    - registers services if missing (existing registrations are only stopped,
      never uninstalled — see the warning below),
    - starts both services,
-   - creates the inbound firewall rule `StudySync HTTP (port 80)` (Private +
-     Domain only),
+   - creates the inbound firewall rules `StudySync HTTP (port 80)` (TCP) and
+     `StudySync mDNS (UDP 5353)` (Private + Domain only),
+   - installs Apple Bonjour (`tools\Bonjour64.msi`, silently) so Windows PCs
+     can resolve `http://studysync.local`; the MSI also stays on the server for
+     staff PCs,
    - registers the two scheduled tasks,
    - writes the desktop shortcut.
 5. Uninstall: Control Panel → StudySync runs `uninstall.ps1 -Yes`, which makes a
    final backup, removes services/tasks/firewall/shortcut, then deletes
-   `C:\ProgramData\StudySync`.
+   `C:\ProgramData\StudySync`. Bonjour is a shared Windows component (also used
+   by iTunes etc.) and is intentionally left installed.
 
 ## Critical operational warnings
 

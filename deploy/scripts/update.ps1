@@ -48,13 +48,24 @@ Start-Sleep -Seconds 3
 Write-Host "Creating a safety backup before update..." -ForegroundColor Yellow
 & "$APP_DIR\scripts\backup.exe" | Out-Null
 
+# Stop the watchdog/backup tasks and kill any running instances so the file
+# copy below is not blocked by a locked healthcheck.exe / backup.exe
+# ($ErrorActionPreference=Stop would otherwise abort the update midway).
+foreach ($task in @("StudySyncServiceCheck", "StudySyncNightly")) {
+    Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+}
+foreach ($proc in @("healthcheck", "backup")) {
+    Get-Process -Name $proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+Start-Sleep -Seconds 1
+
 # 3. Replace application code. The venv ships inside the package, so the
 #    whole app/api and app/frontend and app/caddy trees are swapped.
 $apiKey = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_API_KEY=(.+)$').Matches[0].Groups[1].Value
 $dbEnv = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_DB_PATH=(.+)$').Matches[0].Groups[1].Value
 Write-Log "Preserving API key (kept from current install)."
 
-foreach ($rel in @("app\api", "app\frontend", "app\caddy", "config\winsw", "scripts")) {
+foreach ($rel in @("app\api", "app\frontend", "app\caddy", "config\winsw", "scripts", "tools")) {
     $src = Join-Path $PackageDir $rel
     if (-not (Test-Path $src)) { Write-Log "WARN: missing $rel in package"; continue }
     $dst = Join-Path $APP_DIR $rel

@@ -10,3 +10,4 @@ matplotlib==3.10.8
 pyzk==0.9
 slowapi==0.1.9
 python-dotenv==1.0.1
+zeroconf==0.150.0

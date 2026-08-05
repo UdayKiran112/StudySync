@@ -47,6 +47,7 @@ Get-ScheduledTask -TaskName "StudySyncServiceCheck" -ErrorAction SilentlyContinu
 Get-ScheduledTask -TaskName "StudySync-Backup" -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false
 Get-ScheduledTask -TaskName "StudySync-HealthWatch" -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false
 Remove-NetFirewallRule -DisplayName "StudySync HTTP (port 80)" -ErrorAction SilentlyContinue
+Remove-NetFirewallRule -DisplayName "StudySync mDNS (UDP 5353)" -ErrorAction SilentlyContinue
 Remove-Item -Path "$env:USERPROFILE\Desktop\StudySync.url" -ErrorAction SilentlyContinue
 
 Remove-Item -Path $APP_DIR -Recurse -Force

@@ -67,7 +67,21 @@ $caddyBin = "$APP_DIR\config\winsw\studysync-caddy.exe"
 if (Test-Path $apiBin)   { Write-Log "Stopping existing StudySyncAPI service...";   Invoke-WinSw $apiBin "stop" $false }
 if (Test-Path $caddyBin) { Write-Log "Stopping existing StudySyncCaddy service..."; Invoke-WinSw $caddyBin "stop" $false }
 
-foreach ($rel in @("app\api", "app\frontend", "app\caddy", "config\winsw", "scripts")) {
+# The watchdog (every 5 min) and backup (nightly) may be mid-run right now and
+# holding healthcheck.exe / backup.exe open. If the file copy below hits a
+# locked exe, $ErrorActionPreference=Stop aborts the whole install midway
+# (services stopped, firewall/tasks skipped, install.log truncated). Stop the
+# tasks and kill any running instance so the copy can overwrite them. Silent on
+# first install where the tasks/processes do not exist yet.
+foreach ($task in @("StudySyncServiceCheck", "StudySyncNightly")) {
+    Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
+}
+foreach ($proc in @("healthcheck", "backup")) {
+    Get-Process -Name $proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+Start-Sleep -Seconds 1
+
+foreach ($rel in @("app\api", "app\frontend", "app\caddy", "config\winsw", "scripts", "tools")) {
     $src = Join-Path $PackageDir $rel
     if (-not (Test-Path $src)) { Write-Host "WARN: missing $rel in package" -ForegroundColor Yellow; continue }
     $dst = Join-Path $APP_DIR $rel
@@ -164,6 +178,39 @@ if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContin
     Write-Log "Firewall rule already exists."
 }
 
+# mDNS (UDP 5353): lets devices resolve http://studysync.local by name. Without
+# an inbound rule the responder may not see queries, so clients could not
+# resolve the name even though the app advertises it.
+$mdnsRule = "StudySync mDNS (UDP 5353)"
+if (-not (Get-NetFirewallRule -DisplayName $mdnsRule -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -DisplayName $mdnsRule -Direction Inbound -Protocol UDP `
+        -LocalPort 5353 -Action Allow -Profile Private, Domain | Out-Null
+    Write-Log "Firewall rule created for inbound mDNS (UDP 5353)."
+} else {
+    Write-Log "mDNS firewall rule already exists."
+}
+
+# ------------------------------------------------- Bonjour for Windows
+# Windows PCs cannot resolve http://studysync.local without Apple Bonjour
+# (the built-in DNS client only resolves the machine's own hostname, e.g.
+# Myth.local). Install it silently if not present, and keep a copy under
+# $APP_DIR\tools so staff PCs can be set up from the server.
+$bonjourMsi = "$APP_DIR\tools\Bonjour64.msi"
+if (Get-Service -Name "Bonjour Service" -ErrorAction SilentlyContinue) {
+    Write-Log "Bonjour already installed (mDNS name resolution available)."
+} elseif (Test-Path $bonjourMsi) {
+    Write-Log "Installing Bonjour for Windows (lets PC resolve http://studysync.local)..."
+    $p = Start-Process msiexec -ArgumentList "/i", $bonjourMsi, "/qn", "/norestart" -Wait -PassThru
+    # msiexec: 0 = success, 3010 = success but reboot required.
+    if (($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) -and (Get-Service -Name "Bonjour Service" -ErrorAction SilentlyContinue)) {
+        Write-Log "Bonjour installed successfully."
+    } else {
+        Write-Log "WARN: Bonjour install returned exit $($p.ExitCode); studysync.local will not resolve on Windows PCs without it."
+    }
+} else {
+    Write-Log "WARN: Bonjour64.msi not found in tools; studysync.local will not resolve on Windows PCs without it."
+}
+
 # -------------------------------------------------- scheduled tasks
 # Tasks run as the installing (admin) user with an interactive logon.
 # Note: on some machines security software silently deletes SYSTEM-run
@@ -200,6 +247,9 @@ Write-Log "Desktop shortcut created: $lnkPath"
 # --------------------------------------------------------------- done
 Write-Log "Installation complete."
 Write-Host "`nInstallation complete." -ForegroundColor Green
-Write-Host "  App URL : http://localhost   (LAN: http://<this-PC-IP>)" -ForegroundColor Green
+Write-Host "  App URL : http://localhost   (LAN: http://studysync.local)" -ForegroundColor Green
 Write-Host "  API key: $apiKey" -ForegroundColor Yellow
 Write-Host "  Save the API key somewhere safe. Staff enter it ONCE per browser in Settings." -ForegroundColor Yellow
+Write-Host "  LAN access: Apple/Android use http://studysync.local directly; Windows PCs need" -ForegroundColor Cyan
+Write-Host "  Apple Bonjour (bundled - auto-installed on this server, and at" -ForegroundColor Cyan
+Write-Host "  $APP_DIR\tools\Bonjour64.msi for staff PCs)." -ForegroundColor Cyan

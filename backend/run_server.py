@@ -17,6 +17,8 @@ Run frozen:        studysync-api.exe
 import multiprocessing
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 # Required for frozen Windows executables that may use multiprocessing.
@@ -89,7 +91,65 @@ LOGGING_CONFIG = {
 }
 
 
+def _advertise_mdns() -> None:
+    """Advertise studysync.local over mDNS so LAN devices can reach the app by
+    name (http://studysync.local) instead of a raw IP. Runs in a daemon thread:
+    failures are logged and never crash the API service."""
+    import logging
+    import socket
+
+    logger = logging.getLogger("studysync.mdns")
+
+    try:
+        from zeroconf import ServiceInfo, Zeroconf
+    except Exception as exc:  # pragma: no cover - missing dependency
+        logger.warning("mDNS advertisement disabled (zeroconf unavailable): %s", exc)
+        return
+
+    zc = None
+    try:
+        addrs = []
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                if ip not in addrs:
+                    addrs.append(ip)
+        if not addrs:
+            logger.warning("mDNS advertisement disabled (no LAN IPv4 found)")
+            return
+
+        # server="studysync.local." makes the responder publish an A record for
+        # the studysync.local hostname (not just the SRV/PTR service record), so
+        # a browser typing http://studysync.local can resolve it directly.
+        service = ServiceInfo(
+            "_http._tcp.local.",
+            "studysync._http._tcp.local.",
+            addresses=[socket.inet_aton(ip) for ip in addrs],
+            port=80,
+            properties={b"path": b"/"},
+            server="studysync.local.",
+        )
+        zc = Zeroconf()
+        zc.register_service(service, allow_name_change=False)
+        logger.info(
+            "mDNS: advertising http://studysync.local -> %s (port 80)",
+            ", ".join(addrs),
+        )
+        while True:
+            time.sleep(3600)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("mDNS advertisement error: %s", exc)
+    finally:
+        if zc is not None:
+            try:
+                zc.unregister_all_services()
+                zc.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 if __name__ == "__main__":
+    threading.Thread(target=_advertise_mdns, name="mdns-advertise", daemon=True).start()
     host = os.getenv("STUDYSYNC_HOST", "127.0.0.1")
     port = int(os.getenv("STUDYSYNC_PORT", "8000"))
     uvicorn.run(

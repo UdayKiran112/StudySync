@@ -50,6 +50,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut to StudySync"; Grou
 Source: "{#PackageDir}\app\*"; DestDir: "{tmp}\package\app"; Flags: recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "{#PackageDir}\config\*"; DestDir: "{tmp}\package\config"; Flags: recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "{#PackageDir}\scripts\*"; DestDir: "{tmp}\package\scripts"; Flags: recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "{#PackageDir}\tools\*"; DestDir: "{tmp}\package\tools"; Flags: recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "{#PackageDir}\data\*"; DestDir: "{tmp}\package\data"; Flags: recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]

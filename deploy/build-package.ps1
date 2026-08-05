@@ -61,7 +61,8 @@ Push-Location $backend
 try {
     & "$buildVenv\Scripts\pyinstaller.exe" --noconfirm --clean `
         --distpath $dist --workpath (Join-Path $build "work") --specpath (Join-Path $build "spec") `
-        --name studysync-api --onedir --paths . run_server.py | Out-Null
+        --name studysync-api --onedir --paths . `
+        --hidden-import ifaddr run_server.py | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
     # Scheduled-task helpers run as the interactive user; build backup and
     # healthcheck as windowless (--noconsole) so they never flash a Command
@@ -90,6 +91,15 @@ if (-not (Test-Path (Join-Path $bin "WinSW-x64.exe"))) {
 if (-not (Test-Path (Join-Path $bin "caddy.exe"))) {
     throw "caddy.exe missing from deploy\bin. Download:
   https://caddyserver.com/download  (Windows amd64 -> deploy\bin\caddy.exe)"
+}
+# Bonjour for Windows (Bonjour64.msi, Apple-signed) - needed so Windows PCs
+# can resolve http://studysync.local. Stage it under deploy\tools (gitignored
+# binary); install.ps1 installs it on the server and keeps a copy for staff PCs.
+$bonjourMsi = Join-Path $deploy "tools\Bonjour64.msi"
+if (-not (Test-Path $bonjourMsi)) {
+    throw "Bonjour64.msi missing from deploy\tools. Get the Apple-signed MSI
+  (2,682,368 bytes, MD5 8dcf5c9eaacdaf4568220d103f393dea) and save it as:
+  $bonjourMsi"
 }
 
 # -------------------------------------------------------------- 4. package
@@ -126,6 +136,11 @@ foreach ($name in @("backup", "restore", "healthcheck")) {
 foreach ($ps1 in @("install.ps1", "update.ps1", "uninstall.ps1", "diagnostics.ps1")) {
     Copy-Item (Join-Path $deploy "scripts\$ps1") (Join-Path $package "scripts") -Force
 }
+
+# Tools (Bonjour for Windows MSI - staff PCs need this to resolve
+# http://studysync.local; install.ps1 also copies it to $APP_DIR\tools).
+New-Item -ItemType Directory -Force -Path (Join-Path $package "tools") | Out-Null
+Copy-Item $bonjourMsi (Join-Path $package "tools\Bonjour64.msi") -Force
 
 # Seed database (optional)
 if ($IncludeDatabase) {

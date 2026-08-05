@@ -125,10 +125,26 @@ C:\ProgramData\StudySync\scripts\uninstall.ps1 -Yes
 
 ## Access from other PCs on the LAN
 
-- URL: `http://<server-IP>` (no port). Find the IP with `ipconfig` or
-  `diagnostics.ps1` (`05_network.txt`).
-- The firewall rule `StudySync HTTP (port 80)` allows inbound on **Private and
-  Domain** profiles only — the server's network must be Private, not Public.
+The app is reachable by a stable name, `http://studysync.local`, on every device.
+How the device resolves it depends on the OS:
+
+| Device | Address to use | Why |
+| --- | --- | --- |
+| Apple (iPhone/iPad/Mac), Android | `http://studysync.local` | Native mDNS (Bonjour) resolver built into the OS |
+| Windows PC | `http://studysync.local` | After installing Apple Bonjour (below) |
+| Windows PC (no Bonjour) | `http://<server-name>` (e.g. `http://Myth`) or `http://<server-IP>` | NetBIOS / IP fallback |
+| This server | `http://localhost` | Loopback |
+
+- The server advertises `studysync.local` via mDNS (UDP 5353) from the API
+  service and firewall rules `StudySync HTTP (port 80)` + `StudySync mDNS
+  (UDP 5353)` allow inbound on **Private and Domain** profiles only — the
+  server's network must be Private, not Public.
+- **Windows PCs need Apple Bonjour** to resolve `*.local` names (Windows' built-in
+  DNS client only resolves its own hostname). The installer auto-installs it on
+  the server and keeps a copy at `C:\ProgramData\StudySync\tools\Bonjour64.msi`.
+  For each Windows staff PC: double-click that MSI (or
+  `\\<server-name>\C$\ProgramData\StudySync\tools\Bonjour64.msi`) once, then
+  `http://studysync.local` resolves. If a PC lacks Bonjour, use `http://Myth`.
 - Staff enter the API key once per browser in Settings.
 
 ## Troubleshooting cheat-sheet
