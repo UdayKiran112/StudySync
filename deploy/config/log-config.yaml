@@ -1,0 +1,58 @@
+# StudySync uvicorn logging configuration
+# Installed to C:\ProgramData\StudySync\app\api\log-config.yaml
+# Rotating file logs in C:\ProgramData\StudySync\logs\api\
+
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  default:
+    format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+  access:
+    format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
+handlers:
+  api_file:
+    class: logging.handlers.RotatingFileHandler
+    filename: C:\ProgramData\StudySync\logs\api\api.log
+    maxBytes: 5242880
+    backupCount: 10
+    formatter: default
+    encoding: utf-8
+
+  console:
+    class: logging.StreamHandler
+    formatter: default
+    stream: ext://sys.stdout
+
+root:
+  level: INFO
+  handlers: [api_file, console]
+
+loggers:
+  uvicorn:
+    level: INFO
+    handlers: [api_file, console]
+    propagate: false
+  studysync:
+    level: INFO
+    handlers: [api_file, console]
+    propagate: false
+  gspread:
+    level: WARNING
+    handlers: [api_file]
+    propagate: false
+  urllib3:
+    level: WARNING
+    handlers: [api_file]
+    propagate: false
+  matplotlib:
+    level: WARNING
+    handlers: [api_file]
+    propagate: false
+  pyzk:
+    level: INFO
+    handlers: [api_file, console]
+    propagate: false

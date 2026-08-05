@@ -17,6 +17,10 @@ interface SettingsContextValue extends Settings {
   isConfigured: boolean;
 }
 
+// Production is served behind a reverse proxy (Caddy) that also proxies
+// /api/*, so an empty VITE_API_BASE_URL means "same origin as the page"
+// and requires zero configuration on any client machine. Dev builds leave
+// the variable unset and fall back to the direct FastAPI dev server.
 const DEFAULT_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const STORAGE_KEY = "studysync.settings";
@@ -63,7 +67,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setSettings((s) => ({ ...s, baseUrl: trimmed }));
     },
     setApiKey: (v) => setSettings((s) => ({ ...s, apiKey: v })),
-    isConfigured: Boolean(settings.baseUrl && settings.apiKey),
+    isConfigured: Boolean(settings.apiKey),
   };
 
   return (

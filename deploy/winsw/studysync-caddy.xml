@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  StudySync Caddy reverse proxy / static file server (WinSW).
+  Installed to: C:\ProgramData\StudySync\config\winsw\studysync-caddy.xml
+  Binary must be renamed: WinSW-x64.exe -> studysync-caddy.exe
+  Serves the React build on port 80 and proxies /api/* to the API service.
+-->
+<service>
+  <id>StudySyncCaddy</id>
+  <name>StudySync Web Server (Caddy)</name>
+  <description>Serves the StudySync frontend and reverse-proxies API requests</description>
+
+  <executable>C:\ProgramData\StudySync\app\caddy\caddy.exe</executable>
+  <arguments>run --config C:\ProgramData\StudySync\app\caddy\Caddyfile --adapter caddyfile</arguments>
+  <workingdirectory>C:\ProgramData\StudySync\app\caddy</workingdirectory>
+
+  <!-- This service must wait until the API service has started. -->
+  <depend>StudySyncAPI</depend>
+
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+    <pattern>yyyyMMdd</pattern>
+    <autoRollAtTime>00:00:00</autoRollAtTime>
+  </log>
+
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="20 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <onfailure action="none" delay="60 sec"/>
+  <resetfailure>1 hour</resetfailure>
+
+  <stoptimeout>30 sec</stoptimeout>
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <priority>Normal</priority>
+</service>

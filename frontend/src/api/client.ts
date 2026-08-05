@@ -3,27 +3,34 @@ import type { ApiErrorBody } from "./types";
 
 const STORAGE_KEY = "studysync.settings";
 
+// Empty value = same-origin (production reverse-proxy deployment).
+// Unset = local dev server fallback.
+const DEFAULT_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+
 function readSettings(): { baseUrl: string; apiKey: string } {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      const url = (parsed.baseUrl || "http://localhost:8000").replace(/\/+$/, "");
-      let sanitizedUrl = url;
-      try {
-        const u = new URL(url);
-        if (u.protocol === "http:" || u.protocol === "https:") {
-          sanitizedUrl = u.origin;
+      const rawUrl = (parsed.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
+      let sanitizedUrl = "";
+      if (rawUrl) {
+        try {
+          const u = new URL(rawUrl);
+          if (u.protocol === "http:" || u.protocol === "https:") {
+            sanitizedUrl = u.origin;
+          }
+        } catch {
+          // not an absolute URL — treat as empty (same-origin)
         }
-      } catch {
-        sanitizedUrl = "http://localhost:8000";
       }
       return { baseUrl: sanitizedUrl, apiKey: parsed.apiKey || "" };
     }
   } catch {
     // ignore
   }
-  return { baseUrl: "http://localhost:8000", apiKey: "" };
+  return { baseUrl: DEFAULT_BASE_URL, apiKey: "" };
 }
 
 export const apiClient = axios.create();

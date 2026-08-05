@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  StudySync API Windows service definition (WinSW).
+  Installed to: C:\ProgramData\StudySync\config\winsw\studysync-api.xml
+  Binary must be renamed: WinSW-x64.exe -> studysync-api.exe
+  Runs the PyInstaller-bundled backend. The executable needs no arguments;
+  it binds to 127.0.0.1:8000 and writes rotating logs to logs\api.
+-->
+<service>
+  <id>StudySyncAPI</id>
+  <name>StudySync API</name>
+  <description>StudySync backend API (FastAPI / Uvicorn, bundled)</description>
+
+  <executable>C:\ProgramData\StudySync\app\api\studysync-api.exe</executable>
+  <workingdirectory>C:\ProgramData\StudySync\app\api</workingdirectory>
+
+  <!-- Matplotlib font-cache dir: a writable path outside the app folder.
+       Without a valid cache dir, a frozen PyInstaller app can crash with
+       KeyboardInterrupt while rebuilding the font cache on every start. -->
+  <env name="MPLCONFIGDIR" value="C:\ProgramData\StudySync\data\mplcache"/>
+  <env name="STUDYSYNC_MPLCONFIGDIR" value="C:\ProgramData\StudySync\data\mplcache"/>
+
+  <!-- Rotating console logs captured by WinSW (diagnostics only; the app
+       writes its own rotating log to logs\api\api.log). -->
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+    <pattern>yyyyMMdd</pattern>
+    <autoRollAtTime>00:00:00</autoRollAtTime>
+  </log>
+
+  <!-- Auto-recovery: restart up to 3 times with backoff, then give up
+       (the scheduled watchdog will catch it later and page the log). -->
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="20 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <onfailure action="none" delay="60 sec"/>
+  <resetfailure>1 hour</resetfailure>
+
+  <stoptimeout>30 sec</stoptimeout>
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+  <priority>Normal</priority>
+</service>

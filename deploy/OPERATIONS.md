@@ -1,0 +1,149 @@
+# StudySync Operations
+
+Day-to-day runbooks for the machine running StudySync (the server). All commands
+run from an **elevated** (Administrator) PowerShell on that machine.
+
+## Quick health check
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\ProgramData\StudySync\scripts\diagnostics.ps1
+```
+
+Produces `%TEMP%\studysync-diagnostics_<stamp>.zip` with service state, log
+tails, firewall rule, scheduled tasks, network info, and a health-check result.
+Hand this zip to whoever is diagnosing.
+
+One-liner checks:
+
+```powershell
+Get-Service StudySyncAPI, StudySyncCaddy                 # both should be Running
+(Invoke-WebRequest http://localhost -UseBasicParsing).StatusCode   # 200
+Get-Content C:\ProgramData\StudySync\logs\health\health.log -Tail 5   # last line HEALTHY
+```
+
+## Is it healthy?
+
+`healthcheck.exe` (every 5 minutes via task `StudySyncServiceCheck`, or run it
+manually):
+
+```powershell
+C:\ProgramData\StudySync\scripts\healthcheck.exe
+```
+
+- Exit 0 = `HEALTHY`, logged to `logs\health\health.log`.
+- Non-zero = something was down; it logs `UNHEALTHY: ...` and attempts to
+  restart the offending service itself.
+- If the health log shows repeated `UNHEALTHY` lines, run diagnostics and check
+  `logs\api\api.log` and `config\winsw\*.err.log`.
+
+## Restarting the app
+
+```powershell
+& C:\ProgramData\StudySync\config\winsw\studysync-api.exe restart
+& C:\ProgramData\StudySync\config\winsw\studysync-caddy.exe restart
+```
+
+(Services also restart automatically on crash, 3 attempts with backoff, and on
+reboot — both are `Automatic`.)
+
+## Where the logs live
+
+| Log | Path |
+| --- | --- |
+| Backend | `logs\api\api.log` (rotating) |
+| Caddy access | `logs\caddy\access.log` |
+| WinSW wrapper | `config\winsw\*.out.log` / `*.err.log` / `*.wrapper.log` |
+| Backups | `logs\backup\backup.log` |
+| Health watch | `logs\health\health.log` |
+| Installer | `logs\installer\install.log`, `inno-install.log`, `inno-uninstall.log`, `update.log` |
+
+## Backup
+
+Automatic nightly at 02:00 (`StudySyncNightly` → `backup.exe`). Backups land in
+`C:\ProgramData\StudySync\backups\studysync_<timestamp>.zip` and are pruned
+after **30 days** (`STUDYSYNC_BACKUP_RETENTION_DAYS`).
+
+The backup is made through SQLite's online-backup API, so it is consistent even
+while the API is running — no need to stop services.
+
+Manual backup:
+
+```powershell
+C:\ProgramData\StudySync\scripts\backup.exe
+```
+
+## Restore
+
+Restore **requires stopping the API** first (the script refuses while it runs):
+
+```powershell
+sc stop StudySyncAPI
+C:\ProgramData\StudySync\scripts\restore.exe               # lists backups, prompts
+# or pick a specific one:
+C:\ProgramData\StudySync\scripts\restore.exe C:\ProgramData\StudySync\backups\studysync_2026-08-05_020000.zip
+sc start StudySyncAPI
+```
+
+- The pre-restore database is kept at `data\library.db.pre-restore`.
+- If the restore fails mid-way, the previous database is restored automatically.
+
+## Update (new version of the app)
+
+Ship the updated package (produced by `build-package.ps1`) to the machine, then:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\ProgramData\StudySync\scripts\update.ps1 -PackageDir C:\path\to\new\package
+```
+
+What it does: stops services → safety backup → swaps `app\config\scripts` →
+recreates `.env` with the SAME API key and DB path → starts services.
+
+**Data is never touched** — `data\library.db`, backups, and logs survive.
+
+> Schema changes: if the database schema changed, run the migration with the NEW
+> code BEFORE `update.ps1` restarts the API (update.ps1 pauses after the swap;
+> do not modify that behavior casually).
+
+If staff already have `StudySync-Setup.exe`, simply re-running it performs the
+same in-place update (the installer is idempotent).
+
+## Uninstall / moving to another machine
+
+Best path: **uninstall via Control Panel → StudySync** (runs `uninstall.ps1
+-Yes`). It makes a final backup, removes services, scheduled tasks, firewall
+rule, desktop shortcut, then deletes `C:\ProgramData\StudySync`.
+
+Manual equivalent:
+
+```powershell
+C:\ProgramData\StudySync\scripts\uninstall.ps1 -Yes
+```
+
+> Uninstall DELETES the database after backing it up to `backups\`. Copy that
+> backup elsewhere before uninstalling if you still need the data (e.g. moving
+> to a new server).
+
+## Access from other PCs on the LAN
+
+- URL: `http://<server-IP>` (no port). Find the IP with `ipconfig` or
+  `diagnostics.ps1` (`05_network.txt`).
+- The firewall rule `StudySync HTTP (port 80)` allows inbound on **Private and
+  Domain** profiles only — the server's network must be Private, not Public.
+- Staff enter the API key once per browser in Settings.
+
+## Troubleshooting cheat-sheet
+
+| Symptom | Likely cause / fix |
+| --- | --- |
+| `http://localhost` won't load | `StudySyncCaddy` down → `healthcheck.exe`, check `config\winsw\studysync-caddy.err.log` |
+| API 500s / `/api/*` fails but page loads | `StudySyncAPI` down → check `logs\api\api.log`, `config\winsw\studysync-api.err.log` |
+| Backend crashes with matplotlib `KeyboardInterrupt` | `data\mplcache` missing/unwritable or `MPLCONFIGDIR` env dropped; recreate the dir, restart service |
+| Service stuck "marked for deletion" (never starts) | A previous uninstall raced the SCM. Reboot the machine, then re-run the installer |
+| A scheduled task keeps disappearing | Security software deleting SYSTEM tasks; re-run the installer to recreate `StudySyncNightly`/`StudySyncServiceCheck` (user principal) |
+| API returns 401 | Browser's saved key no longer matches `app\api\.env` → re-enter the key in Settings |
+| Port 80 conflict on install | Another web server on the machine; installer does not stop foreign processes |
+
+## Support
+
+Collect the diagnostics bundle (`diagnostics.ps1`) plus `logs\api\api.log` and
+`config\winsw\*.err.log` when reporting an issue.

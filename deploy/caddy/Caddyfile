@@ -1,0 +1,38 @@
+# StudySync production Caddyfile
+# Installed to C:\ProgramData\StudySync\app\caddy\Caddyfile
+# Serves the built React frontend and proxies /api/* to the FastAPI backend.
+
+# Caddy binds to all interfaces so LAN clients can reach the app at
+# http://<this-machine-IP>. Port 80 means no port numbers to remember.
+
+:80 {
+	# ---- Static frontend root ----
+	root * C:\ProgramData\StudySync\app\frontend
+
+	# ---- API traffic goes to FastAPI (matched first, never hit the SPA) ----
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# ---- Everything else: React SPA with history-API fallback ----
+	# Deep links like /students/42 return index.html so client-side routing works.
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+
+	# ---- Security headers ----
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-X-Powered-By
+	}
+
+	# ---- Logging ----
+	log {
+		output file C:\ProgramData\StudySync\logs\caddy\access.log
+		format json
+		level INFO
+	}
+}

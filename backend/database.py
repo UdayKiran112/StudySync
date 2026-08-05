@@ -9,13 +9,18 @@ Without it, your CHECK constraints tying account_type/subscription_id
 together will still work, but FK ON DELETE RESTRICT will not.
 """
 
+import os
 import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
 from datetime import date
 
-# Path to the SQLite database file. Lives next to this file.
-DB_PATH = Path(__file__).parent / "library.db"
+# Path to the SQLite database file. Overridable via STUDYSYNC_DB_PATH so
+# production deployments can keep data (and WAL files) in a separate data
+# directory that survives application updates.
+DB_PATH = Path(
+    os.getenv("STUDYSYNC_DB_PATH", str(Path(__file__).parent / "library.db"))
+)
 
 
 def get_connection() -> sqlite3.Connection:
