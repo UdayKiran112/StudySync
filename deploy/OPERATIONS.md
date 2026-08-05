@@ -55,7 +55,27 @@ reboot — both are `Automatic`.)
 | WinSW wrapper | `config\winsw\*.out.log` / `*.err.log` / `*.wrapper.log` |
 | Backups | `logs\backup\backup.log` |
 | Health watch | `logs\health\health.log` |
+| System tray | `logs\tray\tray.log` |
 | Installer | `logs\installer\install.log`, `inno-install.log`, `inno-uninstall.log`, `update.log` |
+
+## System-tray monitor
+
+A tray icon (like the Bluetooth/McAfee icons) sits in the notification area of
+this PC, started at every logon by the `StudySyncTray` scheduled task (elevated,
+so it can restart services without a UAC prompt). The icon color reflects overall
+health:
+
+- **Green** — all three services (`StudySyncAPI`, `StudySyncCaddy`,
+  `Bonjour Service`) running.
+- **Amber** — a service is starting/stopping, or a state is unknown.
+- **Red** — a service is stopped or not installed.
+
+Clicking the icon opens a small status window listing each service with its live
+state and a **Restart** button per service; the tray menu also has **Restart All
+Stopped**. The icon refreshes every 5 seconds; `logs\tray\tray.log` records
+start/stop and any errors. If the icon is missing, run
+`C:\ProgramData\StudySync\scripts\studysync-tray.exe` (or re-run the installer,
+which recreates the task and starts it).
 
 ## Backup
 
@@ -176,6 +196,9 @@ laptop** to another Wi-Fi:
 | Backend crashes with matplotlib `KeyboardInterrupt` | `data\mplcache` missing/unwritable or `MPLCONFIGDIR` env dropped; recreate the dir, restart service |
 | Service stuck "marked for deletion" (never starts) | A previous uninstall raced the SCM. Reboot the machine, then re-run the installer |
 | A scheduled task keeps disappearing | Security software deleting SYSTEM tasks; re-run the installer to recreate `StudySyncNightly`/`StudySyncServiceCheck` (user principal) |
+| Tray icon missing after install | Task `StudySyncTray` runs at logon; re-log on or run `scripts\studysync-tray.exe` manually |
+| Tray icon red | A service is stopped — click the icon and use **Restart** (needs the tray to run elevated, i.e. from the scheduled task) |
+| Tray "Restart" does nothing | The tray was launched manually without admin; re-run the installer or restart it from task `StudySyncTray` |
 | API returns 401 | Browser's saved key no longer matches `app\api\.env` → re-enter the key in Settings |
 | Port 80 conflict on install | Another web server on the machine; installer does not stop foreign processes |
 

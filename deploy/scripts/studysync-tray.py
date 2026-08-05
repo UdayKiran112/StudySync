@@ -1,0 +1,356 @@
+"""
+studysync-tray.py
+-----------------
+Windows system-tray monitor for StudySync (like the Bluetooth/McAfee icons).
+
+Runs persistently in the notification area. The icon color reflects overall
+health (green = all services running, amber = starting/pending, red = a
+service stopped). Clicking the icon opens a small status window that lists
+every backend service with its live state and a Restart button for each; the
+tray menu also has "Restart All Stopped".
+
+Started at logon by the StudySyncTray scheduled task (elevated, so it can
+restart services from the tray without a UAC prompt). Built windowless by
+PyInstaller (--noconsole), so it never flashes a console window.
+
+    python deploy\\scripts\\studysync-tray.py
+"""
+
+import ctypes
+import queue
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+
+import tkinter as tk
+from PIL import Image, ImageDraw, ImageFont
+
+from pystray import Icon, Menu, MenuItem
+
+# (Windows service name, friendly name, restartable)
+SERVICES = [
+    ("StudySyncAPI", "StudySync API", True),
+    ("StudySyncCaddy", "StudySync Web Server (Caddy)", True),
+    ("Bonjour Service", "Bonjour (mDNS name resolver)", True),
+]
+
+APP_DIR = Path(
+    __import__("os").environ.get("STUDYSYNC_APP_DIR", r"C:\ProgramData\StudySync")
+)
+LOG_DIR = APP_DIR / "logs" / "tray"
+LOG_FILE = LOG_DIR / "tray.log"
+
+# Suppress the console window of sc.exe (this process itself is windowless).
+CREATE_NO_WINDOW = 0x08000000
+
+_OK = (46, 160, 67)
+_BAD = (220, 60, 60)
+_WARN = (230, 160, 40)
+_ACCENT = (34, 120, 220)
+
+cmd_queue: "queue.Queue[str]" = queue.Queue()
+
+
+# ---------------------------------------------------------------- logging
+def _log(msg: str) -> None:
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        line = f"{datetime.now().isoformat(timespec='seconds')} | {msg}"
+        print(line, flush=True)
+        with open(LOG_FILE, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:  # noqa: BLE001 - logging must never crash the tray
+        pass
+
+
+# ------------------------------------------------------------ services
+def run_cmd(args, timeout: int = 15):
+    try:
+        return subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            creationflags=CREATE_NO_WINDOW,
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log(f"command failed: {' '.join(args)} -> {exc}")
+        return None
+
+
+def service_state(name: str) -> str:
+    """Running/Stopped/STOP_PENDING/... via `sc query` (visible to any user)."""
+    out = run_cmd(["sc", "query", name])
+    if out is None:
+        return "UNKNOWN"
+    if out.returncode != 0:
+        return "NOT FOUND"
+    for line in out.stdout.splitlines():
+        if "STATE" in line:
+            tokens = line.split(":", 1)[1].strip().split()
+            return tokens[1] if len(tokens) > 1 else tokens[0]
+    return "UNKNOWN"
+
+
+def restart_service(name: str) -> None:
+    _log(f"Restart requested for {name}")
+    run_cmd(["sc", "stop", name])
+    time.sleep(2)
+    run_cmd(["sc", "start", name])
+
+
+def _display_state(raw: str) -> str:
+    mapping = {
+        "RUNNING": "Running",
+        "STOPPED": "Stopped",
+        "STOP_PENDING": "Stopping\u2026",
+        "START_PENDING": "Starting\u2026",
+        "PAUSED": "Paused",
+        "NOT FOUND": "Not installed",
+        "UNKNOWN": "Unknown",
+    }
+    return mapping.get(raw, raw.title())
+
+
+def _state_color(raw: str) -> str:
+    if raw == "RUNNING":
+        return "#2ea043"
+    if raw in ("STOPPED", "NOT FOUND"):
+        return "#dc3c3c"
+    if raw in ("START_PENDING", "STOP_PENDING"):
+        return "#e6a028"
+    return "#8a8a8a"
+
+
+# ---------------------------------------------------------------- icon
+def _font(size: int):
+    for path in (
+        r"C:\Windows\Fonts\segoeuib.ttf",
+        r"C:\Windows\Fonts\arialbd.ttf",
+    ):
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:  # noqa: BLE001
+            continue
+    try:
+        return ImageFont.load_default()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def make_icon(color=_ACCENT) -> Image.Image:
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([2, 2, 61, 61], radius=14, fill=color + (255,))
+    f = _font(38)
+    if f is not None:
+        d.text((32, 31), "S", fill=(255, 255, 255, 255), anchor="mm", font=f)
+    return img
+
+
+# --------------------------------------------------------------- monitor
+class Monitor:
+    """Background thread that polls service states and updates the tray."""
+
+    def __init__(self, icon: Icon):
+        self.icon = icon
+        self.states: dict[str, str] = {name: "UNKNOWN" for name, _, _ in SERVICES}
+        self.last_checked = ""
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+
+    def overall_color(self):
+        vals = list(self.states.values())
+        if not vals:
+            return _WARN
+        if all(v == "RUNNING" for v in vals):
+            return _OK
+        if any(v in ("STOPPED", "NOT FOUND") for v in vals):
+            return _BAD
+        return _WARN
+
+    def run(self) -> None:
+        _log("StudySync tray monitor started")
+        while not self.stop.is_set():
+            try:
+                current = {name: service_state(name) for name, _, _ in SERVICES}
+                with self.lock:
+                    self.states.update(current)
+                    self.last_checked = datetime.now().strftime("%H:%M:%S")
+                try:
+                    self.icon.icon = make_icon(self.overall_color())
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    self.icon.menu = build_menu(self)
+                except Exception:  # noqa: BLE001
+                    pass
+            except Exception as exc:  # noqa: BLE001
+                _log(f"monitor error: {exc}")
+            self.stop.wait(5)
+        _log("StudySync tray monitor stopped")
+
+
+# -------------------------------------------------------------- actions
+def show_status_window():
+    cmd_queue.put("show")
+
+
+def quit_app():
+    cmd_queue.put("quit")
+
+
+def restart_all(monitor: Monitor):
+    threading.Thread(target=_restart_all_worker, args=(monitor,), daemon=True).start()
+
+
+def _restart_all_worker(monitor: Monitor) -> None:
+    with monitor.lock:
+        names = [
+            name
+            for name, _, _ in SERVICES
+            if monitor.states.get(name) != "RUNNING"
+        ]
+    for name in names:
+        restart_service(name)
+
+
+def build_menu(monitor: Monitor) -> Menu:
+    with monitor.lock:
+        states = dict(monitor.states)
+    items = [
+        MenuItem("Open Status", lambda icon, item: show_status_window(), default=True),
+        Menu.SEPARATOR,
+    ]
+    for name, display, _restartable in SERVICES:
+        items.append(
+            MenuItem(f"{display}: {_display_state(states.get(name, 'UNKNOWN'))}", None, enabled=False)
+        )
+    items.append(Menu.SEPARATOR)
+    items.append(MenuItem("Restart All Stopped", lambda icon, item: restart_all(monitor)))
+    items.append(MenuItem("Exit", lambda icon, item: quit_app()))
+    return Menu(*items)
+
+
+# ----------------------------------------------------------- status window
+class StatusWindow:
+    def __init__(self, monitor: Monitor):
+        self.monitor = monitor
+        self.root = tk.Tk()
+        self.root.title("StudySync - Service Status")
+        self.root.resizable(False, False)
+        self.root.withdraw()  # hidden until the user clicks the tray icon
+        self.root.protocol("WM_DELETE_WINDOW", self.hide)
+        self._rows = []
+        self._build()
+        self.root.after(100, self._poll_queue)
+        self.root.after(5000, self._auto_refresh)
+
+    def _build(self) -> None:
+        header = tk.Label(self.root, text="Backend services", font=("Segoe UI", 10, "bold"))
+        header.grid(row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(10, 2))
+
+        for i, (name, display, restartable) in enumerate(SERVICES, start=1):
+            name_lbl = tk.Label(self.root, text=display, font=("Segoe UI", 9), anchor="w")
+            name_lbl.grid(row=i, column=0, sticky="w", padx=(12, 6), pady=3)
+
+            state_lbl = tk.Label(self.root, text="", font=("Segoe UI", 9, "bold"), width=12, anchor="w")
+            state_lbl.grid(row=i, column=1, sticky="w", padx=6, pady=3)
+
+            btn = tk.Button(self.root, text="Restart", font=("Segoe UI", 8), width=8)
+            btn.configure(
+                command=lambda n=name: threading.Thread(
+                    target=restart_service, args=(n,), daemon=True
+                ).start()
+            )
+            btn.grid(row=i, column=2, sticky="e", padx=(6, 12), pady=3)
+            self._rows.append((name, state_lbl, btn))
+
+        self._last = tk.Label(self.root, text="", font=("Segoe UI", 8), fg="#666666")
+        self._last.grid(row=len(SERVICES) + 1, column=0, columnspan=3, sticky="w", padx=12, pady=(6, 0))
+
+        footer = tk.Frame(self.root)
+        footer.grid(row=len(SERVICES) + 2, column=0, columnspan=3, sticky="ew", padx=12, pady=(8, 12))
+        tk.Button(footer, text="Refresh", font=("Segoe UI", 9), command=self.refresh).pack(side="left")
+        tk.Button(footer, text="Restart All Stopped", font=("Segoe UI", 9),
+                  command=lambda: restart_all(self.monitor)).pack(side="left", padx=6)
+        tk.Button(footer, text="Close", font=("Segoe UI", 9), command=self.hide).pack(side="right")
+
+    def show(self) -> None:
+        self.refresh()
+        self.root.deiconify()
+        self.root.lift()
+        self.root.attributes("-topmost", True)
+        self.root.after(50, lambda: self.root.attributes("-topmost", False))
+
+    def hide(self) -> None:
+        self.root.withdraw()
+
+    def refresh(self) -> None:
+        with self.monitor.lock:
+            states = dict(self.monitor.states)
+            last = self.monitor.last_checked
+        for name, state_lbl, _btn in self._rows:
+            raw = states.get(name, "UNKNOWN")
+            state_lbl.config(text=_display_state(raw), fg=_state_color(raw))
+        self._last.config(text=f"Last checked: {last}")
+
+    def _poll_queue(self) -> None:
+        try:
+            while True:
+                cmd = cmd_queue.get_nowait()
+                if cmd == "show":
+                    self.show()
+                elif cmd == "quit":
+                    self.quit()
+        except queue.Empty:
+            pass
+        self.root.after(100, self._poll_queue)
+
+    def _auto_refresh(self) -> None:
+        self.refresh()
+        self.root.after(5000, self._auto_refresh)
+
+    def quit(self) -> None:
+        self.monitor.stop.set()
+        self.root.destroy()
+
+
+# ------------------------------------------------------------ bootstrap
+def _already_running() -> bool:
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW(None, False, "Global\\StudySyncTray")
+        return kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _is_admin() -> bool:
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def main() -> int:
+    if _already_running():
+        _log("Another tray instance is already running - exiting")
+        return 0
+    if not _is_admin():
+        _log("WARNING: not elevated - status works, but service restarts need admin")
+
+    icon = Icon("StudySync", make_icon(), "StudySync - click for service status")
+    monitor = Monitor(icon)
+    threading.Thread(target=monitor.run, daemon=True, name="tray-monitor").start()
+    window = StatusWindow(monitor)
+    threading.Thread(target=icon.run, daemon=True, name="tray-icon").start()
+    window.root.mainloop()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

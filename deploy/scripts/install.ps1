@@ -73,10 +73,10 @@ if (Test-Path $caddyBin) { Write-Log "Stopping existing StudySyncCaddy service..
 # (services stopped, firewall/tasks skipped, install.log truncated). Stop the
 # tasks and kill any running instance so the copy can overwrite them. Silent on
 # first install where the tasks/processes do not exist yet.
-foreach ($task in @("StudySyncServiceCheck", "StudySyncNightly")) {
+foreach ($task in @("StudySyncServiceCheck", "StudySyncNightly", "StudySyncTray")) {
     Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
 }
-foreach ($proc in @("healthcheck", "backup")) {
+foreach ($proc in @("healthcheck", "backup", "studysync-tray")) {
     Get-Process -Name $proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 Start-Sleep -Seconds 1
@@ -105,7 +105,7 @@ if (Test-Path $seedDb) {
 }
 
 # ------------------------------------------------- create data/log folders
-foreach ($d in @("data", "backups", "logs\api", "logs\caddy", "logs\winsw", "logs\backup", "logs\health", "logs\installer", "scripts")) {
+foreach ($d in @("data", "backups", "logs\api", "logs\caddy", "logs\winsw", "logs\backup", "logs\health", "logs\tray", "logs\installer", "scripts")) {
     New-Item -ItemType Directory -Force -Path (Join-Path $APP_DIR $d) | Out-Null
 }
 Write-Log "Data/log folders created."
@@ -245,6 +245,22 @@ $healthTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterv
 $healthSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
 Register-ScheduledTask -TaskName "StudySyncServiceCheck" -Action $healthAction -Trigger $healthTrigger -Principal $taskPrincipal -Settings $healthSettings -Description "Every 5 min: verify StudySync services and restart if down" -Force | Out-Null
 Write-Log "Scheduled task 'StudySyncServiceCheck' registered (every 5 minutes, $taskUser, battery-safe)."
+
+# System-tray monitor at logon (elevated so it can restart services from the
+# tray without a UAC prompt; windowless exe so nothing flashes). Shows live
+# service status in the notification area like Bluetooth/McAfee icons.
+$trayExe = "$APP_DIR\scripts\studysync-tray.exe"
+if (Test-Path $trayExe) {
+    $trayAction = New-ScheduledTaskAction -Execute $trayExe -WorkingDirectory $APP_DIR
+    $trayTrigger = New-ScheduledTaskTrigger -AtLogOn
+    $traySettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 1)
+    Register-ScheduledTask -TaskName "StudySyncTray" -Action $trayAction -Trigger $trayTrigger -Principal $taskPrincipal -Settings $traySettings -Description "Show StudySync service status in the system tray" -Force | Out-Null
+    Write-Log "Scheduled task 'StudySyncTray' registered (at logon, $taskUser)."
+    Start-Process $trayExe -WindowStyle Hidden
+    Write-Log "StudySync tray monitor started."
+} else {
+    Write-Log "WARN: studysync-tray.exe not found in package; tray monitor not installed."
+}
 
 # ----------------------------------------------------- desktop shortcut
 $desktop = [Environment]::GetFolderPath("Desktop")

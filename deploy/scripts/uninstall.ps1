@@ -43,6 +43,8 @@ foreach ($svc in @("studysync-api", "studysync-caddy")) {
 
 Get-ScheduledTask -TaskName "StudySyncNightly" -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false
 Get-ScheduledTask -TaskName "StudySyncServiceCheck" -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false
+Get-ScheduledTask -TaskName "StudySyncTray" -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false
+Get-Process -Name "studysync-tray" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 # Legacy task names from older installs (may have been removed by security software)
 Get-ScheduledTask -TaskName "StudySync-Backup" -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false
 Get-ScheduledTask -TaskName "StudySync-HealthWatch" -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false

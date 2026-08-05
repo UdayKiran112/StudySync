@@ -51,10 +51,10 @@ Write-Host "Creating a safety backup before update..." -ForegroundColor Yellow
 # Stop the watchdog/backup tasks and kill any running instances so the file
 # copy below is not blocked by a locked healthcheck.exe / backup.exe
 # ($ErrorActionPreference=Stop would otherwise abort the update midway).
-foreach ($task in @("StudySyncServiceCheck", "StudySyncNightly")) {
+foreach ($task in @("StudySyncServiceCheck", "StudySyncNightly", "StudySyncTray")) {
     Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
 }
-foreach ($proc in @("healthcheck", "backup")) {
+foreach ($proc in @("healthcheck", "backup", "studysync-tray")) {
     Get-Process -Name $proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 Start-Sleep -Seconds 1
@@ -89,6 +89,12 @@ Write-Log ".env preserved."
 #    cycle can leave the service stuck "marked for deletion".
 & "$APP_DIR\config\winsw\studysync-api.exe" start | Out-Null
 & "$APP_DIR\config\winsw\studysync-caddy.exe" start | Out-Null
+
+# Restart the tray monitor if installed (task re-registers it at next logon;
+# starting it now picks up the new exe immediately).
+if (Test-Path "$APP_DIR\scripts\studysync-tray.exe") {
+    Start-Process "$APP_DIR\scripts\studysync-tray.exe" -WindowStyle Hidden
+}
 
 Write-Log "Update complete. Services restarted. Verify at http://localhost"
 Write-Host "Update complete." -ForegroundColor Green

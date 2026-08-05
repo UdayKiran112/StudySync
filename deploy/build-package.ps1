@@ -60,11 +60,11 @@ try {
         --name studysync-api --onedir --paths . `
         --hidden-import ifaddr run_server.py | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
-    # Scheduled-task helpers run as the interactive user; build backup and
-    # healthcheck as windowless (--noconsole) so they never flash a Command
-    # Prompt window. restore.exe stays a console app: it is interactive and
-    # prompts for the backup to restore.
-    foreach ($name in @("backup", "healthcheck")) {
+    # Scheduled-task helpers run as the interactive user; build backup,
+    # healthcheck and the system-tray monitor as windowless (--noconsole) so
+    # they never flash a Command Prompt window. restore.exe stays a console
+    # app: it is interactive and prompts for the backup to restore.
+    foreach ($name in @("backup", "healthcheck", "studysync-tray")) {
         & "$buildVenv\Scripts\pyinstaller.exe" --noconfirm --clean --noconsole `
             --distpath $dist --workpath (Join-Path $build "work") --specpath (Join-Path $build "spec") `
             --name $name --onefile (Join-Path $deploy "scripts\$name.py") | Out-Null
@@ -126,7 +126,7 @@ Copy-Item (Join-Path $deploy "winsw\studysync-api.xml") (Join-Path $package "con
 Copy-Item (Join-Path $deploy "winsw\studysync-caddy.xml") (Join-Path $package "config\winsw") -Force
 
 # Scripts (compiled exes + source scripts for reference)
-foreach ($name in @("backup", "restore", "healthcheck")) {
+foreach ($name in @("backup", "restore", "healthcheck", "studysync-tray")) {
     Copy-Item (Join-Path $dist "$name.exe") (Join-Path $package "scripts\$name.exe") -Force
 }
 foreach ($ps1 in @("install.ps1", "update.ps1", "uninstall.ps1", "diagnostics.ps1")) {
