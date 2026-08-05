@@ -49,14 +49,16 @@ def get_connection() -> sqlite3.Connection:
         (date.today().isoformat(), date.today().isoformat()),
     )
     # Same idea for subscriptions: valid until start_date + validity_days.
-    # Only touches rows that actually HAVE a validity_days set -- a
-    # subscription with no defined validity period (validity_days IS
-    # NULL) keeps whatever status staff set manually, since there's no
-    # date math to base an automatic decision on.
+    # Only touches rows that actually HAVE a validity_days set AND a
+    # start_date -- a subscription with no defined validity period
+    # (validity_days IS NULL) or no start_date yet keeps whatever status
+    # staff set manually, since there's no date math to base an automatic
+    # decision on.
     conn.execute(
         """UPDATE subscriptions
         SET status = CASE WHEN date(start_date, '+' || validity_days || ' days') < ? THEN 'Expired' ELSE 'Active' END
         WHERE validity_days IS NOT NULL
+          AND start_date IS NOT NULL
           AND status != CASE WHEN date(start_date, '+' || validity_days || ' days') < ? THEN 'Expired' ELSE 'Active' END""",
         (date.today().isoformat(), date.today().isoformat()),
     )

@@ -245,8 +245,8 @@ def update_subscription(
     updates = subscription.model_dump(exclude_unset=True)
     if "name" in updates and updates["name"] is None:
         raise HTTPException(status_code=422, detail="name cannot be null")
-    if "start_date" in updates and updates["start_date"] is None:
-        raise HTTPException(status_code=422, detail="start_date cannot be null")
+    # start_date may be cleared to NULL (it's nullable now -- see
+    # schema.sql / models/subscriptions.py), so no null guard here.
     if "status" in updates and updates["status"] is None:
         raise HTTPException(status_code=422, detail="status cannot be null")
     if not updates:

@@ -38,8 +38,11 @@ class SubscriptionCreate(RequestModel):
         description="e.g. 'Online Learning', 'Video Platform'",
     )
     cost: float | None = Field(default=None, ge=0)
-    start_date: date_type = Field(
-        ..., description="When this subscription was purchased/activated."
+    start_date: date_type | None = Field(
+        default=None,
+        description="When this subscription was purchased/activated. Optional: staff "
+        "may not know it yet. Until it's set there is no date math for "
+        "auto-expiry, so status stays whatever is provided.",
     )
     validity_days: int | None = Field(None, gt=0)
     status: Literal["Active", "Expired"] = "Active"
@@ -61,7 +64,7 @@ class SubscriptionResponse(BaseModel):
     name: str
     type: str | None = None
     cost: float | None = None
-    start_date: date_type
+    start_date: date_type | None = None
     validity_days: int | None = None
     status: str
     valid_until: date_type | None = Field(

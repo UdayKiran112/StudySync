@@ -69,8 +69,9 @@ CREATE TABLE subscriptions (
     cost            REAL CHECK(cost IS NULL OR cost >= 0),
     -- When this subscription was purchased/activated. Mirrors
     -- students.join_date: a permanent historical fact that renewal
-    -- logic must never overwrite.
-    start_date      DATE NOT NULL,
+    -- logic must never overwrite. NULLable: staff may add a
+    -- subscription without knowing its start date yet.
+    start_date      DATE,
     validity_days   INTEGER CHECK(validity_days IS NULL OR validity_days > 0),
     status          TEXT DEFAULT 'Active' CHECK(status IN ('Active', 'Expired'))
 );
