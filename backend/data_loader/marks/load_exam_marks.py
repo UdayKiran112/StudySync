@@ -22,17 +22,18 @@ Usage:
 Requires that library.db already exists and its `students` table is
 already populated (e.g. via load_members.py).
 
-SCHEMA CHANGE THIS SCRIPT MAKES
---------------------------------
-exams.max_marks and exam_marks.marks_obtained are NOT NULL in schema.sql,
-but the CSV doesn't always supply those numbers. The first time this
-script runs against a given database, it relaxes those (and the matching
-quizzes/quiz_scores columns, since they're migrated together) to
-nullable -- see common.relax_marks_schema. It's a no-op if a database has
-already been migrated.
+SCHEMA
+------
+exam_marks.marks_obtained is NOT NULL in schema.sql, and every row this
+script writes carries a real score from the register -- so no exam_marks
+row is ever inserted without marks. exams.max_marks stays nullable (a
+register row may leave Max Marks blank); it is set here whenever the
+register supplies one. An offline-exam sitting the register never scored
+is not this script's concern -- load_offline_exam.py (which runs after
+this one) flags those for manual review.
 
 TOPIC MATCHING (Canonicalizer)
---------------------------------
+-------------------------------
 Exam topic strings are run through a canonicalizer that merges pure
 spelling/case/spacing variants and close typos of the same real exam so the
 exams table doesn't grow a new row per typo -- see common.Canonicalizer.
@@ -47,6 +48,15 @@ guessed into the wrong one. A stray leading/trailing '"' left over from an
 unescaped quote in the source spreadsheet is also stripped before matching.
 A raw topic that's actually a bare date (a stray column-shift in the
 source) is rejected rather than turned into a fake exam.
+
+Because the offline-exam loader runs as a separate process with its own
+Canonicalizer instance, an exact-string lookup can still miss the same real
+exam spelled differently by the two sources. get_or_create_exam therefore
+also matches any existing same-date exam whose deterministic identity key
+(common.exam_identity_key -- alias-resolved, suffix-stripped, normalized)
+equals the incoming topic's, so one real exam can never become two rows on
+one date; the register's spelling wins when they differ (the merge is
+logged as an exam_topic_merged autocorrection).
 
 STUDENT MATCHING ("maximum compatibility" name search)
 -------------------------------------------------------------
@@ -107,6 +117,7 @@ from common import (
     Canonicalizer,
     canonicalize_exam_topic,
     collapse_ws,
+    get_or_create_exam,
     log_review_item,
     module_report_dir,
     normalize_key,
@@ -203,9 +214,10 @@ class ExamLoader:
                 by_date.setdefault(d, set()).add(sid)
             # Exam/quiz sittings are activity too -- and, being built from
             # the same (topic, date) keys, they're the exact evidence a
-            # marks-register row is about. The offline-exam and quiz
-            # loaders run before this one in the pipeline, so these rows
-            # already exist here.
+            # marks-register row is about. Exam marks are inserted earlier
+            # in this same run (a fresh rebuild starts with an empty
+            # exam_marks table; the offline-exam loader no longer creates
+            # rows), so whatever is present is real centre activity.
             for sid, d in self.conn.execute(
                 "SELECT em.student_id, e.exam_date "
                 "FROM exam_marks em JOIN exams e ON e.exam_id = em.exam_id "
@@ -490,26 +502,22 @@ class ExamLoader:
         return None
 
     def get_or_create_exam(self, topic, date):
-        key = (topic, date)
-        if key in self.exam_cache:
-            return self.exam_cache[key]
-        # Checking the DB (not just the in-memory cache) means this also
-        # works if --marks-csv is loaded in a later, separate run against
-        # an already-populated database, not just in the same pass as the
-        # daily activity CSV.
-        row = self.conn.execute(
-            "SELECT exam_id FROM exams WHERE exam_name = ? AND exam_date = ?",
-            (topic, date),
-        ).fetchone()
-        if row:
-            self.exam_cache[key] = row[0]
-            return row[0]
-        cur = self.conn.execute(
-            "INSERT INTO exams (exam_name, exam_date, subject, max_marks) VALUES (?, ?, ?, NULL)",
-            (topic, date, topic),
+        def log_merge(exam_id, old_name, new_name, date_):
+            self.log_auto(
+                "exam_topic_merged",
+                f"{date_}: existing exam {exam_id} {old_name!r} is the same "
+                f"real exam as {new_name!r} -> renamed/reused, no duplicate row",
+            )
+
+        exam_id, _ = get_or_create_exam(
+            self.conn,
+            self.exam_cache,
+            topic,
+            date,
+            log_merge=log_merge,
+            rename_on_merge=True,
         )
-        self.exam_cache[key] = cur.lastrowid
-        return cur.lastrowid
+        return exam_id
 
     def apply_exam_mark(
         self, student_id, exam_id, marks_obtained, max_marks, line_no, date=None
@@ -754,6 +762,41 @@ def main():
     named_rows, marks_applied = load_marks_csv(args.csv, loader, existing_student_ids)
 
     conn.commit()
+
+    # Possible same-date duplicates: a date holding BOTH an exam with real
+    # marks (filled from this register) AND one whose max_marks is still
+    # NULL (an offline-only presence row the register never touched) means
+    # the two sources spelled the same real test differently and the
+    # offline row was never folded in. These are exactly the ambiguous
+    # short forms the alias table deliberately leaves alone (e.g. bare
+    # 'RRB' vs 'RRB Group D'), so flag them for a human rather than guess.
+    possible_same_date_dups = conn.execute(
+        """
+        SELECT exam_date,
+               GROUP_CONCAT(exam_name, ' | ')
+        FROM exams
+        WHERE exam_date IS NOT NULL
+        GROUP BY exam_date
+        HAVING COUNT(*) > 1
+           AND SUM(CASE WHEN max_marks IS NULL THEN 1 ELSE 0 END) > 0
+           AND SUM(CASE WHEN max_marks IS NOT NULL THEN 1 ELSE 0 END) > 0
+        ORDER BY exam_date
+        """
+    ).fetchall()
+    for date_str, names in possible_same_date_dups:
+        loader.review_notes.append(
+            f"{date_str}: same date has an exam WITH marks and one WITHOUT "
+            f"({names}) -- likely the same real test spelled differently; "
+            f"kept separate, please review"
+        )
+        log_review_item(
+            {
+                "table": "exams",
+                "date": date_str,
+                "problem": "possible_same_date_duplicate",
+                "detail": f"{names}",
+            }
+        )
 
     totals = {}
     for t in ["exams", "exam_marks"]:

@@ -17,15 +17,15 @@ CREATE TABLE students (
     address         TEXT,
     join_date       DATE NOT NULL,
     photo_path      TEXT,
-    status          TEXT DEFAULT 'Active' CHECK(status IN ('Active', 'Inactive')),
+    status          TEXT NOT NULL DEFAULT 'Active' CHECK(status IN ('Active', 'Inactive')),
     -- Number of times membership has been renewed. join_date NEVER
     -- changes after creation -- membership validity is always computed
     -- as join_date + (renewal_count + 1) whole years, so it stays
     -- anchored to the original join date's calendar day no matter how
     -- many times (or when) the student renews.
     renewal_count   INTEGER NOT NULL DEFAULT 0 CHECK(renewal_count >= 0),
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TRIGGER trg_students_updated_at
@@ -50,7 +50,7 @@ CREATE TABLE attendance (
     -- conditional application logic, not a pure SQL expression of
     -- check_in/check_out alone. Computed and written by the app at
     -- check-out time (and at manual correction).
-    duration_minutes INTEGER,
+    duration_minutes INTEGER CHECK(duration_minutes IS NULL OR duration_minutes >= 0),
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
     UNIQUE(student_id, date, session),
     CHECK (check_out IS NULL OR check_in IS NULL OR check_out > check_in)
@@ -176,11 +176,9 @@ CREATE TABLE exams (
     exam_name       TEXT NOT NULL CHECK(length(trim(exam_name)) > 0),
     exam_date       DATE,
     subject         TEXT,
-    -- Nullable: exams created from the daily activity log's "Offline
-    -- Exam" column only ever have a topic, never a numeric max_marks --
-    -- see data_loader/common.py's relax_marks_schema(). Was NOT NULL
-    -- originally; changed here to match what the loader (and the API's
-    -- Pydantic response models) actually expect against a live database.
+    -- Nullable: exams are created from the marks register, which may not
+    -- always supply a numeric max_marks (some register rows leave the Max
+    -- Marks column blank and no value can be recovered).
     max_marks       REAL CHECK(max_marks IS NULL OR max_marks > 0)
 );
 
@@ -190,10 +188,11 @@ CREATE TABLE exam_marks (
     mark_id         INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id      INTEGER NOT NULL,
     exam_id         INTEGER NOT NULL,
-    -- Nullable: the daily activity log records that a student sat an exam
-    -- but never a score -- marks_obtained is only filled in later from a
-    -- separate marks register, if one exists. See relax_marks_schema().
-    marks_obtained  REAL CHECK(marks_obtained IS NULL OR marks_obtained >= 0),
+    -- NOT NULL: a row only exists when a real score is known. The marks
+    -- register is the sole source of scores (load_exam_marks.py). An
+    -- offline-exam sitting without a score is never inserted -- it is
+    -- flagged for manual review instead (see load_offline_exam.py).
+    marks_obtained  REAL NOT NULL CHECK(marks_obtained >= 0),
     remarks         TEXT,
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
     FOREIGN KEY (exam_id) REFERENCES exams(exam_id) ON DELETE RESTRICT,
@@ -237,7 +236,7 @@ CREATE INDEX idx_quiz_scores_quiz_id ON quiz_scores(quiz_id);
 -- ===================================
 CREATE TABLE sync_log (
     sync_id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    synced_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    synced_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     status          TEXT CHECK(status IN ('Success', 'Failed', 'Partial')),
     details         TEXT
 );
@@ -266,7 +265,7 @@ CREATE TABLE external_participants (
     gender          TEXT CHECK(gender IS NULL OR gender IN ('Male', 'Female', 'Other')),
     guardian_name   TEXT,
     notes           TEXT,
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(name, phone)
 );
 
@@ -280,7 +279,7 @@ CREATE TABLE coaching_classes (
     subject         TEXT,
     instructor_id   INTEGER,
     notes           TEXT,
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK(end_time IS NULL OR start_time IS NULL OR end_time > start_time),
     FOREIGN KEY (instructor_id) REFERENCES instructors(instructor_id) ON DELETE SET NULL
 );
@@ -291,7 +290,7 @@ CREATE TABLE coaching_enrollments (
     participant_type TEXT NOT NULL CHECK(participant_type IN ('Library Student', 'External Student')),
     student_id      INTEGER,
     external_participant_id INTEGER,
-    enrolled_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    enrolled_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (class_id) REFERENCES coaching_classes(class_id) ON DELETE CASCADE,
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
     FOREIGN KEY (external_participant_id) REFERENCES external_participants(external_participant_id) ON DELETE RESTRICT,
@@ -318,7 +317,7 @@ CREATE TABLE other_activities (
     session_date    DATE NOT NULL,
     session_type    TEXT NOT NULL CHECK(length(trim(session_type)) > 0),
     notes           TEXT,
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE other_activities_attendance (
@@ -327,7 +326,7 @@ CREATE TABLE other_activities_attendance (
     participant_type TEXT NOT NULL CHECK(participant_type IN ('Library Student', 'External Student')),
     student_id      INTEGER,
     external_participant_id INTEGER,
-    attended_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    attended_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (activity_id) REFERENCES other_activities(activity_id) ON DELETE CASCADE,
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
     FOREIGN KEY (external_participant_id) REFERENCES external_participants(external_participant_id) ON DELETE RESTRICT,

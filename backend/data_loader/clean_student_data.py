@@ -11,7 +11,6 @@ own project folder (sibling to that section's load_*.py script):
     3. coaching/digital_class.csv
     4. attendance/attendance.csv
     5. marks/offline_exam.csv
-    6. marks/quiz.csv
 
 Every record that is missing, invalid, or irregular in a way that could not
 be safely auto-corrected is written to that section's own
@@ -159,7 +158,6 @@ class ErrorLog:
         ("digital_class", "Digital Class"),
         ("attendance", "Attendance"),
         ("offline_exam", "Offline Exam"),
-        ("quiz", "Quiz"),
     ]
 
     # Which project folder each section's CSV/logs land in, matching the
@@ -167,17 +165,16 @@ class ErrorLog:
     # tree at the project root). "digital_class" maps to "coaching" since
     # that's the only remaining folder without an obvious section of its
     # own -- rename this mapping if load_coaching.py actually expects a
-    # different file/folder. "offline_exam" and "quiz" land in "marks"
-    # (alongside load_exam_marks.py). "general" has no folder of its own
-    # (its issues aren't specific to one section) and is written at the
-    # project root instead -- see write_all.
+    # different file/folder. "offline_exam" lands in "marks" (alongside
+    # load_exam_marks.py). "general" has no folder of its own (its issues
+    # aren't specific to one section) and is written at the project root
+    # instead -- see write_all.
     SECTION_FOLDERS = {
         "digital_library": "digital_library",
         "offline_library": "offline_library",
         "digital_class": "coaching",
         "attendance": "attendance",
         "offline_exam": "marks",
-        "quiz": "marks",
     }
 
     def __init__(self):
@@ -1230,10 +1227,11 @@ def build_digital_class(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
 def build_offline_exam(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
     """One row per (student, date, exam topic) taken from the 'Offline Exam'
     column. The daily activity log records which student sat which exam on
-    which day, but never a score -- load_offline_exam.py turns these into
-    exams + exam_marks rows with a NULL mark, which the marks register later
-    fills in. Bare-date topics (a stray column-shift) are rejected at load
-    time by the shared topic canonicalizer, not here."""
+    which day, but never a score -- load_offline_exam.py runs after the
+    marks register and flags any sitting that the register never scored for
+    manual review (exam_marks.marks_obtained is NOT NULL, so scoreless
+    sittings are never inserted). Bare-date topics (a stray column-shift)
+    are rejected at load time by the shared topic canonicalizer, not here."""
     mask = df["Offline Exam"] != ""
     sub = df.loc[mask].copy()
     records = []
@@ -1262,42 +1260,6 @@ def build_offline_exam(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
             "Student ID",
             "Student Name",
             "Exam Name",
-        ],
-    )
-
-
-def build_quiz(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
-    """One row per (student, date, quiz topic) taken from the 'Quiz' column,
-    mirroring build_offline_exam. load_quiz.py turns these into quizzes +
-    quiz_scores rows with a NULL score."""
-    mask = df["Quiz"] != ""
-    sub = df.loc[mask].copy()
-    records = []
-    for idx, row in sub.iterrows():
-        topic = collapse(row["Quiz"])
-        if not topic:
-            continue
-        records.append(
-            {
-                "Serial No.": row["Sl.No"],
-                "Date": (
-                    row["Date_clean"].strftime("%d-%m-%Y")
-                    if pd.notna(row["Date_clean"])
-                    else row["Date"]
-                ),
-                "Student ID": row["ID NO"],
-                "Student Name": row["Name of the Student"],
-                "Quiz Name": topic,
-            }
-        )
-    return pd.DataFrame(
-        records,
-        columns=[
-            "Serial No.",
-            "Date",
-            "Student ID",
-            "Student Name",
-            "Quiz Name",
         ],
     )
 
@@ -1455,7 +1417,6 @@ def main():
     digital_class = build_digital_class(df, log)
     attendance = build_attendance(df, log)
     offline_exam = build_offline_exam(df, log)
-    quiz = build_quiz(df, log)
 
     digital_library.to_csv(
         section_dirs["digital_library"] / "digital_library.csv",
@@ -1479,11 +1440,6 @@ def main():
     )
     offline_exam.to_csv(
         section_dirs["offline_exam"] / "offline_exam.csv",
-        index=False,
-        quoting=csv.QUOTE_MINIMAL,
-    )
-    quiz.to_csv(
-        section_dirs["quiz"] / "quiz.csv",
         index=False,
         quoting=csv.QUOTE_MINIMAL,
     )
@@ -1517,9 +1473,6 @@ def main():
     )
     print(
         f"  Offline Exam    ({section_dirs['offline_exam'] / 'offline_exam.csv'}): {len(offline_exam)}"
-    )
-    print(
-        f"  Quiz            ({section_dirs['quiz'] / 'quiz.csv'}): {len(quiz)}"
     )
     print()
     print(f"Needs manual review ({total_review} total):")

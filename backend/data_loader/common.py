@@ -434,6 +434,11 @@ _EXAM_TOPIC_ALIAS_GROUPS = {
         "RRB Group-D GT",
         "RRBGroup D GT",
         "RRB GROUP D G Test",
+        "RRB Gr.D",
+        "RRB Gr. D",
+        "RRBGr.D",
+        "RRB Gr.D Exam",
+        "RRB Gr.D Test",
     ],
     "SSC GD": ["SSC GD", "SSC G D", "SSC  GD", "SSCGD", "SSC GD  TEST"],
     "Current Affairs": ["Current Affairs", "C A", "C.A", "Current Afairs", "C.Affairs"],
@@ -459,6 +464,30 @@ _EXAM_TOPIC_ALIAS_GROUPS = {
         "Constable G  T",
         "Contable Grand Test",
         "Constable",
+    ],
+    "General Maths": [
+        "General Maths",
+        "G.Maths",
+        "G Maths",
+        "G.Maths Exam",
+    ],
+    "Spelling Test": [
+        "Spelling Test",
+        "Spelling",
+        "EnglishSpelling",
+        "EnglishSpelling Test",
+    ],
+    "General Awareness": [
+        "General Awareness",
+        "G Awareness",
+        "G.Awareness",
+        "G Awareness Exam",
+        "G.Awareness Exam",
+    ],
+    "Polity": [
+        "Polity",
+        "Polity Exam",
+        "Polity Eaxam",
     ],
 }
 EXAM_TOPIC_ALIASES = {
@@ -511,22 +540,118 @@ def canonicalize_exam_topic(raw, canon, context="", log_date_reject=None):
     return canon.canonicalize(stripped, context=context)
 
 
+def exam_identity_key(raw: str) -> str:
+    """
+    Deterministic, run-independent identity key for an exam topic, used to
+    match the same real exam across the two source CSVs (the marks register
+    and the daily activity log) even when they spell it differently.
+
+    Unlike canonicalize_exam_topic -- which may lean on a per-run
+    Canonicalizer for fuzzy/typo matches and therefore isn't stable across
+    loader processes -- this is pure alias resolution + normalization: two
+    spellings produce the same key if and only if they reduce to the same
+    letters after the shared alias table and suffix/punctuation stripping
+    (so 'polity' and 'Polity' collapse, as do 'G.Maths Exam' and 'General
+    Maths'). It exists solely for the one-exam-per-(real exam, date)
+    guarantee: when a loader is about to create an exams row for
+    (topic, date), any existing same-date row with the same key is the same
+    real exam and is reused instead of creating a duplicate.
+
+    Returns '' for blank topics and for topics that are really bare dates
+    (stray column-shifts that must never become a fake exam).
+    """
+    cleaned = collapse_ws(raw).strip('"').strip()
+    if not cleaned or BARE_DATE_RE.match(cleaned):
+        return ""
+    stripped = strip_exam_suffix(cleaned)
+    key = normalize_key(stripped) or normalize_key(cleaned)
+    canonical = EXAM_TOPIC_ALIASES.get(key)
+    return normalize_key(canonical) if canonical else key
+
+
+def get_or_create_exam(
+    conn: sqlite3.Connection,
+    cache: dict,
+    topic: str,
+    date: str,
+    log_merge=None,
+    rename_on_merge: bool = False,
+):
+    """
+    Shared exam lookup/create used by BOTH the offline-exam loader and the
+    marks-register loader, so a real exam never ends up as two rows on the
+    same date just because the two sources spell its name differently.
+
+    Lookup order:
+      1. in-memory `cache` (same (topic, date) seen earlier this run);
+      2. exact exam_name + date in the database (fast path; also makes
+         re-runs against an already-populated DB work);
+      3. any same-date exam whose deterministic identity key
+         (exam_identity_key) matches -- this is what collapses cross-source
+         spelling variants (e.g. 'polity' vs 'Polity', 'RRB Gr.D Exam' vs
+         'RRB Group D') that each loader's separate per-run Canonicalizer
+         instance can never see.
+
+    Returns (exam_id, created). When an existing row is reused under a
+    different stored name it is renamed to `topic` if `rename_on_merge` is
+    set (the marks register is the authoritative spelling; the offline
+    loader should leave existing names alone), and `log_merge`, if given,
+    is called with (exam_id, old_name, new_name, date) so every merge is
+    auditable. The caller is responsible for counting `exams_created` from
+    the `created` flag.
+    """
+    key = (topic, date)
+    if key in cache:
+        return cache[key], False
+
+    row = conn.execute(
+        "SELECT exam_id FROM exams WHERE exam_name = ? AND exam_date = ?",
+        (topic, date),
+    ).fetchone()
+    if row:
+        cache[key] = row[0]
+        return row[0], False
+
+    idkey = exam_identity_key(topic)
+    if idkey:
+        for exam_id, exam_name in conn.execute(
+            "SELECT exam_id, exam_name FROM exams WHERE exam_date = ?", (date,)
+        ):
+            if exam_identity_key(exam_name) == idkey:
+                if exam_name != topic:
+                    if log_merge:
+                        log_merge(exam_id, exam_name, topic, date)
+                    if rename_on_merge:
+                        conn.execute(
+                            "UPDATE exams SET exam_name = ? WHERE exam_id = ?",
+                            (topic, exam_id),
+                        )
+                cache[key] = exam_id
+                return exam_id, False
+
+    cur = conn.execute(
+        "INSERT INTO exams (exam_name, exam_date, subject, max_marks) VALUES (?, ?, ?, NULL)",
+        (topic, date, topic),
+    )
+    cache[key] = cur.lastrowid
+    return cur.lastrowid, True
+
+
 # --------------------------------------------------------------------------
 # one-time schema migration shared by anything that writes exams/quizzes
 # --------------------------------------------------------------------------
 def relax_marks_schema(conn: sqlite3.Connection):
     """
-    Make quizzes.max_marks, exams.max_marks, quiz_scores.score, and
-    exam_marks.marks_obtained nullable, if they aren't already.
+    Make quizzes.max_marks, quiz_scores.score, and exams.max_marks
+    nullable, if they aren't already.
 
-    The daily activity CSV and the internal marks register never supply a
-    quiz/exam max_marks up front, and the activity CSV's Offline Exam
-    column never supplies a numeric score at all -- only a topic. schema.sql
-    declares those four columns NOT NULL, so this relaxes them
-    (CHECK ... IS NULL OR ... > 0 in place of NOT NULL) the first time it
-    runs against a given database. It's a no-op if a database has already
-    been migrated (checked via PRAGMA table_info before touching anything),
-    so it's safe to call from more than one loader script.
+    exam_marks.marks_obtained is deliberately NOT relaxed: it is NOT NULL
+    in schema.sql, and no loader ever inserts a scoreless row -- an
+    offline-exam sitting without a score is flagged for the manual-review
+    ledger instead (see load_offline_exam.py). This migration is a no-op
+    against any database built from the current schema.sql (those columns
+    are already nullable, so PRAGMA table_info reports notnull = 0 and the
+    guard returns immediately); it exists for older databases only.
     """
     info = {row[1]: row[3] for row in conn.execute("PRAGMA table_info(quiz_scores)")}
     if info.get("score") == 0:
@@ -579,7 +704,7 @@ def relax_marks_schema(conn: sqlite3.Connection):
             mark_id         INTEGER PRIMARY KEY AUTOINCREMENT,
             student_id      INTEGER NOT NULL,
             exam_id         INTEGER NOT NULL,
-            marks_obtained  REAL CHECK(marks_obtained IS NULL OR marks_obtained >= 0),
+            marks_obtained  REAL NOT NULL CHECK(marks_obtained >= 0),
             remarks         TEXT,
             FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT,
             FOREIGN KEY (exam_id) REFERENCES exams(exam_id) ON DELETE RESTRICT,

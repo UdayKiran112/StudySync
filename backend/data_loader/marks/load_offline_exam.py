@@ -1,49 +1,58 @@
 #!/usr/bin/env python3
 """
-Load offline-exam sittings (the daily activity CSV's "Offline Exam" column,
-extracted by clean_student_data.py into marks/offline_exam.csv) into the
-library SQLite database as exams + exam_marks rows with marks_obtained NULL.
+Flag offline-exam sittings that have no score, for manual review.
 
-The daily activity log records that a student sat an exam (topic + date)
-but never a score. The separate marks register (load_exam_marks.py, fed by
-internal_marks_organized.csv) fills marks_obtained in later -- it matches
-the same (canonical topic, date) exam keys, so this loader MUST run first
-or after it; the order doesn't matter because both sides only fill/update
-rows and never duplicate them.
+The daily activity CSV's "Offline Exam" column (extracted by
+clean_student_data.py into marks/offline_exam.csv) records that a student
+sat an exam (topic + date) but never a score. exam_marks.marks_obtained is
+NOT NULL in the schema, so those sittings cannot be stored -- and the only
+source of real scores is the separate marks register (load_exam_marks.py,
+fed by internal_marks_organized.csv).
+
+This loader runs AFTER load_exam_marks. For each sitting it checks whether
+the student already has a scored mark on the same real exam (matched by the
+deterministic exam identity key on the same date). If yes, the register
+covered it and there is nothing to do. If no, the sitting has no score -- it
+is NOT added to the database and is instead written to the shared
+manual-review ledger (data_loader/review/review_items.jsonl) for a human to
+resolve.
 
 Usage:
     python3 clean_student_data.py students_activity.csv cleaned_output/
+    python3 load_exam_marks.py --csv internal_marks_organized.csv --db library.db
     python3 load_offline_exam.py --csv cleaned_output/marks/offline_exam.csv --db library.db
 
-Requires that library.db already exists and its `students` table is
-already populated (e.g. via load_members.py) -- every row here is linked
-to an existing student purely by "Student ID", never by name.
+Requires that library.db already exists and its `students`, `exams` and
+`exam_marks` tables are populated (e.g. via load_members.py and
+load_exam_marks.py) -- every sitting here is linked to an existing student
+purely by "Student ID", never by name.
 
 WHAT GETS SKIPPED (and logged to the report)
----------------------------------------------
+--------------------------------------------
   - Rows with no parseable numeric Student ID, or a Student ID not present
     in students.
   - Rows with no parseable Date.
   - Rows with a blank Exam Name, or one that is really a bare date (a
     stray column-shift -- see common.canonicalize_exam_topic).
+  - Sittings whose student already has a scored mark on the same real exam
+    (the register covered them; nothing to flag).
 
 LOGGING
 -------
 This script writes only to its own report (default
-offline_exam_load_report.txt). Everything it cannot safely auto-correct is
-also appended to the shared manual-review ledger
+offline_exam_load_report.txt). Every sitting without a score is also
+appended to the shared manual-review ledger
 (data_loader/review/review_items.jsonl), which run_pipeline.py renders into
 the consolidated review report.
 
-Safe to re-run against the same --db: it only creates/keeps (student, exam)
-rows, never duplicates them (UNIQUE(student_id, exam_id)).
+Safe to re-run against the same --db: it never writes to exams or
+exam_marks -- it only reads them and flags review items.
 """
 
 import argparse
 import csv
 import sqlite3
 import sys
-import os
 from pathlib import Path
 
 common_dir = Path(__file__).parent.parent
@@ -54,18 +63,17 @@ from common import (
     Canonicalizer,
     canonicalize_exam_topic,
     collapse_ws,
+    exam_identity_key,
     log_review_item,
     module_report_dir,
     parse_date,
-    relax_marks_schema,
 )
 
 
-class OfflineExamLoader:
+class OfflineExamReviewer:
     def __init__(self, conn):
         self.conn = conn
-        self.exam_cache = {}  # (topic, date) -> exam_id
-        self.counts = {"exam_marks": 0, "exams_created": 0}
+        self.counts = {"unscored_sittings": 0}
         self.autocorrections = []
         self.autocorrection_counts = {"exam_topic_merged": 0}
         self.review_notes = []
@@ -73,6 +81,7 @@ class OfflineExamLoader:
         self.exam_topic_canon = Canonicalizer(
             self.log_auto, self.log_review, "exam_topic_merged"
         )
+        self._scored = None  # lazily built by _scored_keys()
 
     def log_auto(self, category, msg):
         self.autocorrection_counts[category] = (
@@ -83,56 +92,43 @@ class OfflineExamLoader:
     def log_review(self, msg):
         self.review_notes.append(msg)
 
-    def get_or_create_exam(self, topic, date):
-        key = (topic, date)
-        if key in self.exam_cache:
-            return self.exam_cache[key]
-        row = self.conn.execute(
-            "SELECT exam_id FROM exams WHERE exam_name = ? AND exam_date = ?",
-            (topic, date),
-        ).fetchone()
-        if row:
-            self.exam_cache[key] = row[0]
-            return row[0]
-        cur = self.conn.execute(
-            "INSERT INTO exams (exam_name, exam_date, subject, max_marks) VALUES (?, ?, ?, NULL)",
-            (topic, date, topic),
-        )
-        self.exam_cache[key] = cur.lastrowid
-        self.counts["exams_created"] += 1
-        return cur.lastrowid
+    def _scored_keys(self):
+        """(student_id, date) -> set of exam_identity_key(exam_name) for
+        marks the register actually recorded."""
+        if self._scored is None:
+            scored = {}
+            for sid, date, name in self.conn.execute(
+                """SELECT em.student_id, e.exam_date, e.exam_name
+                   FROM exam_marks em
+                   JOIN exams e ON e.exam_id = em.exam_id
+                   WHERE e.exam_date IS NOT NULL"""
+            ):
+                scored.setdefault((sid, date), set()).add(exam_identity_key(name))
+            self._scored = scored
+        return self._scored
 
-    def load_sitting(self, student_id, date, topic_raw, line_no):
+    def check_sitting(self, student_id, date, topic_raw, line_no):
         topic = self._canonical_topic(topic_raw, line_no)
         if not topic:
             return  # already logged/skipped inside _canonical_topic
-        exam_id = self.get_or_create_exam(topic, date)
-        exists = self.conn.execute(
-            "SELECT 1 FROM exam_marks WHERE student_id = ? AND exam_id = ?",
-            (student_id, exam_id),
-        ).fetchone()
-        if exists:
-            return
-        try:
-            self.conn.execute(
-                "INSERT INTO exam_marks (student_id, exam_id, marks_obtained) VALUES (?, ?, NULL)",
-                (student_id, exam_id),
-            )
-            self.counts["exam_marks"] += 1
-        except sqlite3.IntegrityError as e:
-            self.skips.append(
-                f"line {line_no}: exam_marks insert failed ({e}) -> SKIPPED"
-            )
-            log_review_item(
-                {
-                    "table": "exam_marks",
-                    "row": line_no,
-                    "student_id": student_id,
-                    "date": date,
-                    "problem": "insert_failed",
-                    "detail": f"topic {topic}, {e}",
-                }
-            )
+        key = exam_identity_key(topic)
+        if key in self._scored_keys().get((student_id, date), set()):
+            return  # the register already holds a score for this sitting
+        self.counts["unscored_sittings"] += 1
+        self.skips.append(
+            f"line {line_no}: student {student_id} sat {topic!r} on {date} "
+            f"but no score exists in the register -> NOT added, manual review"
+        )
+        log_review_item(
+            {
+                "table": "exam_marks",
+                "row": line_no,
+                "student_id": student_id,
+                "date": date,
+                "problem": "sitting_without_marks",
+                "detail": f"offline exam {topic!r} on {date}: sitting has no score",
+            }
+        )
 
     def _canonical_topic(self, topic_raw, line_no):
         topic = collapse_ws(topic_raw)
@@ -190,13 +186,12 @@ def main():
 
     conn = sqlite3.connect(args.db)
     conn.execute("PRAGMA foreign_keys = ON;")
-    relax_marks_schema(conn)
 
     existing_student_ids = {
         r[0] for r in conn.execute("SELECT student_id FROM students")
     }
 
-    loader = OfflineExamLoader(conn)
+    loader = OfflineExamReviewer(conn)
     skipped_id = 0
     skipped_date = 0
     total_rows = 0
@@ -245,51 +240,41 @@ def main():
                 )
                 continue
 
-            loader.load_sitting(
+            loader.check_sitting(
                 student_id, date, row.get("Exam Name", ""), line_no
             )
 
-    conn.commit()
-
-    totals = {}
-    for t in ["exams", "exam_marks"]:
-        totals[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
     conn.close()
 
     with args.report.open("w") as f:
         f.write(f"CSV data rows processed: {total_rows}\n")
         f.write(f"Rows skipped (student_id not found): {skipped_id}\n")
         f.write(f"Rows skipped (unparseable date): {skipped_date}\n\n")
-        f.write("Rows inserted this run, by table:\n")
-        for k, v in loader.counts.items():
-            f.write(f"  {k}: {v}\n")
-        f.write("\nTotal rows now in each table:\n")
-        for k, v in totals.items():
-            f.write(f"  {k}: {v}\n")
         f.write(
-            "\nAuto-corrections this run (row WAS loaded, value derived/adjusted):\n"
+            "Offline-exam sittings with no score in the register "
+            "(NOT added -- flagged for manual review): "
+            f"{loader.counts['unscored_sittings']}\n"
+        )
+        f.write(
+            "\nAuto-corrections this run (canonical topic merges, informational):\n"
         )
         for k, v in loader.autocorrection_counts.items():
             f.write(f"  {k}: {v}\n")
-        f.write(
-            f"\nPossible duplicates NOT auto-merged (need manual review): {len(loader.review_notes)}\n"
-        )
-        f.write("\n=== PER-ROW SKIPS (row was NOT loaded) ===\n")
+        f.write(f"\n=== PER-ROW SKIPS (row was NOT loaded) ===\n")
         f.write("\n".join(loader.skips) + "\n")
         f.write(
             "\n=== PER-ROW AUTO-CORRECTIONS (loaded, but adjusted from the cleaned CSV) ===\n"
         )
         f.write("\n".join(loader.autocorrections) + "\n")
-        f.write(
-            "\n=== POSSIBLE DUPLICATES NOT MERGED (similar topic, kept separate -- please review) ===\n"
-        )
-        f.write("\n".join(loader.review_notes) + "\n")
 
     print(f"Processed {total_rows} CSV rows.")
     print(
         f"Skipped: {skipped_id} (unknown student_id), {skipped_date} (unparseable date)"
     )
-    print("Inserted this run:", loader.counts)
+    print(
+        f"Sittings without a score flagged for manual review: "
+        f"{loader.counts['unscored_sittings']}"
+    )
     print(f"Full details in {args.report}")
 
 

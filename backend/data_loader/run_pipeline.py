@@ -9,22 +9,27 @@ Steps, in order:
      (backend/data_loader/review/review_items.jsonl);
   2. clean_student_data.py  student_details.csv  -> per-section cleaned CSVs
      (this is where the operating-hours / 12h-clock corrections, the
-     offline-exam and quiz section builders, and the book-ID junk filter
-     live);
+     offline-exam section builder, and the book-ID junk filter live);
   3. organize_internal_marks.py                  -> marks/internal_marks_organized.csv
   4. rebuild backend/library.db from schema.sql (wipe + recreate);
   5. load_members.py                             -> students (all FKs depend on it);
-  6. section loaders, in dependency-safe order:
+   6. section loaders, in dependency-safe order:
        load_attendance, load_digital_library, load_offline_library,
-       load_coaching, load_offline_exam, load_quiz,
-       load_exam_marks (marks register -- fills in scores on top of the
-       offline-exam rows, matching the same (canonical topic, date));
-  7. consolidate the manual-review ledger into one report and print final
-     row counts.
+       load_coaching,
+       load_exam_marks (marks register -- the ONLY source of real scores;
+       creates the exams + exam_marks rows, all with marks_obtained set);
+       load_offline_exam (offline-exam sittings WITHOUT a score in the
+       register are not inserted -- marks_obtained is NOT NULL -- and are
+       flagged for manual review instead);
+   7. backfill_renewals.py                     -> students.renewal_count / status
+      (replays the attendance auto-renewal math once attendance is loaded,
+      so current members are never left marked 'Inactive' at rest);
+   8. consolidate the manual-review ledger into one report and print final
+      row counts.
 
 Everything a loader cannot safely auto-correct is written to the shared
 review ledger during step 6 and rendered into the consolidated report in
-step 7, so a human gets one file to review instead of digging through each
+step 8, so a human gets one file to review instead of digging through each
 loader's individual report.
 
 Reports: every report and log the pipeline produces lands in the shared
@@ -37,7 +42,7 @@ reports tree, one subfolder per module:
       offline_library/  offline_library_load_report.txt, ...
       coaching/         coaching_load_report.txt, ...
       marks/            exam_marks_load_report*.txt,
-                        offline_exam_load_report.txt, quiz_load_report.txt
+                        offline_exam_load_report.txt
       review/           review_items.jsonl + the consolidated
                         manual_review_report.txt
       pipeline_run_report.txt   this pipeline's summary
@@ -87,8 +92,6 @@ SECTIONS = [
         "coaching/digital_class.csv",
         "coaching/load_coaching.py",
     ),
-    ("offline_exam", "marks/offline_exam.csv", "marks/load_offline_exam.py"),
-    ("quiz", "marks/quiz.csv", "marks/load_quiz.py"),
 ]
 
 # tables (in FK order) counted for the final summary
@@ -101,8 +104,6 @@ COUNT_TABLES = [
     "offline_library_usage",
     "exams",
     "exam_marks",
-    "quizzes",
-    "quiz_scores",
     "coaching_classes",
     "coaching_enrollments",
 ]
@@ -119,9 +120,14 @@ def run_step(python, script, args, cwd=None, allow_fail=False):
 
 
 def rebuild_db(python):
-    if DB.exists():
-        DB.unlink()
-        print(f"\n>>> removed existing {DB} (rebuild in place)")
+    # A WAL-mode database keeps live state in sidecar -wal/-shm files; if
+    # those survive the main file's deletion, a fresh connection can try to
+    # replay them against an empty main file. Wipe all three together.
+    for suffix in ("", "-wal", "-shm"):
+        path = Path(str(DB) + suffix)
+        if path.exists():
+            path.unlink()
+            print(f"\n>>> removed existing {path} (rebuild in place)")
     run_step(
         python,
         BASE / "members" / "load_members.py",
@@ -136,10 +142,19 @@ def load_sections(python):
             BASE / loader_rel,
             ["--csv", BASE / csv_rel, "--db", DB],
         )
+    # Marks register first: it is the ONLY source of real scores and owns
+    # exam_marks creation (marks_obtained is NOT NULL in the schema).
     run_step(
         python,
         BASE / "marks" / "load_exam_marks.py",
         ["--csv", MARKS_REGISTER, "--db", DB],
+    )
+    # Then the offline-exam sittings: ones the register never scored are
+    # NOT inserted -- they're flagged for manual review instead.
+    run_step(
+        python,
+        BASE / "marks" / "load_offline_exam.py",
+        ["--csv", BASE / "marks" / "offline_exam.csv", "--db", DB],
     )
 
 
@@ -222,6 +237,12 @@ def main():
 
     rebuild_db(args.python)
     load_sections(args.python)
+
+    run_step(
+        args.python,
+        BASE / "members" / "backfill_renewals.py",
+        ["--db", DB],
+    )
 
     totals = count_rows()
     print("\n=== Final row counts ===")
