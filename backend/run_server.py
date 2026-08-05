@@ -91,10 +91,32 @@ LOGGING_CONFIG = {
 }
 
 
+def _get_lan_ipv4s() -> list[str]:
+    """All non-loopback IPv4 addresses of this machine (several if the machine
+    has Wi-Fi + Ethernet, or a VPN). Empty if none found."""
+    import socket
+
+    addrs: list[str] = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
+                if ip not in addrs:
+                    addrs.append(ip)
+    except Exception:  # noqa: BLE001
+        return []
+    return addrs
+
+
 def _advertise_mdns() -> None:
     """Advertise studysync.local over mDNS so LAN devices can reach the app by
     name (http://studysync.local) instead of a raw IP. Runs in a daemon thread:
-    failures are logged and never crash the API service."""
+    failures are logged and never crash the API service.
+
+    Self-healing: the machine's addresses are re-resolved every 60 s and the
+    advertisement is re-registered when they change, so moving the laptop to
+    another Wi-Fi (or a DHCP lease change) is picked up within a minute - no
+    service restart needed."""
     import logging
     import socket
 
@@ -107,36 +129,40 @@ def _advertise_mdns() -> None:
         return
 
     zc = None
+    registered: tuple[str, ...] | None = None
     try:
-        addrs = []
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            ip = info[4][0]
-            if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
-                if ip not in addrs:
-                    addrs.append(ip)
-        if not addrs:
-            logger.warning("mDNS advertisement disabled (no LAN IPv4 found)")
-            return
-
-        # server="studysync.local." makes the responder publish an A record for
-        # the studysync.local hostname (not just the SRV/PTR service record), so
-        # a browser typing http://studysync.local can resolve it directly.
-        service = ServiceInfo(
-            "_http._tcp.local.",
-            "studysync._http._tcp.local.",
-            addresses=[socket.inet_aton(ip) for ip in addrs],
-            port=80,
-            properties={b"path": b"/"},
-            server="studysync.local.",
-        )
         zc = Zeroconf()
-        zc.register_service(service, allow_name_change=False)
-        logger.info(
-            "mDNS: advertising http://studysync.local -> %s (port 80)",
-            ", ".join(addrs),
-        )
         while True:
-            time.sleep(3600)
+            addrs = _get_lan_ipv4s()
+            current = tuple(sorted(addrs))
+            if current != registered:
+                if registered is not None:
+                    try:
+                        zc.unregister_all_services()
+                    except Exception:  # noqa: BLE001
+                        pass
+                if current:
+                    # server="studysync.local." makes the responder publish an A
+                    # record for the studysync.local hostname (not just the
+                    # SRV/PTR service records), so a browser typing
+                    # http://studysync.local can resolve it directly.
+                    service = ServiceInfo(
+                        "_http._tcp.local.",
+                        "studysync._http._tcp.local.",
+                        addresses=[socket.inet_aton(ip) for ip in addrs],
+                        port=80,
+                        properties={b"path": b"/"},
+                        server="studysync.local.",
+                    )
+                    zc.register_service(service, allow_name_change=False)
+                    logger.info(
+                        "mDNS: advertising http://studysync.local -> %s (port 80)",
+                        ", ".join(addrs),
+                    )
+                else:
+                    logger.warning("mDNS: no LAN IPv4 found - nothing advertised")
+                registered = current
+            time.sleep(60)
     except Exception as exc:  # noqa: BLE001
         logger.error("mDNS advertisement error: %s", exc)
     finally:

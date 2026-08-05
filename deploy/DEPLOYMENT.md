@@ -22,9 +22,11 @@ SQLite database (WAL)   C:\ProgramData\StudySync\data\library.db
 ```
 
 The API service advertises the LAN name **`http://studysync.local`** over mDNS
-(no PC rename needed). Apple/Android devices resolve it natively; Windows PCs
-need Apple Bonjour (bundled in the installer and auto-installed on the server,
-plus kept at `tools\Bonjour64.msi` for staff PCs). See OPERATIONS.md.
+(no PC rename needed). The advertisement self-heals: if the machine's IP changes
+(another Wi-Fi, DHCP), it re-registers within ~60 s. Apple/Android devices
+resolve it natively; Windows PCs need Apple Bonjour (bundled in the installer
+and auto-installed on the server, plus kept at `tools\Bonjour64.msi` for staff
+PCs). See OPERATIONS.md.
 
 No Python, Node, or npm is needed on the target machine. Everything ships inside
 the installer as compiled executables (PyInstaller bundle + Caddy binary).
@@ -113,13 +115,18 @@ The Inno script (`deploy\installer\studysync.iss`) is deliberately thin:
      scheduled tasks and killing any running `healthcheck.exe` / `backup.exe`
      so the file copy can never hit a locked exe,
    - copies `app`, `config`, `scripts`, `tools` into `C:\ProgramData\StudySync`,
-   - seeds `data\library.db` ONLY if none exists,
+   - seeds `data\library.db` ONLY if none exists (the package carries the
+     build machine's database as seed data, so a fresh venue install starts
+     with the current students; existing data is never overwritten),
    - preserves/generates `.env`,
    - registers services if missing (existing registrations are only stopped,
      never uninstalled — see the warning below),
    - starts both services,
    - creates the inbound firewall rules `StudySync HTTP (port 80)` (TCP) and
-     `StudySync mDNS (UDP 5353)` (Private + Domain only),
+     `StudySync mDNS (UDP 5353)` for **all network profiles**, so LAN access
+     works even on a network Windows marks Public,
+   - switches any Public network to Private (best-effort) to also enable
+     Windows network discovery,
    - installs Apple Bonjour (`tools\Bonjour64.msi`, silently) so Windows PCs
      can resolve `http://studysync.local`; the MSI also stays on the server for
      staff PCs,

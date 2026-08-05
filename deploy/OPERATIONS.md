@@ -136,9 +136,14 @@ How the device resolves it depends on the OS:
 | This server | `http://localhost` | Loopback |
 
 - The server advertises `studysync.local` via mDNS (UDP 5353) from the API
-  service and firewall rules `StudySync HTTP (port 80)` + `StudySync mDNS
-  (UDP 5353)` allow inbound on **Private and Domain** profiles only — the
-  server's network must be Private, not Public.
+  service. Firewall rules `StudySync HTTP (port 80)` + `StudySync mDNS
+  (UDP 5353)` allow inbound on **all network profiles** (Private, Domain, and
+  Public), and the installer also switches any Public network to Private
+  (best-effort) — so LAN access works no matter how Windows classifies the
+  network.
+- The advertisement is **self-healing**: the API re-resolves the machine's IP
+  every 60 s and re-registers the name if it changed. Moving the laptop to
+  another Wi-Fi (different IP) is picked up within a minute with no restart.
 - **Windows PCs need Apple Bonjour** to resolve `*.local` names (Windows' built-in
   DNS client only resolves its own hostname). The installer auto-installs it on
   the server and keeps a copy at `C:\ProgramData\StudySync\tools\Bonjour64.msi`.
@@ -146,6 +151,21 @@ How the device resolves it depends on the OS:
   `\\<server-name>\C$\ProgramData\StudySync\tools\Bonjour64.msi`) once, then
   `http://studysync.local` resolves. If a PC lacks Bonjour, use `http://Myth`.
 - Staff enter the API key once per browser in Settings.
+
+### Using it on another network (demo / venue)
+
+Everything needed for LAN access is configured by the installer itself, so a
+fresh install on a venue machine is automatic. When **moving the already-set-up
+laptop** to another Wi-Fi:
+
+1. Connect the laptop to the new Wi-Fi.
+2. Wait ~1 min for the mDNS advertisement to re-register with the new IP.
+3. Other devices on that network open `http://studysync.local` (Bonjour
+   installed on Windows PCs). No service restart or IP lookup needed.
+4. Exception: some **public/guest Wi-Fi has AP (client) isolation** — the router
+   blocks device-to-device traffic, so no device on the network can reach the
+   laptop. There is nothing software can do about that; use a normal LAN/guest
+   network without isolation for the demo.
 
 ## Troubleshooting cheat-sheet
 

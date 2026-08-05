@@ -169,25 +169,37 @@ Write-Log "Starting StudySync Caddy service..."
 Invoke-WinSw $caddyBin "start"
 
 # ----------------------------------------------------------- firewall
+# Rules cover ALL profiles (Private, Domain AND Public). A fresh install on a
+# venue network usually lands on a network Windows marks Public; without Public
+# in the rule, other devices could not reach the app. Recreated on every run so
+# the profile set stays correct after a reinstall.
 $ruleName = "StudySync HTTP (port 80)"
-if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP `
-        -LocalPort 80 -Action Allow -Profile Private, Domain | Out-Null
-    Write-Log "Firewall rule created for inbound port 80 (Private/Domain only)."
-} else {
-    Write-Log "Firewall rule already exists."
-}
+Remove-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP `
+    -LocalPort 80 -Action Allow -Profile Any | Out-Null
+Write-Log "Firewall rule created for inbound port 80 (all profiles)."
 
 # mDNS (UDP 5353): lets devices resolve http://studysync.local by name. Without
 # an inbound rule the responder may not see queries, so clients could not
 # resolve the name even though the app advertises it.
 $mdnsRule = "StudySync mDNS (UDP 5353)"
-if (-not (Get-NetFirewallRule -DisplayName $mdnsRule -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName $mdnsRule -Direction Inbound -Protocol UDP `
-        -LocalPort 5353 -Action Allow -Profile Private, Domain | Out-Null
-    Write-Log "Firewall rule created for inbound mDNS (UDP 5353)."
-} else {
-    Write-Log "mDNS firewall rule already exists."
+Remove-NetFirewallRule -DisplayName $mdnsRule -ErrorAction SilentlyContinue
+New-NetFirewallRule -DisplayName $mdnsRule -Direction Inbound -Protocol UDP `
+    -LocalPort 5353 -Action Allow -Profile Any | Out-Null
+Write-Log "Firewall rule created for inbound mDNS (UDP 5353, all profiles)."
+
+# ------------------------------------------------- network profile
+# Best-effort: switch any network Windows marked Public to Private. With the
+# rules above this is not required for port 80 / mDNS to work, but a Private
+# profile also enables Windows network discovery, which makes the NetBIOS
+# fallback name (e.g. http://Myth) resolve more reliably on LAN devices.
+foreach ($prof in (Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.NetworkCategory -eq "Public" })) {
+    try {
+        Set-NetConnectionProfile -InterfaceIndex $prof.InterfaceIndex -NetworkCategory Private
+        Write-Log "Network '$($prof.InterfaceAlias)' switched from Public to Private (LAN access enabled)."
+    } catch {
+        Write-Log "WARN: could not switch '$($prof.InterfaceAlias)' to Private: $($_.Exception.Message)"
+    }
 }
 
 # ------------------------------------------------- Bonjour for Windows

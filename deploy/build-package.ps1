@@ -8,11 +8,9 @@
     which is copied onto target machines by install.ps1 (or wrapped into an
     Inno Setup installer). The package contains the compiled backend exe, the
     production frontend build, Caddy, WinSW, and all scripts - target machines
-    need NO build tools and NO Python.
-
-.PARAMETER IncludeDatabase
-    Include the existing backend\library.db as the initial data (use when
-    deploying a machine that should start with the current data).
+    need NO build tools and NO Python. If backend\library.db exists it is
+    bundled as the initial data, so a fresh install starts with the current
+    students etc. (install.ps1 never overwrites an existing database).
 
 .NOTES
     Prerequisites on the build machine:
@@ -21,9 +19,7 @@
       - internet access (binary downloads + pip)
 #>
 [CmdletBinding()]
-param(
-    [switch]$IncludeDatabase
-)
+param()
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent   # repo root
@@ -142,15 +138,16 @@ foreach ($ps1 in @("install.ps1", "update.ps1", "uninstall.ps1", "diagnostics.ps
 New-Item -ItemType Directory -Force -Path (Join-Path $package "tools") | Out-Null
 Copy-Item $bonjourMsi (Join-Path $package "tools\Bonjour64.msi") -Force
 
-# Seed database (optional)
-if ($IncludeDatabase) {
-    if (Test-Path (Join-Path $backend "library.db")) {
-        New-Item -ItemType Directory -Force -Path (Join-Path $package "data") | Out-Null
-        Copy-Item (Join-Path $backend "library.db") (Join-Path $package "data\library.db") -Force
-        Write-Host "Included existing database as seed data." -ForegroundColor Yellow
-    } else {
-        Write-Host "WARN: -IncludeDatabase requested but backend\library.db not found." -ForegroundColor Yellow
-    }
+# Seed database: if backend\library.db exists it is bundled as the initial
+# data, so a fresh install on a venue/demo machine starts with the current
+# students etc. install.ps1 only seeds when NO database exists yet, so a
+# reinstall on a machine that already has data never overwrites it.
+if (Test-Path (Join-Path $backend "library.db")) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $package "data") | Out-Null
+    Copy-Item (Join-Path $backend "library.db") (Join-Path $package "data\library.db") -Force
+    Write-Host "Included existing database as seed data." -ForegroundColor Yellow
+} else {
+    Write-Host "No backend\library.db found - package will start with an empty database." -ForegroundColor Yellow
 }
 
 # ------------------------------------------------------------ 5. summary
