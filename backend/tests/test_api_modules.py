@@ -10,6 +10,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -17,7 +18,8 @@ from fastapi.testclient import TestClient
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-os.environ["STUDYSYNC_API_KEY"] = "test-key"
+API_KEY = "test-key-0123456789abcdef0123456789abcdef"
+os.environ["STUDYSYNC_API_KEY"] = API_KEY
 
 import database  # noqa: E402
 
@@ -40,7 +42,7 @@ class ApiModuleTests(unittest.TestCase):
         # before Windows removes the temporary SQLite files.
         cls.client = TestClient(app)
         cls.client.__enter__()
-        cls.headers = {"X-API-Key": "test-key"}
+        cls.headers = {"X-API-Key": API_KEY}
 
     @classmethod
     def tearDownClass(cls):
@@ -80,6 +82,34 @@ class ApiModuleTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["duration_minutes"], 270)
         self.assertEqual(self.request("GET", "/api/attendance?student_id=9001").status_code, 200)
+
+    def test_04b_auto_renew_on_attendance(self):
+        today = date.today().isoformat()
+        # Joined two years before today, never renewed -> deeply expired and
+        # imported as Inactive by the back-dated status rule.
+        payload = {"student_id": 9002, "name": "Expired Student", "gender": "Male", "join_date": "2024-06-01"}
+        self.assertEqual(self.request("POST", "/api/students", json=payload).status_code, 201)
+        self.assertEqual(self.request("GET", "/api/students/9002").json()["status"], "Inactive")
+
+        # Checking in must auto-renew (renewal_count bumps year-by-year until
+        # valid), flip status back to Active, and still record attendance.
+        self.assertEqual(
+            self.request("POST", "/api/attendance/check-in", json={"student_id": 9002, "date": today, "check_in": "10:00"}).status_code,
+            201,
+        )
+        after = self.request("GET", "/api/students/9002").json()
+        self.assertEqual(after["status"], "Active")
+        self.assertGreaterEqual(after["renewal_count"], 2)
+        self.assertGreaterEqual(after["valid_until"], today)
+        self.assertEqual(len(self.request("GET", "/api/attendance?student_id=9002").json()), 1)
+
+        # A student who is already valid is left untouched (idempotent).
+        self.assertEqual(self.request("GET", "/api/students/9001").json()["renewal_count"], 0)
+        self.assertEqual(
+            self.request("POST", "/api/attendance/check-in", json={"student_id": 9001, "date": today, "check_in": "09:00"}).status_code,
+            201,
+        )
+        self.assertEqual(self.request("GET", "/api/students/9001").json()["renewal_count"], 0)
 
     def test_05_digital_library_module(self):
         payload = {"student_id": 9001, "date": "2026-06-03", "in_time": "10:00", "account_type": "Library Subscription", "subscription_id": "TEST-SUB", "platform_name": "Test Research", "purpose": "Revision"}

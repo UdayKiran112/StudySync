@@ -36,9 +36,12 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     # Membership lasts one year from join_date, extended by one more year
     # per renewal (join_date itself never changes -- see routers/students.py
-    # renew_student). This runs for every API connection so expired
-    # memberships cannot be used by attendance, library, or assessment
-    # endpoints between server restarts.
+    # renew_student). This runs for every API connection so the stored
+    # status always matches the validity formula, even between server
+    # restarts. Attendance is the one deliberate exception: an expired
+    # student who shows up at the desk (or swipes the ZKTeco device) is
+    # auto-renewed on check-in instead of blocked -- see
+    # routers/students.py auto_renew_if_expired.
     conn.execute(
         """UPDATE students
         SET status = CASE WHEN date(join_date, '+' || (renewal_count + 1) || ' years') < ? THEN 'Inactive' ELSE 'Active' END

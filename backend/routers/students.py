@@ -49,6 +49,64 @@ router = APIRouter(
 # between endpoints (or with database.py's per-connection status sync).
 VALID_UNTIL_EXPR = "date(join_date, '+' || (renewal_count + 1) || ' years')"
 
+# Cap on how many whole years one attendance event may auto-renew. Guards
+# against a pathological join_date (e.g. a data-entry typo from the 1990s)
+# turning into an unbounded loop; one iteration per missing year is already
+# far more than any real membership needs.
+MAX_AUTO_RENEWS = 365
+
+
+def auto_renew_if_expired(
+    db: sqlite3.Connection, student_id: int, today: Optional[date] = None
+) -> bool:
+    """
+    Attendance-side membership gateway: both the front-desk check-in
+    (routers/attendance.py) and the ZKTeco swipe flow (zkteco/sync.py)
+    call this before recording presence.
+
+    If the student's membership is expired by ``today``, auto-renew it by
+    incrementing ``renewal_count`` in whole-year steps -- anchored to
+    ``join_date``, exactly the VALID_UNTIL_EXPR formula -- until
+    ``valid_until`` covers ``today``, then set status back to 'Active'.
+    Returns True if a renewal was applied, False if the student was already
+    valid (or doesn't exist).
+
+    Unlike the manual renew endpoint (one year per click), an attendance
+    event is a show-up: the student is physically at the desk, so their
+    membership is reactivated for the full outstanding period rather than
+    nudged a single year at a time. Idempotent -- a student who is already
+    valid (e.g. renewed moments ago) triggers no write.
+    """
+    today_iso = today.isoformat() if today is not None else date.today().isoformat()
+
+    row = db.execute(
+        f"SELECT {VALID_UNTIL_EXPR} AS valid_until FROM students WHERE student_id = ?",
+        (student_id,),
+    ).fetchone()
+    if row is None or row["valid_until"] >= today_iso:
+        return False
+
+    for _ in range(MAX_AUTO_RENEWS):
+        db.execute(
+            "UPDATE students SET renewal_count = renewal_count + 1 WHERE student_id = ?",
+            (student_id,),
+        )
+        row = db.execute(
+            f"SELECT {VALID_UNTIL_EXPR} AS valid_until FROM students WHERE student_id = ?",
+            (student_id,),
+        ).fetchone()
+        if row["valid_until"] >= today_iso:
+            break
+    # Reuse the shared formula for status so a cap-exhausted (pathological)
+    # student can't end up 'Active' while the validity math says otherwise.
+    db.execute(
+        f"""UPDATE students
+        SET status = CASE WHEN {VALID_UNTIL_EXPR} < ? THEN 'Inactive' ELSE 'Active' END
+        WHERE student_id = ?""",
+        (today_iso, student_id),
+    )
+    return True
+
 
 @router.post("/{student_id}/renew", response_model=StudentResponse)
 def renew_student(student_id: int, db: sqlite3.Connection = Depends(get_db_dependency)):

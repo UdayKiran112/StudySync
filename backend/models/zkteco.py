@@ -57,4 +57,5 @@ class ZkSyncResult(BaseModel):
     imported: int
     duplicates: int
     unknown_students: int
+    renewed: int = 0
     incomplete: int

@@ -35,6 +35,11 @@ Edge cases:
     holding and the new check-in can be recorded.
   * Device user_ids with no matching students.student_id are reported as
     unknown_students (the log is still cleared from the device).
+  * A swipe from a student whose membership has lapsed auto-renews it
+    (increment renewal_count, status back to 'Active' -- same rule as the
+    front-desk check-in, see routers.students.auto_renew_if_expired) and
+    counts toward the returned ``renewed`` tally, instead of blocking the
+    student from checking in.
   * If a run ever re-reads a log that was already applied (e.g. the device
     buffer could not be cleared after a committed import), the log matches
     an existing row's check_in or check_out and is skipped as a duplicate,
@@ -53,6 +58,7 @@ from routers.attendance import (
     _determine_provisional_session,
     _minutes_between,
 )
+from routers.students import auto_renew_if_expired
 
 
 def _student_id_for_user_id(db: sqlite3.Connection, user_id: str) -> Optional[int]:
@@ -116,9 +122,11 @@ def sync_attendance_from_device(
     clear the buffer once the writes are committed.
 
     Returns a tally: pulled / imported / duplicates / unknown_students /
-    incomplete. ``incomplete`` is always 0 -- a lone punch is an open
-    session now, not a dropped punch. Raises zkteco.device.ZkError if the
-    device can't be reached (nothing is written in that case).
+    renewed / incomplete. ``incomplete`` is always 0 -- a lone punch is an
+    open session now, not a dropped punch. ``renewed`` counts students whose
+    lapsed memberships were auto-renewed by this run. Raises
+    zkteco.device.ZkError if the device can't be reached (nothing is
+    written in that case).
     """
     logs = list_attendance(config)
 
@@ -136,6 +144,7 @@ def sync_attendance_from_device(
     imported = 0
     duplicates = 0
     unknown_students = 0
+    renewed = 0
     debounce_minutes = punch_debounce_minutes()
 
     for (user_id, day), punches in by_day.items():
@@ -143,6 +152,12 @@ def sync_attendance_from_device(
         if student_id is None:
             unknown_students += len(punches)
             continue
+
+        # The swipe is a show-up: reactivate a lapsed membership (increment
+        # renewal_count, set status back to Active) rather than skip the
+        # student. Idempotent, so the rest of this day's punches cost nothing.
+        if auto_renew_if_expired(db, student_id):
+            renewed += 1
 
         for punch in sorted(punches):
             # Double-tap guard: a punch right after the previous one (e.g. a
@@ -211,5 +226,6 @@ def sync_attendance_from_device(
         "imported": imported,
         "duplicates": duplicates,
         "unknown_students": unknown_students,
+        "renewed": renewed,
         "incomplete": 0,
     }

@@ -170,6 +170,11 @@ export function AttendancePage() {
           { icon: "⚠️" },
         );
       }
+      if (result.renewed > 0) {
+        toast(
+          `${result.renewed} lapsed membership${result.renewed === 1 ? "" : "s"} auto-renewed on check-in.`,
+        );
+      }
     } catch (err) {
       toast.error(extractErrorMessage(err));
     }

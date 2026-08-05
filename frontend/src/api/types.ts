@@ -338,6 +338,8 @@ export interface ZkSyncResult {
   duplicates: number;
   /** Swipes whose device user_id didn't match any student. */
   unknown_students: number;
+  /** Expired memberships auto-renewed because the student checked in. */
+  renewed: number;
   /** Always 0 — a lone punch is an open session, not a dropped punch. */
   incomplete: number;
 }

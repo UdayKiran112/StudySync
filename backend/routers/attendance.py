@@ -36,6 +36,7 @@ from models.attendance import (
     AttendanceUpdate,
     AttendanceResponse,
 )
+from routers.students import auto_renew_if_expired
 from security import require_api_key
 
 logger = logging.getLogger("studysync.attendance")
@@ -303,6 +304,11 @@ def check_in(
                 "Check out first before checking in again."
             ),
         )
+
+    # A student showing up at the desk is a presence event: if their
+    # membership lapsed, reactivate it (increment renewal_count, set status
+    # back to Active) instead of turning them away. No staff action needed.
+    auto_renew_if_expired(db, payload.student_id)
 
     record_date = payload.date or date.today()
     check_in_time = payload.check_in or _current_time_hhmm()
