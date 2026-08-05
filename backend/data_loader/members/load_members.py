@@ -60,7 +60,7 @@ if str(common_dir) not in sys.path:
     sys.path.insert(0, str(common_dir))
 
 
-from common import collapse_ws, parse_date, parse_member_id
+from common import collapse_ws, module_report_dir, parse_date, parse_member_id
 
 # ---- column indices in the CSV (0-based, after the header row) -----------
 COL_MEMBER_NO = 0
@@ -184,11 +184,13 @@ def main():
     ap.add_argument("--csv", required=True, type=Path)
     ap.add_argument("--db", required=True, type=Path)
     ap.add_argument("--schema", type=Path, default=Path("schema.sql"))
-    ap.add_argument("--report", type=Path, default=Path("members_load_report.txt"))
+    ap.add_argument(
+        "--report", type=Path, default=module_report_dir("members") / "members_load_report.txt"
+    )
     ap.add_argument(
         "--gender-report",
         type=Path,
-        default=Path("members_gender_report.txt"),
+        default=module_report_dir("members") / "members_gender_report.txt",
         help="Report of rows whose gender could not be derived from the marker columns",
     )
     args = ap.parse_args()

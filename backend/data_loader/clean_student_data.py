@@ -10,6 +10,8 @@ own project folder (sibling to that section's load_*.py script):
     2. offline_library/offline_library.csv
     3. coaching/digital_class.csv
     4. attendance/attendance.csv
+    5. marks/offline_exam.csv
+    6. marks/quiz.csv
 
 Every record that is missing, invalid, or irregular in a way that could not
 be safely auto-corrected is written to that section's own
@@ -19,8 +21,12 @@ description of the problem and a reference back to the original row in the
 source spreadsheet so it can be fixed by hand. The one exception is
 error_log_general.log / corrections_log_general.log (Student ID / Name /
 Date issues, which affect every section) -- those aren't specific to one
-folder, so they're written at the project root instead. See
-ErrorLog.SECTION_FOLDERS for the section -> folder mapping.
+folder, so they're written at the reports root instead.
+
+Logs and reports live in the shared pipeline reports tree (reports/, one
+subfolder per module -- see common.py / run_pipeline.py), never next to the
+CSV files. The CSV files themselves stay in the section folders above,
+because that's where the loaders read them from.
 
 USAGE
 -----
@@ -42,7 +48,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from common import Canonicalizer
+from common import (
+    CLOSE_TIME,
+    OPEN_TIME,
+    Canonicalizer,
+    clamp_out_time,
+    fix_checkin_pm_offset,
+    fix_checkout_pm_offset,
+)
 
 # --------------------------------------------------------------------------
 # CONFIG
@@ -145,6 +158,8 @@ class ErrorLog:
         ("offline_library", "Offline Library"),
         ("digital_class", "Digital Class"),
         ("attendance", "Attendance"),
+        ("offline_exam", "Offline Exam"),
+        ("quiz", "Quiz"),
     ]
 
     # Which project folder each section's CSV/logs land in, matching the
@@ -152,14 +167,17 @@ class ErrorLog:
     # tree at the project root). "digital_class" maps to "coaching" since
     # that's the only remaining folder without an obvious section of its
     # own -- rename this mapping if load_coaching.py actually expects a
-    # different file/folder. "general" has no folder of its own (its
-    # issues aren't specific to one section) and is written at the
+    # different file/folder. "offline_exam" and "quiz" land in "marks"
+    # (alongside load_exam_marks.py). "general" has no folder of its own
+    # (its issues aren't specific to one section) and is written at the
     # project root instead -- see write_all.
     SECTION_FOLDERS = {
         "digital_library": "digital_library",
         "offline_library": "offline_library",
         "digital_class": "coaching",
         "attendance": "attendance",
+        "offline_exam": "marks",
+        "quiz": "marks",
     }
 
     def __init__(self):
@@ -250,15 +268,17 @@ class ErrorLog:
         error_log_<section>.log       - needs manual review
         corrections_log_<section>.log - auto-corrected, FYI only
 
-        Each section's pair lands in its own project folder (see
-        SECTION_FOLDERS) alongside that section's load_*.py script.
-        "general" has no section folder of its own -- its pair is written
-        directly into base_dir instead.
+        Each section's pair lands in the shared reports tree (see
+        common.module_report_dir) under the subfolder for that section's
+        module (reports/<module>/), alongside that module's loader report.
+        "general" has no module folder of its own -- its pair is written
+        directly into the reports root instead.
         """
 
+        reports_dir = base_dir / "reports"
         for section_key, title in self.SECTIONS:
             folder = self.SECTION_FOLDERS.get(section_key)
-            target_dir = (base_dir / folder) if folder else base_dir
+            target_dir = (reports_dir / folder) if folder else reports_dir
             target_dir.mkdir(parents=True, exist_ok=True)
 
             review_entries = [
@@ -505,6 +525,102 @@ def fix_times(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
                     raw
                 )  # left as-is; section builders flag it as still-invalid
         df[col] = fixed_values
+    return df
+
+
+def fix_operating_hours(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
+    """Corrects 12-hour-clock slips and out-of-operating-hours times on the
+    shared IN/OUT columns, after fix_times has normalized the formatting:
+
+      - A check-in before 09:00 (the library's opening time) is almost always
+        an afternoon time recorded on a 12-hour clock without the PM offset
+        ('02:00' really meant 14:00) -> +12h. This dataset contains a whole
+        block of them (40+ rows on one day). After the fix, any row whose
+        pair is still inconsistent (fixed-in not before its out) fails the
+        downstream check_out > check_in constraint and is skipped with a log
+        rather than loaded with nonsense times.
+      - A check-out before its check-in that a 12-hour clock explains
+        ('01:00' meant 13:00) -> +12h.
+      - A check-out past 18:00 (the library's latest closing) is a
+        data-entry overrun -> clamped to 18:00.
+
+    Runs once, before the per-section builders, so attendance and digital
+    library both see the corrected times and each correction is logged only
+    once (under 'general', since IN/OUT are shared source columns)."""
+    df = df.copy()
+    for idx, row in df.iterrows():
+        excel_row = row["Excel Row"]
+        sl_no = row["Sl.No"]
+        sid = row["ID NO"]
+        sname = row["Name of the Student"]
+        raw_in, raw_out = row["IN"], row["OUT"]
+        new_in, new_out = raw_in, raw_out
+
+        if TIME_RE.match(new_in) and new_in < OPEN_TIME:
+            fixed_in = fix_checkin_pm_offset(new_in, new_out)
+            if fixed_in is not None:
+                log.add(
+                    "general",
+                    "corrected",
+                    excel_row,
+                    sl_no,
+                    sid,
+                    sname,
+                    f"In Time before the {OPEN_TIME} opening read as a "
+                    f"12-hour-clock PM time - corrected from '{new_in}' to "
+                    f"'{fixed_in}' (if the fixed pair is still inconsistent "
+                    f"it is skipped downstream, not guessed)",
+                    raw_in,
+                )
+                new_in = fixed_in
+            else:
+                log.add(
+                    "general",
+                    "review",
+                    excel_row,
+                    sl_no,
+                    sid,
+                    sname,
+                    f"In Time is before the {OPEN_TIME} opening and no "
+                    f"12-hour-clock interpretation fits - please verify",
+                    raw_in,
+                )
+
+        if TIME_RE.match(new_in) and TIME_RE.match(new_out):
+            fixed_out = fix_checkout_pm_offset(new_in, new_out)
+            if fixed_out is not None:
+                log.add(
+                    "general",
+                    "corrected",
+                    excel_row,
+                    sl_no,
+                    sid,
+                    sname,
+                    f"Out Time before In Time read as a 12-hour-clock PM "
+                    f"time - corrected from '{new_out}' to '{fixed_out}'",
+                    raw_out,
+                )
+                new_out = fixed_out
+
+        if TIME_RE.match(new_out):
+            clamped = clamp_out_time(new_out)
+            if clamped is not None:
+                log.add(
+                    "general",
+                    "corrected",
+                    excel_row,
+                    sl_no,
+                    sid,
+                    sname,
+                    f"Out Time past the {CLOSE_TIME} closing time clamped to "
+                    f"'{clamped}'",
+                    raw_out,
+                )
+                new_out = clamped
+
+        if (new_in, new_out) != (raw_in, raw_out):
+            df.at[idx, "IN"] = new_in
+            df.at[idx, "OUT"] = new_out
     return df
 
 
@@ -805,6 +921,56 @@ BOOK_ID_DOT_SEPARATOR = re.compile(r"(\d)\s*\.\s*(\d)")
 CLASS_COUNT_SUFFIX = re.compile(r"\s*\(\s*(\d+)\s*\)\s*$")
 
 
+# A Book ID cell that is actually a time of day ('12:25', '12;42', '15:40')
+# -- someone typed the time in the ID column. Not a catalog id.
+TIME_LIKE_BOOK_ID = re.compile(r"^\d{1,2}[:;.]\d{1,2}$")
+
+
+def expand_book_id_cell(raw: str, log: ErrorLog, excel_row, sl_no, sid, sname):
+    """Split a Book ID cell into its individual ids, handling the junk this
+    column actually contains beyond a plain comma list:
+      - time-of-day values ('12:25') are dropped (a review log entry; the
+        Book Name, if any, is kept as an un-catalogued item),
+      - a space-separated run of digits ('1254 1540') is two ids typed into
+        one cell, so it is split into one row per id.
+    Returns the list of usable id strings."""
+    ids = []
+    for token in re.split(r"[,;]", raw):
+        token = token.strip()
+        if not token:
+            continue
+        if TIME_LIKE_BOOK_ID.match(token):
+            log.add(
+                "offline_library",
+                "review",
+                excel_row,
+                sl_no,
+                sid,
+                sname,
+                f"Book ID {token!r} looks like a time, not a catalog id - "
+                f"dropped (any Book Name is kept as an un-catalogued item)",
+                token,
+            )
+            continue
+        parts = token.split()
+        if len(parts) > 1 and all(p.isdigit() for p in parts):
+            log.add(
+                "offline_library",
+                "corrected",
+                excel_row,
+                sl_no,
+                sid,
+                sname,
+                f"Book ID cell held {len(parts)} space-separated ids - "
+                f"split into one row per id",
+                token,
+            )
+            ids.extend(parts)
+        else:
+            ids.append(token)
+    return ids
+
+
 def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
     """Multiple comma-separated Book IDs mean the student took out multiple
     books in one visit - each one becomes its own row here, rather than
@@ -838,7 +1004,14 @@ def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
                 raw_book_id,
             )
 
-        book_ids = [b.strip() for b in normalized_id.split(",") if b.strip() != ""]
+        book_ids = expand_book_id_cell(
+            normalized_id,
+            log,
+            row["Excel Row"],
+            row["Sl.No"],
+            row["ID NO"],
+            row["Name of the Student"],
+        )
         book_names = [b.strip() for b in raw_book_name.split(",") if b.strip() != ""]
 
         def add_record(bid, bname):
@@ -1054,6 +1227,81 @@ def build_digital_class(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
+def build_offline_exam(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
+    """One row per (student, date, exam topic) taken from the 'Offline Exam'
+    column. The daily activity log records which student sat which exam on
+    which day, but never a score -- load_offline_exam.py turns these into
+    exams + exam_marks rows with a NULL mark, which the marks register later
+    fills in. Bare-date topics (a stray column-shift) are rejected at load
+    time by the shared topic canonicalizer, not here."""
+    mask = df["Offline Exam"] != ""
+    sub = df.loc[mask].copy()
+    records = []
+    for idx, row in sub.iterrows():
+        topic = collapse(row["Offline Exam"])
+        if not topic:
+            continue
+        records.append(
+            {
+                "Serial No.": row["Sl.No"],
+                "Date": (
+                    row["Date_clean"].strftime("%d-%m-%Y")
+                    if pd.notna(row["Date_clean"])
+                    else row["Date"]
+                ),
+                "Student ID": row["ID NO"],
+                "Student Name": row["Name of the Student"],
+                "Exam Name": topic,
+            }
+        )
+    return pd.DataFrame(
+        records,
+        columns=[
+            "Serial No.",
+            "Date",
+            "Student ID",
+            "Student Name",
+            "Exam Name",
+        ],
+    )
+
+
+def build_quiz(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
+    """One row per (student, date, quiz topic) taken from the 'Quiz' column,
+    mirroring build_offline_exam. load_quiz.py turns these into quizzes +
+    quiz_scores rows with a NULL score."""
+    mask = df["Quiz"] != ""
+    sub = df.loc[mask].copy()
+    records = []
+    for idx, row in sub.iterrows():
+        topic = collapse(row["Quiz"])
+        if not topic:
+            continue
+        records.append(
+            {
+                "Serial No.": row["Sl.No"],
+                "Date": (
+                    row["Date_clean"].strftime("%d-%m-%Y")
+                    if pd.notna(row["Date_clean"])
+                    else row["Date"]
+                ),
+                "Student ID": row["ID NO"],
+                "Student Name": row["Name of the Student"],
+                "Quiz Name": topic,
+            }
+        )
+    return pd.DataFrame(
+        records,
+        columns=[
+            "Serial No.",
+            "Date",
+            "Student ID",
+            "Student Name",
+            "Quiz Name",
+        ],
+    )
+
+
 def build_attendance(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
     sub = df.copy()
 
@@ -1198,11 +1446,16 @@ def main():
     print("Cleaning times ...")
     df = fix_times(df, log)
 
+    print("Correcting 12-hour clock slips / operating hours ...")
+    df = fix_operating_hours(df, log)
+
     print("Building sections ...")
     digital_library = build_digital_library(df, log)
     offline_library = build_offline_library(df, log)
     digital_class = build_digital_class(df, log)
     attendance = build_attendance(df, log)
+    offline_exam = build_offline_exam(df, log)
+    quiz = build_quiz(df, log)
 
     digital_library.to_csv(
         section_dirs["digital_library"] / "digital_library.csv",
@@ -1221,6 +1474,16 @@ def main():
     )
     attendance.to_csv(
         section_dirs["attendance"] / "attendance.csv",
+        index=False,
+        quoting=csv.QUOTE_MINIMAL,
+    )
+    offline_exam.to_csv(
+        section_dirs["offline_exam"] / "offline_exam.csv",
+        index=False,
+        quoting=csv.QUOTE_MINIMAL,
+    )
+    quiz.to_csv(
+        section_dirs["quiz"] / "quiz.csv",
         index=False,
         quoting=csv.QUOTE_MINIMAL,
     )
@@ -1251,6 +1514,12 @@ def main():
     )
     print(
         f"  Attendance      ({section_dirs['attendance'] / 'attendance.csv'}): {len(attendance)}"
+    )
+    print(
+        f"  Offline Exam    ({section_dirs['offline_exam'] / 'offline_exam.csv'}): {len(offline_exam)}"
+    )
+    print(
+        f"  Quiz            ({section_dirs['quiz'] / 'quiz.csv'}): {len(quiz)}"
     )
     print()
     print(f"Needs manual review ({total_review} total):")

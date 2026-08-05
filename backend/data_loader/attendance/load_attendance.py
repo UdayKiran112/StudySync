@@ -82,7 +82,14 @@ common_dir = Path(__file__).parent.parent
 if str(common_dir) not in sys.path:
     sys.path.insert(0, str(common_dir))
 
-from common import parse_date, parse_time
+from common import (
+    OPEN_TIME,
+    fix_checkout_pm_offset,
+    log_review_item,
+    module_report_dir,
+    parse_date,
+    parse_time,
+)
 
 LUNCH_START_MIN = 13 * 60  # 13:00
 LUNCH_END_MIN = 14 * 60  # 14:00
@@ -109,36 +116,6 @@ def compute_duration_minutes(check_in, check_out):
     return (end - start) - lunch_overlap, lunch_overlap
 
 
-def fix_checkout_pm_offset(check_in, check_out):
-    """
-    If check_out is not after check_in, this is almost always the swipe
-    device recording an afternoon/evening check-out on a 12-hour clock
-    without adding 12 hours (e.g. checkout '01:00' really meant 13:00).
-
-    Try adding 12 hours to check_out and accept the fix only if it (a)
-    lands after check_in and (b) produces a plausible same-day session of
-    at most 13 hours, so an actually-swapped or badly mistyped pair of
-    times (which a 12-hour-clock slip can't explain) is left alone for the
-    caller to skip/log instead of being papered over.
-
-    Returns the corrected 'HH:MM' check_out, or None if no safe fix applies.
-    """
-    if not check_in or not check_out:
-        return None
-    h1, m1 = int(check_in[:2]), int(check_in[3:])
-    h2, m2 = int(check_out[:2]), int(check_out[3:])
-    start, end = h1 * 60 + m1, h2 * 60 + m2
-    if end > start:
-        return None  # nothing to fix
-    if h2 >= 12:
-        return None  # already PM/noon-or-later; a +12 wrap isn't a clock slip
-    fixed_end = end + 12 * 60
-    if fixed_end <= start or fixed_end - start > 13 * 60:
-        return None
-    fh, fm = divmod(fixed_end, 60)
-    return f"{fh:02d}:{fm:02d}"
-
-
 def derive_session(check_in, check_out):
     if check_in is None:
         return None
@@ -159,7 +136,11 @@ def main():
     )
     ap.add_argument("--csv", required=True, type=Path, help="cleaned attendance.csv")
     ap.add_argument("--db", required=True, type=Path)
-    ap.add_argument("--report", type=Path, default=Path("attendance_load_report.txt"))
+    ap.add_argument(
+        "--report",
+        type=Path,
+        default=module_report_dir("attendance") / "attendance_load_report.txt",
+    )
     args = ap.parse_args()
 
     if not args.db.exists():
@@ -229,6 +210,16 @@ def main():
                 detail_logs["student_id_not_found"].append(
                     f"line {line_no}: student_id {student_id} not found in students table -> row SKIPPED"
                 )
+                log_review_item(
+                    {
+                        "table": "attendance",
+                        "row": line_no,
+                        "student_id": id_raw,
+                        "date": row.get("Date", ""),
+                        "problem": "student_id_not_found",
+                        "detail": f"attendance row {line_no}",
+                    }
+                )
                 continue
 
             date = parse_date(row.get("Date", ""), min_year=2005, bound_today=True)
@@ -237,6 +228,16 @@ def main():
                 detail_logs["unparseable_date"].append(
                     f"line {line_no} (student {student_id}): unparseable date "
                     f"{row.get('Date')!r} -> row SKIPPED"
+                )
+                log_review_item(
+                    {
+                        "table": "attendance",
+                        "row": line_no,
+                        "student_id": id_raw,
+                        "date": row.get("Date", ""),
+                        "problem": "unparseable_date",
+                        "detail": f"attendance row {line_no}",
+                    }
                 )
                 continue
 
@@ -324,6 +325,16 @@ def main():
                     f"lines {lines} (student {student_id}, {date}, {session}): "
                     f"check_out {check_out} not after check_in {check_in} -> "
                     f"insert failed ({msg}) -> SKIPPED"
+                )
+                log_review_item(
+                    {
+                        "table": "attendance",
+                        "row": lines,
+                        "student_id": student_id,
+                        "date": date,
+                        "problem": "checkout_not_after_checkin",
+                        "detail": f"check_out {check_out} vs check_in {check_in}",
+                    }
                 )
             else:
                 detail_logs["insert_failed_other"].append(

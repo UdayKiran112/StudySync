@@ -66,7 +66,7 @@ if str(common_dir) not in sys.path:
     sys.path.insert(0, str(common_dir))
 
 
-from common import collapse_ws, parse_date
+from common import collapse_ws, log_review_item, module_report_dir, parse_date
 
 
 class CoachingLoader:
@@ -109,7 +109,11 @@ def main():
     )
     ap.add_argument("--csv", required=True, type=Path, help="cleaned digital_class.csv")
     ap.add_argument("--db", required=True, type=Path)
-    ap.add_argument("--report", type=Path, default=Path("coaching_load_report.txt"))
+    ap.add_argument(
+        "--report",
+        type=Path,
+        default=module_report_dir("coaching") / "coaching_load_report.txt",
+    )
     args = ap.parse_args()
 
     if not args.db.exists():
@@ -140,6 +144,16 @@ def main():
                 loader.skips.append(
                     f"line {line_no}: student_id {student_id} not found in students table -> row SKIPPED"
                 )
+                log_review_item(
+                    {
+                        "table": "coaching_enrollments",
+                        "row": line_no,
+                        "student_id": id_raw,
+                        "date": row.get("Date", ""),
+                        "problem": "student_id_not_found",
+                        "detail": f"digital class row {line_no}",
+                    }
+                )
                 continue
 
             date = parse_date(row.get("Date", ""), min_year=2005, bound_today=True)
@@ -148,6 +162,16 @@ def main():
                 loader.skips.append(
                     f"line {line_no} (student {student_id}): unparseable date "
                     f"{row.get('Date')!r} -> row SKIPPED"
+                )
+                log_review_item(
+                    {
+                        "table": "coaching_enrollments",
+                        "row": line_no,
+                        "student_id": id_raw,
+                        "date": row.get("Date", ""),
+                        "problem": "unparseable_date",
+                        "detail": f"digital class row {line_no}",
+                    }
                 )
                 continue
 

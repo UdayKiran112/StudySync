@@ -78,7 +78,14 @@ common_dir = Path(__file__).parent.parent
 if str(common_dir) not in sys.path:
     sys.path.insert(0, str(common_dir))
 
-from common import Canonicalizer, collapse_ws, normalize_key, parse_date
+from common import (
+    Canonicalizer,
+    collapse_ws,
+    log_review_item,
+    module_report_dir,
+    normalize_key,
+    parse_date,
+)
 
 
 def prescan_book_titles(rows):
@@ -211,6 +218,16 @@ class OfflineLibraryLoader:
                     f"line {line_no}: book id {bid!r} has no title anywhere in the "
                     f"file -> entry SKIPPED (fill in the title by hand and re-run)"
                 )
+                log_review_item(
+                    {
+                        "table": "offline_library_usage",
+                        "row": line_no,
+                        "student_id": student_id,
+                        "date": date,
+                        "problem": "no_book_title",
+                        "detail": f"book_id {bid!r} has no title anywhere in the file",
+                    }
+                )
                 return
 
         if bid:
@@ -226,6 +243,16 @@ class OfflineLibraryLoader:
             self.skips.append(
                 f"line {line_no}: offline_library_usage insert failed ({e}) -> SKIPPED"
             )
+            log_review_item(
+                {
+                    "table": "offline_library_usage",
+                    "row": line_no,
+                    "student_id": student_id,
+                    "date": date,
+                    "problem": "insert_failed",
+                    "detail": f"book_id {bid!r}, {e}",
+                }
+            )
 
 
 def main():
@@ -237,7 +264,9 @@ def main():
     )
     ap.add_argument("--db", required=True, type=Path)
     ap.add_argument(
-        "--report", type=Path, default=Path("offline_library_load_report.txt")
+        "--report",
+        type=Path,
+        default=module_report_dir("offline_library") / "offline_library_load_report.txt",
     )
     args = ap.parse_args()
 
@@ -272,6 +301,16 @@ def main():
             loader.skips.append(
                 f"line {line_no}: student_id {student_id} not found in students table -> row SKIPPED"
             )
+            log_review_item(
+                {
+                    "table": "offline_library_usage",
+                    "row": line_no,
+                    "student_id": id_raw,
+                    "date": row.get("Date", ""),
+                    "problem": "student_id_not_found",
+                    "detail": f"offline library row {line_no}",
+                }
+            )
             continue
 
         date = parse_date(row.get("Date", ""), min_year=2005, bound_today=True)
@@ -280,6 +319,16 @@ def main():
             loader.skips.append(
                 f"line {line_no} (student {student_id}): unparseable date "
                 f"{row.get('Date')!r} -> row SKIPPED"
+            )
+            log_review_item(
+                {
+                    "table": "offline_library_usage",
+                    "row": line_no,
+                    "student_id": id_raw,
+                    "date": row.get("Date", ""),
+                    "problem": "unparseable_date",
+                    "detail": f"offline library row {line_no}",
+                }
             )
             continue
 

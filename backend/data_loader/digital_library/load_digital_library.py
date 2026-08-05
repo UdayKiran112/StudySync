@@ -85,7 +85,11 @@ if str(common_dir) not in sys.path:
 
 from common import (
     Canonicalizer,
+    CLOSE_TIME,
+    OPEN_TIME,
     collapse_ws,
+    log_review_item,
+    module_report_dir,
     normalize_key,
     parse_date,
     parse_time,
@@ -195,6 +199,22 @@ class DigitalLibraryLoader:
                 f"line {line_no}: digital library usage with no usable In Time -> SKIPPED"
             )
             return
+        if check_in < OPEN_TIME or check_in > CLOSE_TIME:
+            self.skips.append(
+                f"line {line_no}: digital library usage in time {check_in} "
+                f"outside operating hours ({OPEN_TIME}-{CLOSE_TIME}) -> SKIPPED"
+            )
+            log_review_item(
+                {
+                    "table": "digital_library_usage",
+                    "row": line_no,
+                    "student_id": student_id,
+                    "date": date,
+                    "problem": "outside_operating_hours",
+                    "detail": f"in_time {check_in}, out_time {check_out}",
+                }
+            )
+            return
 
         account_type = (
             "Library Subscription"
@@ -231,6 +251,16 @@ class DigitalLibraryLoader:
             self.skips.append(
                 f"line {line_no}: digital_library_usage insert failed ({e}) -> SKIPPED"
             )
+            log_review_item(
+                {
+                    "table": "digital_library_usage",
+                    "row": line_no,
+                    "student_id": student_id,
+                    "date": date,
+                    "problem": "insert_failed",
+                    "detail": f"platform {platform}, {e}",
+                }
+            )
 
 
 def main():
@@ -242,7 +272,9 @@ def main():
     )
     ap.add_argument("--db", required=True, type=Path)
     ap.add_argument(
-        "--report", type=Path, default=Path("digital_library_load_report.txt")
+        "--report",
+        type=Path,
+        default=module_report_dir("digital_library") / "digital_library_load_report.txt",
     )
     args = ap.parse_args()
 
@@ -274,6 +306,16 @@ def main():
                 loader.skips.append(
                     f"line {line_no}: student_id {student_id} not found in students table -> row SKIPPED"
                 )
+                log_review_item(
+                    {
+                        "table": "digital_library_usage",
+                        "row": line_no,
+                        "student_id": id_raw,
+                        "date": row.get("Date", ""),
+                        "problem": "student_id_not_found",
+                        "detail": f"digital library row {line_no}",
+                    }
+                )
                 continue
 
             date = parse_date(row.get("Date", ""), min_year=2005, bound_today=True)
@@ -282,6 +324,16 @@ def main():
                 loader.skips.append(
                     f"line {line_no} (student {student_id}): unparseable date "
                     f"{row.get('Date')!r} -> row SKIPPED"
+                )
+                log_review_item(
+                    {
+                        "table": "digital_library_usage",
+                        "row": line_no,
+                        "student_id": id_raw,
+                        "date": row.get("Date", ""),
+                        "problem": "unparseable_date",
+                        "detail": f"digital library row {line_no}",
+                    }
                 )
                 continue
 

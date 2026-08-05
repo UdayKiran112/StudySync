@@ -89,6 +89,7 @@ duplicates them (UNIQUE(student_id, exam_id)).
 
 import argparse
 import csv
+import datetime
 import difflib
 import re
 import sqlite3
@@ -101,94 +102,18 @@ if str(common_dir) not in sys.path:
     sys.path.insert(0, str(common_dir))
 
 from common import (
+    BARE_DATE_RE,
+    EXAM_TOPIC_ALIASES,
     Canonicalizer,
+    canonicalize_exam_topic,
     collapse_ws,
+    log_review_item,
+    module_report_dir,
     normalize_key,
     parse_date,
     relax_marks_schema,
+    strip_exam_suffix,
 )
-
-# A raw "Name of Exam" that is actually just a date (a stray column-shift
-# surviving from the source spreadsheet -- see organize_internal_marks.py)
-# should never become its own fake exam topic.
-BARE_DATE_RE = re.compile(r"^\d{1,2}[.\-/ ]\d{1,2}[.\-/ ]\d{2,4}$")
-
-# Exam-topic abbreviations that edit-distance/anagram matching can't bridge
-# (e.g. 'Ari & Rea' vs 'Arithmetic & Reasoning' share almost no characters
-# despite meaning the same exam). Deliberately NOT exhaustive: ambiguous
-# short forms that could mean more than one real subject in this dataset
-# (e.g. 'G S' could be General Science or General Studies) are left OUT on
-# purpose -- they become their own distinct topic rather than being
-# guessed into the wrong one. Keys are pre-normalized with normalize_key
-# after stripping a trailing Exam/Test/Grand Test suffix and any trailing
-# "(...)" annotation (see canonicalize_exam_topic).
-_EXAM_TOPIC_ALIAS_GROUPS = {
-    "Arithmetic & Reasoning": [
-        "Ari & Rea",
-        "Ari&Rea",
-        "Ari  & Rea",
-        "Ari &Rea",
-        "Ar i& Rea",
-        "Ari & Reasoning",
-        "ARI & REA",
-        "A & R",
-        "A&R",
-        "A& R",
-        "A&R Eam",
-    ],
-    "RRB NTPC": ["RRB NTPC", "RRBNTPC", "RRB NTPC EXAM"],
-    "RRB Group D": [
-        "RRB Group D",
-        "RRB Group-D",
-        "RRB Group - D",
-        "RRB GRoup D",
-        "RRB Group-D Test",
-        "RRB Group-D GT",
-        "RRBGroup D GT",
-        "RRB GROUP D G Test",
-    ],
-    "SSC GD": ["SSC GD", "SSC G D", "SSC  GD", "SSCGD", "SSC GD  TEST"],
-    "Current Affairs": ["Current Affairs", "C A", "C.A", "Current Afairs", "C.Affairs"],
-    "Modern History": ["Modern History", "Modren    history"],
-    "General Science": [
-        "General Science",
-        "G Science",
-        "G.Science",
-        "G. Science",
-        "G.Sci",
-    ],
-    "General Studies": [
-        "General Studies",
-        "G Studies",
-        # NOTE: 'G S' is deliberately NOT included here -- see the
-        # ambiguity note above (could be General Science or General
-        # Studies). Only the unambiguous misspelling is aliased.
-        "Genaral Studies",
-    ],
-    "Constable Grand Test": [
-        "Constable Grand Test",
-        "Constable G T",
-        "Constable G  T",
-        "Contable Grand Test",
-        "Constable",
-    ],
-}
-EXAM_TOPIC_ALIASES = {
-    normalize_key(
-        re.sub(r"(?i)\b(grand\s*test|exam|test)\b\s*$", "", v).strip(" .-")
-    ): canon
-    for canon, variants in _EXAM_TOPIC_ALIAS_GROUPS.items()
-    for v in variants
-}
-
-
-def strip_exam_suffix(cleaned: str) -> str:
-    """Drop a trailing '(11)'/'(EM)'-style annotation and a trailing
-    Exam/Test/Grand Test word, for matching purposes only -- doesn't
-    change what gets displayed if there's no alias/fuzzy match."""
-    s = re.sub(r"\s*[\(\[][^)\]]*[\)\]]\s*$", "", cleaned)
-    s = re.sub(r"(?i)\b(grand\s*test|exam|test)\b\s*$", "", s).strip(" .-")
-    return s or cleaned
 
 
 # Error categories -- each gets its own log file (see write_error_logs).
@@ -222,6 +147,7 @@ class ExamLoader:
             "exam_max_marks_set": 0,
             "student_name_reordered": 0,
             "student_name_fuzzy_matched": 0,
+            "student_disambiguated": 0,
         }
         self.review_notes = []
         # Per-category error messages, so each type of error can be written
@@ -231,6 +157,89 @@ class ExamLoader:
             self.log_auto, self.log_review, "exam_topic_merged"
         )
         self._name_index = None  # lazily built by _student_name_index()
+        self._join_dates = None  # lazily built by _student_join_dates()
+        self._activity_by_date = None  # lazily built by _activity_dates()
+
+    def _review(self, problem, detail, line_no=None, name=None, date=None):
+        """Append a structured "needs a human" entry to the shared manual
+        review ledger, alongside the per-category error log."""
+        log_review_item(
+            {
+                "table": "exam_marks",
+                "row": line_no,
+                "student": name,
+                "date": date,
+                "problem": problem,
+                "detail": detail,
+            }
+        )
+
+    def _student_join_dates(self):
+        if self._join_dates is None:
+            self._join_dates = {
+                r[0]: r[1]
+                for r in self.conn.execute("SELECT student_id, join_date FROM students")
+            }
+        return self._join_dates
+
+    def _activity_dates(self):
+        """date ('YYYY-MM-DD') -> set of student_ids who were at the centre
+        that day, built from every activity table. Used to disambiguate
+        same-name roster students in the marks register: whoever actually
+        sat the exam was at the centre that day."""
+        if self._activity_by_date is None:
+            by_date = {}
+            for t in ("attendance", "digital_library_usage", "offline_library_usage"):
+                for sid, d in self.conn.execute(
+                    f"SELECT student_id, date FROM {t}"
+                ):
+                    by_date.setdefault(d, set()).add(sid)
+            for sid, d in self.conn.execute(
+                "SELECT ce.student_id, cc.class_date "
+                "FROM coaching_enrollments ce "
+                "JOIN coaching_classes cc ON cc.class_id = ce.class_id "
+                "WHERE ce.student_id IS NOT NULL"
+            ):
+                by_date.setdefault(d, set()).add(sid)
+            # Exam/quiz sittings are activity too -- and, being built from
+            # the same (topic, date) keys, they're the exact evidence a
+            # marks-register row is about. The offline-exam and quiz
+            # loaders run before this one in the pipeline, so these rows
+            # already exist here.
+            for sid, d in self.conn.execute(
+                "SELECT em.student_id, e.exam_date "
+                "FROM exam_marks em JOIN exams e ON e.exam_id = em.exam_id "
+                "WHERE e.exam_date IS NOT NULL"
+            ):
+                by_date.setdefault(d, set()).add(sid)
+            for sid, d in self.conn.execute(
+                "SELECT qs.student_id, q.quiz_date "
+                "FROM quiz_scores qs JOIN quizzes q ON q.quiz_id = qs.quiz_id "
+                "WHERE q.quiz_date IS NOT NULL"
+            ):
+                by_date.setdefault(d, set()).add(sid)
+            self._activity_by_date = by_date
+        return self._activity_by_date
+
+    def _active_on(self, sids, date_str, window=0):
+        """Candidates among `sids` with centre activity on date_str (or in
+        a +/-`window` day window around it, when > 0)."""
+        by_date = self._activity_dates()
+        if window == 0:
+            present = by_date.get(date_str, set())
+        else:
+            d = datetime.date.fromisoformat(date_str)
+            present = set()
+            for off in range(-window, window + 1):
+                day = (d + datetime.timedelta(days=off)).isoformat()
+                present |= by_date.get(day, set())
+        return [s for s in sids if s in present]
+
+    def _joined_by(self, sid, date_str):
+        """A student can't have sat an exam before joining. ISO date
+        strings compare lexicographically, which is correct here."""
+        jd = self._student_join_dates().get(sid)
+        return jd is None or jd <= date_str
 
     def log(self, msg, category):
         if category not in self.errors_by_category:
@@ -275,35 +284,27 @@ class ExamLoader:
     def log_review(self, msg):
         self.review_notes.append(msg)
 
-    def canonicalize_exam_topic(self, raw, context=""):
+    def canonicalize_exam_topic(self, raw, context="", log_date_reject=None):
         """
         Canonicalize an exam topic string so the same real exam (from
         either the daily activity CSV's Offline Exam column or a separate
         --marks-csv register) lands on the same (topic, date) key.
-
-        Tries, in order: (0) strip a stray leading/trailing '"' left by an
-        unescaped quote in the source spreadsheet, and reject a bare date
-        (a stray column-shift, not a real topic); (1) the explicit
-        abbreviation alias table (handles 'Ari & Rea' -> 'Arithmetic &
-        Reasoning', which edit-distance can't bridge); (2) the generic
-        fuzzy/anagram/exact canonicalizer (handles plain typos like
-        'Reasoing' -> 'Reasoning').
+        Delegates to common.canonicalize_exam_topic -- the shared
+        implementation the offline-exam loader also uses, so both sides
+        agree on the canonical spelling.
         """
-        cleaned = collapse_ws(raw).strip('"').strip()
-        if not cleaned:
-            return cleaned
-        if BARE_DATE_RE.match(cleaned):
-            self.log(
+        if log_date_reject is None:
+            log_date_reject = lambda cleaned: self.log(
                 f"{context}: Name of Exam {raw!r} looks like a date, not a "
                 f"topic -> row SKIPPED",
                 ERR_TOPIC,
             )
-            return ""
-        stripped = strip_exam_suffix(cleaned)
-        key = normalize_key(stripped) or normalize_key(cleaned)
-        if key in EXAM_TOPIC_ALIASES:
-            return EXAM_TOPIC_ALIASES[key]
-        return self.exam_topic_canon.canonicalize(stripped, context=context)
+        return canonicalize_exam_topic(
+            raw,
+            self.exam_topic_canon,
+            context=context,
+            log_date_reject=log_date_reject,
+        )
 
     @staticmethod
     def _normalize_person_name(s: str) -> str:
@@ -327,19 +328,77 @@ class ExamLoader:
             self._name_index = idx
         return self._name_index
 
-    def _resolve_ids(self, ids, name, context):
+    def _resolve_ids(self, ids, name, context, date=None):
         """Shared ambiguity check for whichever tier found candidate(s)."""
         if len(ids) > 1:
-            self.log(
+            # 2+ roster students share this name (the register's genuinely
+            # ambiguous cases: 'Siva.B' x3, 'Suresh.B' x5, 'Rajesh.Y' x2,
+            # ...). Before giving up, use facts that aren't just the name:
+            #   1. a student can't have sat an exam before they joined
+            #      (students.join_date <= exam date),
+            #   2. whoever actually sat the exam was at the centre that day
+            #      -- attendance / digital library / offline library /
+            #      coaching activity is strong evidence, with a +/-2 day
+            #      window if the exact date has no activity at all.
+            candidates = ids
+            if date is not None:
+                joined = [c for c in candidates if self._joined_by(c, date)]
+                if joined and len(joined) < len(candidates):
+                    candidates = joined
+                    if len(candidates) == 1:
+                        self.log_auto(
+                            "student_disambiguated",
+                            f"{context}: name {name!r} matches {len(ids)} "
+                            f"students {ids}; kept {candidates[0]} -- the only "
+                            f"one joined by the exam date {date}",
+                        )
+                        return candidates[0]
+                active = self._active_on(candidates, date, window=0)
+                if len(active) == 1:
+                    self.log_auto(
+                        "student_disambiguated",
+                        f"{context}: name {name!r} matches {len(ids)} students "
+                        f"{ids}; kept {active[0]} -- the only one with centre "
+                        f"activity on the exam date {date}",
+                    )
+                    return active[0]
+                if not active:
+                    active = self._active_on(candidates, date, window=2)
+                    if len(active) == 1:
+                        self.log_auto(
+                            "student_disambiguated",
+                            f"{context}: name {name!r} matches {len(ids)} "
+                            f"students {ids}; kept {active[0]} -- the only one "
+                            f"with centre activity within 2 days of {date}",
+                        )
+                        return active[0]
+                if len(active) > 1:
+                    self._log_student_error(
+                        f"{context}: student name {name!r} matches {len(ids)} "
+                        f"different students {ids}; {len(active)} of them have "
+                        f"centre activity around {date} -- still ambiguous, "
+                        f"can't tell which one this mark belongs to -> row SKIPPED",
+                        name,
+                        date,
+                    )
+                    return None
+            self._log_student_error(
                 f"{context}: student name {name!r} matches {len(ids)} different "
                 f"students {ids} -- ambiguous, can't tell which one this mark "
                 f"belongs to -> row SKIPPED",
-                ERR_STUDENT_MATCH,
+                name,
+                date,
             )
             return None
         return ids[0]
 
-    def match_student_by_name(self, name_raw, context):
+    def _log_student_error(self, msg, name, date=None):
+        """Log an ERR_STUDENT_MATCH skip, and mirror it into the shared
+        manual-review ledger."""
+        self.log(msg, ERR_STUDENT_MATCH)
+        self._review("student_match", msg, name=name, date=date)
+
+    def match_student_by_name(self, name_raw, context, date=None):
         """
         "Maximum compatibility" name search against the students roster,
         tried in increasing order of looseness so a real match isn't missed
@@ -368,7 +427,7 @@ class ExamLoader:
         # Tier 1: exact normalized match.
         ids = idx.get(norm)
         if ids:
-            return self._resolve_ids(ids, name, context)
+            return self._resolve_ids(ids, name, context, date)
 
         # Tier 2: same words, different order.
         my_tokens = frozenset(norm.split())
@@ -380,7 +439,7 @@ class ExamLoader:
             ]
             if len(token_matches) == 1:
                 key, cand_ids = token_matches[0]
-                result = self._resolve_ids(cand_ids, name, context)
+                result = self._resolve_ids(cand_ids, name, context, date)
                 if result is not None:
                     self.log_auto(
                         "student_name_reordered",
@@ -389,12 +448,13 @@ class ExamLoader:
                     )
                 return result
             elif len(token_matches) > 1:
-                self.log(
+                self._log_student_error(
                     f"{context}: student name {name!r} matches "
                     f"{len(token_matches)} different roster entries by word "
                     f"order alone ({[k for k, _ in token_matches]}) -- "
                     f"ambiguous -> row SKIPPED",
-                    ERR_STUDENT_MATCH,
+                    name,
+                    date,
                 )
                 return None
 
@@ -402,7 +462,7 @@ class ExamLoader:
         close = difflib.get_close_matches(norm, idx.keys(), n=3, cutoff=0.84)
         if len(close) == 1:
             key = close[0]
-            result = self._resolve_ids(idx[key], name, context)
+            result = self._resolve_ids(idx[key], name, context, date)
             if result is not None:
                 self.log_auto(
                     "student_name_fuzzy_matched",
@@ -412,18 +472,20 @@ class ExamLoader:
                 )
             return result
         elif len(close) > 1:
-            self.log(
+            self._log_student_error(
                 f"{context}: student name {name!r} has no exact/word-order "
                 f"match and {len(close)} close roster candidates {close} -- "
                 f"ambiguous -> row SKIPPED",
-                ERR_STUDENT_MATCH,
+                name,
+                date,
             )
             return None
 
-        self.log(
+        self._log_student_error(
             f"{context}: student name {name!r} not found in students "
             f"(tried exact, word-order, and fuzzy matching) -> row SKIPPED",
-            ERR_STUDENT_MATCH,
+            name,
+            date,
         )
         return None
 
@@ -449,7 +511,9 @@ class ExamLoader:
         self.exam_cache[key] = cur.lastrowid
         return cur.lastrowid
 
-    def apply_exam_mark(self, student_id, exam_id, marks_obtained, max_marks, line_no):
+    def apply_exam_mark(
+        self, student_id, exam_id, marks_obtained, max_marks, line_no, date=None
+    ):
         if max_marks is not None:
             row = self.conn.execute(
                 "SELECT max_marks FROM exams WHERE exam_id = ?", (exam_id,)
@@ -470,6 +534,12 @@ class ExamLoader:
                     f"{current_max}, this row says {max_marks} -- kept {current_max}, "
                     f"please review",
                     ERR_CONFLICT,
+                )
+                self._review(
+                    "max_marks_conflict",
+                    f"exam_id {exam_id} has max_marks {current_max}, row says {max_marks}",
+                    line_no,
+                    date=date,
                 )
 
         existing = self.conn.execute(
@@ -504,6 +574,13 @@ class ExamLoader:
                 f"-- kept {existing[0]}, please review",
                 ERR_CONFLICT,
             )
+            self._review(
+                "marks_conflict",
+                f"student {student_id}, exam_id {exam_id} already has "
+                f"{existing[0]}, row says {marks_obtained}",
+                line_no,
+                date=date,
+            )
         # else: identical value already recorded, nothing to do
 
 
@@ -534,13 +611,22 @@ def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
             total_named_rows += 1
 
             date = parse_date(
-                row.get("Date of Exam", ""), min_year=2005, bound_today=True
+                row.get("Date of Exam", ""),
+                min_year=2005,
+                bound_today=True,
+                clamp_day=True,
             )
             if date is None:
                 loader.log(
                     f"line {line_no} ({name!r}): unparseable Date of Exam "
                     f"{row.get('Date of Exam')!r} -> row SKIPPED",
                     ERR_DATE,
+                )
+                loader._review(
+                    "unparseable_date",
+                    f"Date of Exam {row.get('Date of Exam')!r}",
+                    line_no,
+                    name,
                 )
                 continue
 
@@ -549,6 +635,9 @@ def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
                 loader.log(
                     f"line {line_no} ({name!r}): missing Name of Exam -> row SKIPPED",
                     ERR_TOPIC,
+                )
+                loader._review(
+                    "missing_topic", "no Name of Exam", line_no, name, date
                 )
                 continue
 
@@ -562,6 +651,13 @@ def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
                     f"line {line_no} ({name!r}): Marks Obtained {marks_raw!r} isn't "
                     f"numeric -> row SKIPPED",
                     ERR_MARKS,
+                )
+                loader._review(
+                    "non_numeric_marks",
+                    f"Marks Obtained {marks_raw!r}",
+                    line_no,
+                    name,
+                    date,
                 )
                 continue
 
@@ -582,21 +678,36 @@ def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
                         f"not found in students table -- falling back to name match",
                         ERR_STUDENT_MATCH,
                     )
+                    loader._review(
+                        "id_override_not_found",
+                        f"ID override {id_override!r} not in students",
+                        line_no,
+                        name,
+                        date,
+                    )
             if student_id is None:
                 student_id = loader.match_student_by_name(
-                    name, context=f"line {line_no}"
+                    name, context=f"line {line_no}", date=date
                 )
                 if student_id is None:
                     continue
 
             topic = loader.canonicalize_exam_topic(
-                topic_raw, context=f"line {line_no} (marks)"
+                topic_raw,
+                context=f"line {line_no} (marks)",
+                log_date_reject=lambda cleaned: loader._review(
+                    "date_like_topic",
+                    f"Name of Exam {topic_raw!r} looks like a date, not a topic",
+                    line_no,
+                    name,
+                    date,
+                ),
             )
             if not topic:
                 continue  # already logged inside canonicalize_exam_topic
             exam_id = loader.get_or_create_exam(topic, date)
             loader.apply_exam_mark(
-                student_id, exam_id, marks_obtained, max_marks, line_no
+                student_id, exam_id, marks_obtained, max_marks, line_no, date
             )
             marks_applied += 1
 
@@ -616,7 +727,11 @@ def main():
         "and fill in marks_obtained.",
     )
     ap.add_argument("--db", required=True, type=Path)
-    ap.add_argument("--report", type=Path, default=Path("exam_marks_load_report.txt"))
+    ap.add_argument(
+        "--report",
+        type=Path,
+        default=module_report_dir("marks") / "exam_marks_load_report.txt",
+    )
     args = ap.parse_args()
 
     if not args.csv.exists():
