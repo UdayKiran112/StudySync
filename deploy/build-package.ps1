@@ -63,12 +63,20 @@ try {
         --distpath $dist --workpath (Join-Path $build "work") --specpath (Join-Path $build "spec") `
         --name studysync-api --onedir --paths . run_server.py | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
-    foreach ($name in @("backup", "restore", "healthcheck")) {
-        & "$buildVenv\Scripts\pyinstaller.exe" --noconfirm --clean `
+    # Scheduled-task helpers run as the interactive user; build backup and
+    # healthcheck as windowless (--noconsole) so they never flash a Command
+    # Prompt window. restore.exe stays a console app: it is interactive and
+    # prompts for the backup to restore.
+    foreach ($name in @("backup", "healthcheck")) {
+        & "$buildVenv\Scripts\pyinstaller.exe" --noconfirm --clean --noconsole `
             --distpath $dist --workpath (Join-Path $build "work") --specpath (Join-Path $build "spec") `
             --name $name --onefile (Join-Path $deploy "scripts\$name.py") | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for $name" }
     }
+    & "$buildVenv\Scripts\pyinstaller.exe" --noconfirm --clean `
+        --distpath $dist --workpath (Join-Path $build "work") --specpath (Join-Path $build "spec") `
+        --name restore --onefile (Join-Path $deploy "scripts\restore.py") | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for restore" }
 } finally {
     Pop-Location
 }
