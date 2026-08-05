@@ -59,7 +59,7 @@ Name: "{autoprograms}\{#AppName}"; Filename: "http://localhost"
 [Run]
 ; Run the (idempotent) deployment script. It registers services, firewall,
 ; scheduled tasks and generates the API key. Inno runs elevated already.
-Filename: "{cmd}"; Parameters: "/c mkdir ""{app}\logs\installer"" 2>nul & powershell -ExecutionPolicy Bypass -File ""{tmp}\package\scripts\install.ps1"" -PackageDir ""{tmp}\package"" > ""{app}\logs\installer\inno-install.log"" 2>&1"; StatusMsg: "Installing services..."; Flags: runhidden waituntilterminated
+Filename: "{cmd}"; Parameters: "/c mkdir ""{app}\logs\installer"" 2>nul & powershell -ExecutionPolicy Bypass -File ""{tmp}\package\scripts\install.ps1"" -PackageDir ""{tmp}\package"" > ""{app}\logs\installer\inno-install.log"" 2>&1"; StatusMsg: "Installing services..."; Flags: runhidden waituntilterminated; AfterInstall: ShowApiKey
 Filename: "http://localhost"; Description: "Open StudySync now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -79,4 +79,42 @@ begin
   Result := '';
   Exec('taskkill.exe', '/F /IM studysync-api.exe /IM studysync-caddy.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('taskkill.exe', '/F /IM caddy.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+{ Show the generated API key after a GUI install so non-technical staff can
+  read it without opening logs. Reads it from the freshly written .env
+  (the key is also in logs\installer\install.log / inno-install.log for
+  silent installs, where message boxes are suppressed). }
+procedure ShowApiKey;
+var
+  EnvFile: String;
+  Line: String;
+  Key: String;
+  i: Integer;
+  SL: TStringList;
+begin
+  EnvFile := ExpandConstant('{app}\app\api\.env');
+  if FileExists(EnvFile) then
+  begin
+    SL := TStringList.Create;
+    try
+      SL.LoadFromFile(EnvFile);
+      for i := 0 to SL.Count - 1 do
+      begin
+        Line := SL[i];
+        if Pos('STUDYSYNC_API_KEY=', Line) = 1 then
+        begin
+          Key := Copy(Line, Length('STUDYSYNC_API_KEY=') + 1, MaxInt);
+          Break;
+        end;
+      end;
+    finally
+      SL.Free;
+    end;
+  end;
+  if Key <> '' then
+    MsgBox('StudySync installed successfully.'#13#10#13#10 +
+      'Open http://localhost on this PC, or http://<this-PC-IP> from other PCs on the network.'#13#10#13#10 +
+      'API key: ' + Key + #13#10#13#10 +
+      'Staff enter this key ONCE per browser in Settings.', mbInformation, MB_OK);
 end;

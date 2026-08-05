@@ -115,6 +115,7 @@ STUDYSYNC_API_KEY=$apiKey
 STUDYSYNC_DB_PATH=$APP_DIR\data\library.db
 "@ | Set-Content -Path $envFile -Encoding ASCII
 Write-Log "API key written to $envFile"
+Write-Log "API key: $apiKey"
 
 # ------------------------------------------------------------ services
 $apiBin   = "$APP_DIR\config\winsw\studysync-api.exe"
