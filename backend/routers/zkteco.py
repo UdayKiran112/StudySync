@@ -35,12 +35,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from database import get_db_dependency
 from security import require_api_key
 from zkteco import device
-from zkteco.config import device_config
+from zkteco.config import attendance_mode, device_config
+from zkteco.live import get_live_status
 from zkteco.sync import sync_attendance_from_device
 from models.zkteco import (
     ZkAttendanceLog,
     ZkDeviceInfo,
     ZkDeviceStatus,
+    ZkLiveStatus,
     ZkMemoryUsage,
     ZkSyncResult,
     ZkUser,
@@ -157,3 +159,16 @@ def zk_memory():
         return ZkMemoryUsage(**device.memory_usage(config))
     except device.ZkError as e:
         _device_error(e)
+
+
+@router.get("/live/status", response_model=ZkLiveStatus)
+def zk_live_status():
+    """
+    Status of the real-time punch listener (zkteco/live.py).
+
+    Only meaningful when ZK_ATTENDANCE_MODE=live -- in "poll" mode (the
+    default) this just reports mode="poll" and connected=False, since no
+    persistent connection is held between polls. Use /api/zkteco/status
+    for a connectivity probe in poll mode instead.
+    """
+    return ZkLiveStatus(mode=attendance_mode(), **get_live_status())

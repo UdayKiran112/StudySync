@@ -17,8 +17,22 @@ Environment variables:
     ZK_COMM_KEY         Device communication key. Default 0.
     ZK_DEVICE_TIMEOUT   Seconds to wait for a device reply. Default 30.
     ZK_POLL_INTERVAL    Seconds between automatic background syncs. Default 3.
-                        The poller only runs while the app is alive and
-                        ZK_DEVICE_IP is set.
+                        Only read while ZK_ATTENDANCE_MODE=poll.
+    ZK_ATTENDANCE_MODE  "poll" (default) or "live". Selects which ONE
+                        background task main.py starts:
+                          poll -> zkteco/poller.py  (pulls the device's
+                                  buffer every ZK_POLL_INTERVAL seconds)
+                          live -> zkteco/live.py    (holds one persistent
+                                  connection open and reacts the instant
+                                  the device reports a punch, via pyzk's
+                                  live_capture())
+                        Run only one against a given device at a time --
+                        pyzk devices generally accept a single open
+                        session, and both paths read/clear the same
+                        physical buffer.
+    ZK_LIVE_RECONNECT_SECONDS
+                        Default 5. Wait time before zkteco/live.py retries
+                        after a dropped/failed connection.
     ZK_PUNCH_DEBOUNCE_MINUTES
                         Default 5. A punch that lands this many minutes or
                         fewer after a student's previous punch for the same
@@ -33,6 +47,15 @@ the operator wires the machine up.
 import os
 from dataclasses import dataclass
 from typing import Optional
+
+# Re-exported for backward compatibility: `from zkteco.config import
+# punch_debounce_minutes` still works, but the actual definition lives in
+# attendance_punch.py (project root) since it's a punch-application
+# setting shared by poll/live/ADMS alike, not a pyzk-specific one -- see
+# that module's docstring. Importing it here does NOT create a
+# zkteco-depends-on-adms or adms-depends-on-zkteco edge; both simply
+# depend on the neutral attendance_punch module.
+from attendance_punch import punch_debounce_minutes  # noqa: F401
 
 
 @dataclass(frozen=True)
@@ -64,9 +87,19 @@ def poll_interval() -> int:
         return 3
 
 
-def punch_debounce_minutes() -> int:
-    """Minutes of anti double-tap debounce. Clamped to >= 0, bad -> 5."""
+def attendance_mode() -> str:
+    """
+    Which background task main.py should start: "poll" (default,
+    zkteco/poller.py) or "live" (zkteco/live.py). Any other value falls
+    back to "poll".
+    """
+    mode = os.getenv("ZK_ATTENDANCE_MODE", "poll").strip().lower()
+    return mode if mode in ("poll", "live") else "poll"
+
+
+def live_reconnect_seconds() -> int:
+    """Backoff before zkteco/live.py retries a dropped connection. Clamped to >= 1s."""
     try:
-        return max(0, int(os.getenv("ZK_PUNCH_DEBOUNCE_MINUTES", "5")))
+        return max(1, int(os.getenv("ZK_LIVE_RECONNECT_SECONDS", "5")))
     except ValueError:
         return 5

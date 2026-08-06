@@ -17,12 +17,20 @@ from zk import ZK
 
 from zkteco.config import ZkDeviceConfig
 
+
 # The ZKTeco proprietary protocol speaks neither TLS nor SSH. The
 # "communication key" is weak obfuscation with a well-known XOR constant,
 # so treat the device LAN as trusted. We keep pyzk defaults but skip the
 # TCP ping pre-flight (ommit_ping), which is flaky on many office LANs
 # while the actual SDK handshake succeeds.
-def _build_zk(config: ZkDeviceConfig) -> ZK:
+def build_zk(config: ZkDeviceConfig) -> ZK:
+    """
+    Construct a ZK client for the configured device without connecting.
+    Exposed (not underscored) because zkteco/live.py needs a raw client to
+    hold open for the life of the live-capture socket loop -- everything
+    else in this file should go through zk_connection() instead, which
+    wraps connect/disconnect around a single call.
+    """
     return ZK(
         config.ip,
         port=config.port,
@@ -47,11 +55,13 @@ def zk_connection(config: ZkDeviceConfig) -> Iterator:
     we always use this context manager and never leave a connection open
     across requests.
     """
-    zk = _build_zk(config)
+    zk = build_zk(config)
     try:
         conn = zk.connect()
     except Exception as e:  # pyzk raises a mix of socket + OSError types
-        raise ZkError(f"Cannot connect to ZKTeco device at {config.ip}:{config.port}: {e}") from e
+        raise ZkError(
+            f"Cannot connect to ZKTeco device at {config.ip}:{config.port}: {e}"
+        ) from e
     try:
         yield conn
     finally:

@@ -18,6 +18,7 @@ up yourself.
 """
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 import asyncio
@@ -36,7 +37,6 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from database import apply_runtime_schema_guards
-from zkteco.poller import zkteco_poller_loop
 
 logger = logging.getLogger("studysync")
 
@@ -52,8 +52,77 @@ from routers import (
     dashboard,
     coaching,
     other_activities,
-    zkteco,
 )
+
+# --- ZKTeco attendance integration: pick ONE transport, or run both ---
+#
+# Two independent, self-contained integrations live in this project and
+# neither imports the other:
+#
+#   pyzk  (zkteco/ package, routers/zkteco.py) -- OUR server connects OUT
+#         to the device over pyzk's TCP client and either polls its
+#         buffer (zkteco/poller.py) or holds a live_capture() connection
+#         open (zkteco/live.py). Needs ZK_DEVICE_IP set and the `pyzk`
+#         package installed.
+#
+#   adms  (adms/ package, routers/adms.py) -- the DEVICE connects IN to
+#         US over its own ADMS push protocol. No pyzk dependency at all
+#         -- plain HTTP endpoints. Needs the device's Comm > Cloud Server
+#         Setting pointed at this server; nothing to set here besides the
+#         optional serial allowlist (see adms/config.py).
+#
+# ZK_INTEGRATION selects which one(s) this process wires up:
+#   "both" (default) -- mount both; harmless to leave both active, since
+#           they're different transports and don't contend for the same
+#           connection the way two pyzk connections would.
+#   "pyzk"  -- only the pyzk poll/live path.
+#   "adms"  -- only the ADMS push path.
+#   "none"  -- neither (e.g. testing the rest of the app with no device
+#           integration at all).
+#
+# Each side is ALSO wrapped in try/except ImportError, so if you delete
+# the zkteco/ or adms/ folder outright while testing the other one, the
+# app still boots -- you don't have to keep both present just to satisfy
+# an import.
+ZK_INTEGRATION = os.environ.get("ZK_INTEGRATION", "both").strip().lower()
+if ZK_INTEGRATION not in ("pyzk", "adms", "both", "none"):
+    logger.warning(
+        "Unrecognised ZK_INTEGRATION=%r, falling back to 'both'.", ZK_INTEGRATION
+    )
+    ZK_INTEGRATION = "both"
+
+pyzk_enabled = ZK_INTEGRATION in ("pyzk", "both")
+adms_enabled = ZK_INTEGRATION in ("adms", "both")
+
+zkteco = None
+zkteco_poller_loop = None
+zkteco_live_loop = None
+attendance_mode = None
+if pyzk_enabled:
+    try:
+        from routers import zkteco as zkteco  # noqa: F811 (intentional re-import)
+        from zkteco.poller import zkteco_poller_loop
+        from zkteco.live import zkteco_live_loop
+        from zkteco.config import attendance_mode
+    except ImportError as e:
+        logger.warning(
+            "pyzk ZKTeco integration unavailable (%s) -- skipping it. "
+            "Set ZK_INTEGRATION=adms to silence this if that's intentional.",
+            e,
+        )
+        pyzk_enabled = False
+
+adms = None
+if adms_enabled:
+    try:
+        from routers import adms as adms  # noqa: F811 (intentional re-import)
+    except ImportError as e:
+        logger.warning(
+            "ADMS integration unavailable (%s) -- skipping it. "
+            "Set ZK_INTEGRATION=pyzk to silence this if that's intentional.",
+            e,
+        )
+        adms_enabled = False
 
 
 def _detect_lan_ip() -> Optional[str]:
@@ -73,17 +142,28 @@ async def lifespan(_: FastAPI):
     if lan_ip:
         print(f"\n  On this network, reach the API at: http://{lan_ip}:8000/docs")
         print(f"  (Point the frontend's API base URL at: http://{lan_ip}:8000)\n")
-    # Background ZKTeco sync: auto-imports swipe pairs while the app runs.
-    # It exits itself when ZK_DEVICE_IP is unset, so no work to skip here.
+
+    # Only the pyzk path needs a background task -- it's the one that
+    # connects OUT to the device (either polling or holding a live
+    # connection open). ADMS is a pure inbound HTTP listener; there's
+    # nothing to run in the background for it, the mounted router IS the
+    # integration. zkteco_poller_loop/zkteco_live_loop also self-disable
+    # if ZK_DEVICE_IP isn't set, so this is a second layer of "off by
+    # default until configured", not the only one.
     stop_event = asyncio.Event()
-    poller_task = asyncio.create_task(zkteco_poller_loop(stop_event))
+    zkteco_task = None
+    if pyzk_enabled:
+        mode = attendance_mode()
+        zkteco_loop = zkteco_live_loop if mode == "live" else zkteco_poller_loop
+        zkteco_task = asyncio.create_task(zkteco_loop(stop_event))
     try:
         yield
     finally:
         stop_event.set()
-        poller_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await poller_task
+        if zkteco_task is not None:
+            zkteco_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await zkteco_task
 
 
 # Always allow the local dev servers on this machine.
@@ -172,7 +252,11 @@ app.include_router(quizzes.scores_router)
 app.include_router(dashboard.router)
 app.include_router(coaching.router)
 app.include_router(other_activities.router)
-app.include_router(zkteco.router)
+if pyzk_enabled and zkteco is not None:
+    app.include_router(zkteco.router)
+if adms_enabled and adms is not None:
+    app.include_router(adms.router)
+    app.include_router(adms.status_router)
 
 
 @app.get("/", tags=["Health"])

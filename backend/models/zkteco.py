@@ -59,3 +59,12 @@ class ZkSyncResult(BaseModel):
     unknown_students: int
     renewed: int = 0
     incomplete: int
+
+
+class ZkLiveStatus(BaseModel):
+    mode: str
+    connected: bool
+    last_event_at: Optional[datetime] = None
+    last_payload: Optional[dict] = None
+    last_outcome: Optional[str] = None
+    last_error: Optional[str] = None

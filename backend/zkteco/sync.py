@@ -50,66 +50,17 @@ import sqlite3
 from datetime import date
 from typing import Optional
 
+from attendance_punch import apply_punch, student_id_for_user_id
 from zkteco.config import ZkDeviceConfig, punch_debounce_minutes
 from zkteco.device import clear_attendance, list_attendance
-from routers.attendance import (
-    _auto_fill_offline_if_needed,
-    _compute_session_and_duration,
-    _determine_provisional_session,
-    _minutes_between,
-)
 from routers.students import auto_renew_if_expired
 
-
-def _student_id_for_user_id(db: sqlite3.Connection, user_id: str) -> Optional[int]:
-    """Map a device user_id (string, e.g. "4351") to a students.student_id."""
-    try:
-        student_id = int(str(user_id).strip())
-    except (TypeError, ValueError):
-        return None
-    row = db.execute(
-        "SELECT student_id FROM students WHERE student_id = ?", (student_id,)
-    ).fetchone()
-    return row["student_id"] if row else None
-
-
-def _latest_punch_time(
-    db: sqlite3.Connection, student_id: int, day: str
-) -> Optional[str]:
-    """
-    Latest punch already recorded for this student on this day (the later of
-    any row's check_in/check_out, HH:MM strings compare chronologically).
-    Used by the double-tap debounce, and also across poll cycles since the
-    device buffer is cleared after every successful sync.
-    """
-    row = db.execute(
-        """SELECT MAX(CASE WHEN check_out IS NOT NULL THEN check_out ELSE check_in END) AS latest
-           FROM attendance WHERE student_id = ? AND date = ?""",
-        (student_id, day),
-    ).fetchone()
-    return row["latest"] if row and row["latest"] else None
-
-
-def _close_stale_open_session(
-    db: sqlite3.Connection, student_id: int, day: str
-) -> None:
-    """
-    If the student still has an open session from a PREVIOUS day (punched in
-    and never out), close it at 23:59 of its own day. Runs just before a new
-    check-in so the unique "one open session per student" index can't block
-    the insert.
-    """
-    stale = db.execute(
-        "SELECT * FROM attendance WHERE student_id = ? AND date != ? AND check_out IS NULL",
-        (student_id, day),
-    ).fetchone()
-    if stale is None:
-        return
-    final_session, duration = _compute_session_and_duration(stale["check_in"], "23:59")
-    db.execute(
-        "UPDATE attendance SET check_out = ?, session = ?, duration_minutes = ? WHERE attendance_id = ?",
-        ("23:59", final_session, duration, stale["attendance_id"]),
-    )
+# The per-punch write itself (open/close session, debounce, dup-guard)
+# lives in attendance_punch.py (project root) so both zkteco/live.py and
+# adms/ingest.py can share it exactly -- see that module's docstring for
+# why it's NOT inside this package. Only the "read the whole buffer,
+# group by (user_id, day)" concern is specific to this poll-based path
+# and stays here.
 
 
 def sync_attendance_from_device(
@@ -148,7 +99,7 @@ def sync_attendance_from_device(
     debounce_minutes = punch_debounce_minutes()
 
     for (user_id, day), punches in by_day.items():
-        student_id = _student_id_for_user_id(db, user_id)
+        student_id = student_id_for_user_id(db, user_id)
         if student_id is None:
             unknown_students += len(punches)
             continue
@@ -160,62 +111,11 @@ def sync_attendance_from_device(
             renewed += 1
 
         for punch in sorted(punches):
-            # Double-tap guard: a punch right after the previous one (e.g. a
-            # second scan a second later, or a straddling minute boundary)
-            # is almost certainly accidental -- ignore it so it can't close a
-            # session instantly or re-open one.
-            latest = _latest_punch_time(db, student_id, day)
-            if latest is not None and _minutes_between(latest, punch) <= debounce_minutes:
+            outcome = apply_punch(db, student_id, day, punch, debounce_minutes)
+            if outcome == "duplicate":
                 duplicates += 1
-                continue
-
-            open_session = db.execute(
-                "SELECT * FROM attendance WHERE student_id = ? AND date = ? AND check_out IS NULL",
-                (student_id, day),
-            ).fetchone()
-
-            if open_session is None:
-                # Re-read guard: a log that was already applied (e.g. the
-                # device clear failed after a committed import) would
-                # otherwise be mistaken for a fresh check-in. Skip it.
-                already = db.execute(
-                    """SELECT 1 FROM attendance
-                       WHERE student_id = ? AND date = ?
-                         AND (check_in = ? OR check_out = ?) LIMIT 1""",
-                    (student_id, day, punch, punch),
-                ).fetchone()
-                if already:
-                    duplicates += 1
-                    continue
-                _close_stale_open_session(db, student_id, day)
-                try:
-                    session = _determine_provisional_session(punch)
-                    db.execute(
-                        """
-                        INSERT INTO attendance (student_id, date, session, check_in)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (student_id, day, session, punch),
-                    )
-                    imported += 1
-                except sqlite3.IntegrityError:
-                    duplicates += 1
-            elif punch > open_session["check_in"]:
-                final_session, duration = _compute_session_and_duration(
-                    open_session["check_in"], punch
-                )
-                db.execute(
-                    """
-                    UPDATE attendance
-                    SET check_out = ?, session = ?, duration_minutes = ?
-                    WHERE attendance_id = ?
-                    """,
-                    (punch, final_session, duration, open_session["attendance_id"]),
-                )
-                _auto_fill_offline_if_needed(db, student_id, day)
-                imported += 1
             else:
-                duplicates += 1
+                imported += 1
 
     if pulled:
         db.commit()  # make the import durable before touching the device
