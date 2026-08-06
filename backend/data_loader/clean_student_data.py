@@ -714,6 +714,11 @@ def build_digital_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
                 "-> Account Type set to 'Library Subscription'",
                 val,
             )
+        # Account Type is derived ONLY from the 'Online Subscription' column
+        # (is_subscription() -> 'Library Subscription', anything else ->
+        # 'Own'). A subscriptions master row is therefore created for a
+        # platform only when this column is present -- never inferred from a
+        # platform name appearing in the digital library usage alone.
         account_type = "Library Subscription" if is_subscription(val) else "Own"
 
         date_str = (
@@ -774,41 +779,6 @@ def build_digital_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
                     f"IN={in_time} OUT={out_time}",
                 )
 
-        # Attendance covers the student's whole visit, but a digital
-        # library session is only part of that. Cases 1/2 (a single
-        # morning-only or afternoon-only visit) already work as one
-        # session, so the attendance In/Out Time is used as-is. Case 3
-        # (in before 13:00, out after 13:00 -- a full day spanning lunch)
-        # is narrowed to just one half, alternating morning/afternoon
-        # across such rows, rather than implying a digital session that
-        # spanned the entire day.
-        digital_in, digital_out = in_time, out_time
-        if classify_session(in_time, out_time) == "full_day":
-            # Only a genuine choice if Out Time is actually past the lunch
-            # window (14:00) -- if it falls DURING lunch (13:00-14:00), a
-            # '14:00 -> out_time' segment would be invalid (out before in),
-            # so Morning is the only usable half in that edge case.
-            use_afternoon = (full_day_toggle[0] % 2 == 1) and (out_time > LUNCH_END)
-            if use_afternoon:
-                digital_in, digital_out = LUNCH_END, out_time
-                segment_desc = f"Afternoon ({LUNCH_END}-{out_time})"
-            else:
-                digital_in, digital_out = in_time, LUNCH_START
-                segment_desc = f"Morning ({in_time}-{LUNCH_START})"
-            full_day_toggle[0] += 1
-            log.add(
-                "digital_library",
-                "corrected",
-                row["Excel Row"],
-                row["Sl.No"],
-                row["ID NO"],
-                row["Name of the Student"],
-                f"Full-day attendance ({in_time}-{out_time}) spans the lunch break - digital "
-                f"library timing narrowed to a single {segment_desc} session (alternating "
-                f"morning/afternoon across such rows) instead of implying use for the whole day",
-                f"IN={in_time} OUT={out_time}",
-            )
-
         platforms = [
             collapse(x) for x in row["Digital Library"].split(",") if collapse(x) != ""
         ]
@@ -862,8 +832,88 @@ def build_digital_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
         purposes_padded = (
             purposes + [purposes[-1]] * (n - len(purposes)) if purposes else [""] * n
         )
+        pairs = list(zip(platforms_padded, purposes_padded))
 
-        for platform, purpose in zip(platforms_padded, purposes_padded):
+        # Attendance covers the student's whole visit, but a digital
+        # library session is only part of that. Cases 1/2 (a single
+        # morning-only or afternoon-only visit) already work as one
+        # session, so the attendance In/Out Time is used as-is. Case 3
+        # (in before 13:00, out after 13:00 -- a full day spanning lunch):
+        #   - one platform -> narrowed to a single half, alternating
+        #     morning/afternoon across such rows (rather than implying a
+        #     digital session that spanned the entire day);
+        #   - two or more comma-separated platforms (each listed value is a
+        #     separate use of the digital library that same day) -> split
+        #     in listed order across the two halves, so the first platform
+        #     is the Morning session (in_time -> 13:00) and the later ones
+        #     are the Afternoon session (14:00 -> out_time).
+        session = classify_session(in_time, out_time)
+        if session == "full_day" and n >= 2 and out_time > LUNCH_END:
+            morning_count = (n + 1) // 2
+            windows = [
+                (in_time, LUNCH_START) if i < morning_count else (LUNCH_END, out_time)
+                for i in range(n)
+            ]
+            log.add(
+                "digital_library",
+                "corrected",
+                row["Excel Row"],
+                row["Sl.No"],
+                row["ID NO"],
+                row["Name of the Student"],
+                f"Full-day attendance ({in_time}-{out_time}) with {n} comma-separated "
+                f"platform(s) - mapped to separate Morning/Afternoon sessions by listed "
+                f"order instead of one combined window",
+                f"Digital Library='{row['Digital Library']}' | IN={in_time} OUT={out_time}",
+            )
+        elif session == "full_day" and n >= 2:
+            # Out Time falls during lunch (13:00-14:00): only the Morning
+            # half is a valid window (a '14:00 -> out_time' segment would be
+            # out before in), so every platform shares it.
+            windows = [(in_time, LUNCH_START)] * n
+            log.add(
+                "digital_library",
+                "corrected",
+                row["Excel Row"],
+                row["Sl.No"],
+                row["ID NO"],
+                row["Name of the Student"],
+                f"Full-day attendance ({in_time}-{out_time}) with {n} comma-separated "
+                f"platform(s) but Out Time falls during lunch - all {n} platform(s) "
+                f"narrowed to the Morning session ({in_time}-{LUNCH_START}) since no "
+                f"valid Afternoon window exists",
+                f"Digital Library='{row['Digital Library']}' | IN={in_time} OUT={out_time}",
+            )
+        elif session == "full_day":
+            # Only a genuine choice if Out Time is actually past the lunch
+            # window (14:00) -- if it falls DURING lunch (13:00-14:00), a
+            # '14:00 -> out_time' segment would be invalid (out before in),
+            # so Morning is the only usable half in that edge case.
+            use_afternoon = (full_day_toggle[0] % 2 == 1) and (out_time > LUNCH_END)
+            if use_afternoon:
+                digital_in, digital_out = LUNCH_END, out_time
+                segment_desc = f"Afternoon ({LUNCH_END}-{out_time})"
+            else:
+                digital_in, digital_out = in_time, LUNCH_START
+                segment_desc = f"Morning ({in_time}-{LUNCH_START})"
+            full_day_toggle[0] += 1
+            windows = [(digital_in, digital_out)] * n
+            log.add(
+                "digital_library",
+                "corrected",
+                row["Excel Row"],
+                row["Sl.No"],
+                row["ID NO"],
+                row["Name of the Student"],
+                f"Full-day attendance ({in_time}-{out_time}) spans the lunch break - digital "
+                f"library timing narrowed to a single {segment_desc} session (alternating "
+                f"morning/afternoon across such rows) instead of implying use for the whole day",
+                f"IN={in_time} OUT={out_time}",
+            )
+        else:
+            windows = [(in_time, out_time)] * n
+
+        for (platform, purpose), (digital_in, digital_out) in zip(pairs, windows):
             if platform == "":
                 log.add(
                     "digital_library",
