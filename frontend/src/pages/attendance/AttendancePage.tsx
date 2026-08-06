@@ -12,6 +12,11 @@ import {
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Field, Input, Select } from "../../components/ui/Form";
 import { Button } from "../../components/ui/Button";
+import {
+  LiveClock,
+  OpenSessionTime,
+  OpenSessionDuration,
+} from "../../components/ui/LiveClock";
 import { StudentPicker } from "../../components/ui/StudentPicker";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Modal } from "../../components/ui/Modal";
@@ -28,6 +33,7 @@ import { useZkSync } from "../../api/zkteco";
 import {
   formatDate,
   formatDuration,
+  formatClockTime,
   todayIso,
   nowHHMM,
 } from "../../lib/format";
@@ -55,7 +61,6 @@ export function AttendancePage() {
   const [offset, setOffset] = useState(0);
   const [editing, setEditing] = useState<Attendance | undefined>(undefined);
   const [deleting, setDeleting] = useState<Attendance | undefined>(undefined);
-  const [now, setNow] = useState(new Date());
 
   const today = todayIso();
 
@@ -68,19 +73,21 @@ export function AttendancePage() {
   // no longer paginates this endpoint — it always returns everything
   // matching the filter. A single-day filter is just date_from === date_to;
   // paging happens client-side below with the full result set in hand.
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
 
-  // Keep the check-in/out date & time fields following the live IST clock
-  // until the staff member edits one manually. Previously these were only
+  // Keep the check-in/out date & time fields following the live clock until
+  // the staff member edits one manually. This ticks every second, but the
+  // setState calls below bail out (React) when the value is unchanged, so the
+  // page only re-renders at each minute boundary. Previously these were only
   // ever set once on mount, so the form silently went stale until a page
   // refresh (or a successful submit, which happened to reset them).
   useEffect(() => {
-    if (!dateTouched) setEntryDate(todayIso(now));
-    if (!timeTouched) setEntryTime(nowHHMM(now));
-  }, [now, dateTouched, timeTouched]);
+    if (dateTouched && timeTouched) return;
+    const timer = window.setInterval(() => {
+      if (!dateTouched) setEntryDate(todayIso());
+      if (!timeTouched) setEntryTime(nowHHMM());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [dateTouched, timeTouched]);
 
   const {
     data: allData,
@@ -190,25 +197,7 @@ export function AttendancePage() {
         description="Log arrivals and departures. Today's attendance is shown below; historical records are available on a separate page."
         action={
           <div className="flex flex-col items-end gap-3">
-            <div className="text-right">
-              <p className="text-xs uppercase tracking-[0.32em] text-slate-light">
-                Current time
-              </p>
-              <p className="mt-1 font-display text-2xl font-semibold tabular-nums text-ink">
-                {now.toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  second: "2-digit",
-                })}
-              </p>
-              <p className="mt-0.5 text-sm text-slate">
-                {now.toLocaleDateString([], {
-                  weekday: "long",
-                  month: "long",
-                  day: "numeric",
-                })}
-              </p>
-            </div>
+            <LiveClock />
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Link
                 to="/attendance/records"
@@ -367,37 +356,25 @@ export function AttendancePage() {
                 const checkOutDate = a.check_out
                   ? new Date(`${a.date}T${a.check_out}`)
                   : null;
-                const effectiveCheckOutDate = checkOutDate ?? now;
+                const open = Boolean(checkInDate && !checkOutDate);
                 const checkInDisplay = checkInDate
-                  ? checkInDate.toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    })
+                  ? formatClockTime(checkInDate)
                   : "—";
                 const checkOutDisplay = checkOutDate
-                  ? checkOutDate.toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    })
-                  : checkInDate
-                    ? now.toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      })
-                    : "—";
-                const durationMinutes = checkInDate
-                  ? Math.max(
-                      0,
-                      Math.round(
-                        (effectiveCheckOutDate.getTime() -
-                          checkInDate.getTime()) /
-                          60000,
-                      ),
-                    )
-                  : (a.duration_minutes ?? 0);
+                  ? formatClockTime(checkOutDate)
+                  : "—";
+                const closedDuration =
+                  checkInDate && checkOutDate
+                    ? formatDuration(
+                        Math.max(
+                          0,
+                          Math.round(
+                            (checkOutDate.getTime() - checkInDate.getTime()) /
+                              60000,
+                          ),
+                        ),
+                      )
+                    : formatDuration(a.duration_minutes ?? 0);
 
                 return (
                   <Tr key={a.attendance_id}>
@@ -410,14 +387,18 @@ export function AttendancePage() {
                     </Td>
                     <Td className="font-mono text-xs">{checkInDisplay}</Td>
                     <Td className="font-mono text-xs">
-                      {a.check_out ? (
-                        checkOutDisplay
+                      {open ? (
+                        <OpenSessionTime />
                       ) : (
-                        <span className="text-brass">{checkOutDisplay}</span>
+                        checkOutDisplay || "—"
                       )}
                     </Td>
                     <Td className="text-slate">
-                      {formatDuration(durationMinutes)}
+                      {open && checkInDate ? (
+                        <OpenSessionDuration checkInDate={checkInDate} />
+                      ) : (
+                        closedDuration
+                      )}
                     </Td>
                     <Td className="text-right">
                       <div className="flex justify-end gap-1">

@@ -22,6 +22,15 @@ export function formatDateTime(value: string | null | undefined): string {
   });
 }
 
+/** Wall-clock HH:MM:SS for a Date, using the browser's locale. */
+export function formatClockTime(date: Date): string {
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 export function formatDuration(minutes: number | null | undefined): string {
   if (minutes === null || minutes === undefined) return "—";
   // Averages (e.g. "Average session length") can come through with long

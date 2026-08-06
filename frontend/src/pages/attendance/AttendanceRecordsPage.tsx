@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Trash2, Pencil } from "lucide-react";
@@ -21,7 +21,8 @@ import {
   useDeleteAttendance,
 } from "../../api/attendance";
 import { extractErrorMessage } from "../../api/client";
-import { formatDate, formatDuration } from "../../lib/format";
+import { formatDate, formatDuration, formatClockTime } from "../../lib/format";
+import { LiveClock, OpenSessionTime, OpenSessionDuration } from "../../components/ui/LiveClock";
 import type { Attendance } from "../../api/types";
 
 const LIMIT = 20;
@@ -33,13 +34,6 @@ export function AttendanceRecordsPage() {
   const [offset, setOffset] = useState(0);
   const [editing, setEditing] = useState<Attendance | undefined>(undefined);
   const [deleting, setDeleting] = useState<Attendance | undefined>(undefined);
-  const [now, setNow] = useState(new Date());
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
 
   const {
     data: allData,
@@ -95,23 +89,7 @@ export function AttendanceRecordsPage() {
         description="Search historical attendance by date range or session. Edit or remove records from the same list."
         action={
           <div className="rounded-2xl border border-border bg-card px-4 py-3 text-right text-slate">
-            <p className="text-xs uppercase tracking-[0.32em] text-slate-light">
-              Current time
-            </p>
-            <p className="mt-1 text-lg font-semibold text-ink">
-              {now.toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              })}
-            </p>
-            <p className="mt-1 text-sm text-slate">
-              {now.toLocaleDateString([], {
-                weekday: "long",
-                month: "long",
-                day: "numeric",
-              })}
-            </p>
+            <LiveClock size="sm" />
             <Link
               to="/attendance"
               className="mt-4 inline-flex items-center rounded-full bg-ink px-3 py-1.5 text-xs font-semibold text-paper shadow-sm transition hover:bg-ink-light"
@@ -197,16 +175,13 @@ export function AttendanceRecordsPage() {
               {data.map((record) => {
                               const checkInDate = record.check_in ? new Date(`${record.date}T${record.check_in}`) : null;
                               const checkOutDate = record.check_out ? new Date(`${record.date}T${record.check_out}`) : null;
-                              const effectiveCheckOutDate = checkOutDate ?? now;
-                              const checkInDisplay = checkInDate
-                                ? checkInDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-                                : "—";
-                              const checkOutDisplay = checkOutDate
-                                ? checkOutDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-                                : (checkInDate ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—");
-                              const durationMinutes = checkInDate
-                                ? Math.max(0, Math.round((effectiveCheckOutDate.getTime() - checkInDate.getTime()) / 60000))
-                                : (record.duration_minutes ?? 0);
+                              const open = Boolean(checkInDate && !checkOutDate);
+                              const checkInDisplay = checkInDate ? formatClockTime(checkInDate) : "—";
+                              const checkOutDisplay = checkOutDate ? formatClockTime(checkOutDate) : "—";
+                              const closedDuration =
+                                checkInDate && checkOutDate
+                                  ? formatDuration(Math.max(0, Math.round((checkOutDate.getTime() - checkInDate.getTime()) / 60000)))
+                                  : formatDuration(record.duration_minutes ?? 0);
 
                               return (
                                 <Tr key={record.attendance_id}>
@@ -219,9 +194,11 @@ export function AttendanceRecordsPage() {
                                   </Td>
                                   <Td className="font-mono text-xs">{checkInDisplay}</Td>
                                   <Td className="font-mono text-xs">
-                                    {record.check_out ? checkOutDisplay : <span className="text-brass">{checkOutDisplay}</span>}
+                                    {open ? <OpenSessionTime /> : checkOutDisplay || "—"}
                                   </Td>
-                                  <Td className="text-slate">{formatDuration(durationMinutes)}</Td>
+                                  <Td className="text-slate">
+                                    {open && checkInDate ? <OpenSessionDuration checkInDate={checkInDate} /> : closedDuration}
+                                  </Td>
                                   <Td className="text-right">
                                     <div className="flex justify-end gap-1">
                                       <Button
