@@ -27,16 +27,21 @@ clean_student_data.py already:
     error_log_digital_library.log when it isn't, rather than this loader
     silently skipping it.
 This loader now only has to trust that shape and focus on what still needs
-doing at load time: platform-name canonicalization (fuzzy spelling merge,
-which is a different, coarser-grained problem than the exact-typo cleanup
-above) and the actual database inserts.
+doing at load time: platform-name canonicalization (a curated alias table
+plus fuzzy spelling merge -- a coarser-grained problem than the
+exact-typo cleanup above) and the actual database inserts.
 
 WHAT THIS LOADS, PER CLEANED CSV ROW
 ---------------------------------------
   Student ID                 -> students.student_id (existing row; the FK)
   Date, In Time, Out Time    -> the usage window (in_time/out_time)
-  Account Name                -> platform_name, run through a canonicalizer
-                                 (common.Canonicalizer) that merges pure
+  Account Name                -> platform_name, run through
+                                 common.canonicalize_subscription_name:
+                                 a curated alias table first (merges the
+                                 short-name/low-similarity spelling families
+                                 fuzzy matching can't bridge, e.g. 'Jhan
+                                 Acadami' -> "Jan's English Academy"), then
+                                 the fuzzy common.Canonicalizer for plain
                                  spelling/case/spacing variants of the same
                                  real-world platform name (e.g. 'Adda247' /
                                  'Adda 247' / 'Add247').
@@ -87,6 +92,7 @@ from common import (
     Canonicalizer,
     CLOSE_TIME,
     OPEN_TIME,
+    canonicalize_subscription_name,
     collapse_ws,
     log_review_item,
     module_report_dir,
@@ -129,8 +135,10 @@ class DigitalLibraryLoader:
         here from the row's own date -- otherwise the insert would fail
         with an IntegrityError and leave subscriptions permanently empty,
         which would in turn FK-fail every 'Library Subscription' row."""
-        canonical = self.subscription_canon.canonicalize(
-            platform_name, context=f"line {line_no}" if line_no is not None else ""
+        canonical = canonicalize_subscription_name(
+            platform_name,
+            self.subscription_canon,
+            context=f"line {line_no}" if line_no is not None else "",
         )
         sub_id = slugify(canonical)
         self.subscription_id_to_cluster_key[sub_id] = normalize_key(
@@ -221,8 +229,8 @@ class DigitalLibraryLoader:
             if account_type_raw.strip() == "Library Subscription"
             else "Own Account"
         )
-        platform = self.subscription_canon.canonicalize(
-            platform_val, context=f"line {line_no}"
+        platform = canonicalize_subscription_name(
+            platform_val, self.subscription_canon, context=f"line {line_no}"
         )
         sub_id = None
         if account_type == "Library Subscription":

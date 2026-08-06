@@ -638,6 +638,126 @@ def get_or_create_exam(
 
 
 # --------------------------------------------------------------------------
+# subscription / platform-name canonicalization (digital library loader)
+# --------------------------------------------------------------------------
+
+# A raw "Account Name" (platform) value is normally a real online product
+# (Testbook, Adda247, Jan's English Academy, ...), but data-entry typos,
+# abbreviations, and flatly different spellings of the same institution are
+# far too messy for edit-distance alone to bridge: 'Jhan Acadami' vs
+# "Jan's English Academy" share almost no characters, and short forms like
+# 'Jhan' vs 'Jan' sit below any safe fuzzy threshold. The canonical name
+# for each cluster is the brand the library actually sells. Keys are
+# pre-normalized with normalize_key, exactly like EXAM_TOPIC_ALIASES.
+# Anything not listed here still falls through to the generic
+# Canonicalizer's exact/anagram/fuzzy tiers.
+#
+# NOTE: values are the single-platform Account Names seen in the CLEANED
+# digital_library.csv -- clean_student_data.py splits comma-separated
+# multi-platform cells into one row per platform before this loader runs,
+# so no comma-joined variants belong here.
+_SUBSCRIPTION_ALIAS_GROUPS = {
+    "Jan's English Academy": [
+        "Jan", "Jan Academy", "Jan academy", "Jan Acadami", "Jan acadami",
+        "Jan Accademy", "JAN Accademy", "Jan Acadeny", "Jan Acamedy",
+        "Jan Eng", "Jan Eng Academy", "Jan Eng Acadami", "Jan Eng acadami",
+        "Jan eng Acadami", "Jan Eng Aca", "Jan Eng. Academy", "Jan Eng Akadami",
+        "Jan English", "Jan English Academy", "Jan English Acadmy",
+        "Jan Englih Academy", "Jan acadami Eng", "Jan's Eng", "Jan's Eng Academy",
+        "Jan's English", "Jan's Academy", "Jan's academy", "Jans Eng",
+        "jans Eng Academy", "Jans Eng Academy", "Jans Eng Academy6",
+        "Jans English", "Jans Academy", "Jhan", "jhan", "Jhan Academy",
+        "Jhan Acadami", "Jhan acadami", "Jhan Aca", "Jhan Akadami",
+        "Jhan Acadeny", "Jhan Acedemy", "Jhan cademy", "Jhan Eng Academy",
+        "Jhan English Academy", "Jhan acadde", "Jhanacadami", "Jhans Academy",
+        "Jhans academy",
+    ],
+    "Testbook": [
+        "Testbook", "testbook", "Test book", "Test Book", "test book",
+        "TestbookRRB", "Textbook", "TextBook", "TExtbook", "TEstbook",
+        "TEestbook", "Tesbook", "Tesstbook", "Testook", "Testboo", "TestbooK",
+        "Tstbook", "Test bokk", "Test books", "est book",
+    ],
+    "Chandan Logic": [
+        "Chandan", "Chandanlogic", "Chandan logic", "chandan logic",
+        "Chandan Logics", "Chandan logics", "Chandan Logic", "Chandanlogics",
+        "Chandhan Logics", "Chandhan Logic", "Chandanalogic", "Chandlogic",
+        "Chanlogic",
+    ],
+    "Sreedhar CCE": [
+        "Sreedhar", "Sreedhar cce", "sreedhar cce", "Sreedhar cc", "Sreedhar CC",
+        "Sreedhar CCE", "Sreedhar CCe", "Sreedharcce", "Sreeedhar cce",
+        "Sreedhar ce", "Sreedher cce", "Sreedha cce", "Sreedhare cc",
+        "Sreedharr cce", "Sreeddhar cce", "Sreedhacce", "Sedharcce",
+        "Sreetdhar CC", "Screedhar CC", "Sreedjar CC", "Sreedhars cce",
+        "Sreedhar C", "Seedhar cce", "Sreedher",
+    ],
+    "Yes & Yes": [
+        "Yes & Yes", "YES & YES", "Yes&Yes", "YES &YES", "Yes &yes",
+        "YES& YES", "Yes& Yes", "Yes&yes", "YES & Yes", "Yes & yes",
+    ],
+    "Yes Officer": [
+        "Yes Officer", "Yes officer", "yes officer", "Yesofficer",
+        "Yes Office", "Yes office", "Yes Oficer", "Yes offier", "Yes offiver",
+        "Ye Officer", "Ye officer", "Yews officer", "Yes  Officer",
+        "Yes  officer", "YES Officer", "Yes Officerr",
+    ],
+    "Adda247": [
+        "Adda247", "Adda 247", "adda247", "Add247", "247Adda", "Adda 27",
+        "Adda2147", "ADDA247",
+    ],
+    "Winner": ["Winner", "Winners", "winner"],
+    "Everest": ["Everest", "Evrest", "Everst"],
+    "Everest Coaching": ["Everest Coaching"],
+    "Everest Impact": ["Everest impact", "Everest Impact"],
+    "Olive Board": [
+        "Oliveboard", "Olive board", "Olive Board", "Oilive board",
+        "oilive board", "oilive Board", "oilive oard", "oilive boadr",
+        "oilive boad", "Oilive boadr", "oilive", "Oliveboar", "Oilive boad",
+    ],
+    "Azzu": ["Azzu", "AZZU"],
+    "Shyam": ["Shyam", "Shym", "Syam", "Shaym", "Shyam Institute"],
+    "IACE": ["IACE", "IAEC"],
+    "Irise": ["Irise", "IRise", "I Rise", "irise"],
+    "Practice Mock": ["Practice Mock", "Practice mock", "Pretice mock", "Mock Practice"],
+    "RRB": ["RRB"],
+    "Telegram": ["Telegram"],
+    "Youtube": [
+        "Youtube", "youtube", "YOutube", "Youtbe", "Youtub", "Yuotube",
+        "Yotube", "Youtue", "Youdtube", "Youtube. youtube",
+    ],
+    "Vision IAS": ["Vision IAS", "Visaion IAS"],
+    "Prepusion": ["Prepusion"],
+}
+
+SUBSCRIPTION_ALIASES = {
+    normalize_key(v): canon
+    for canon, variants in _SUBSCRIPTION_ALIAS_GROUPS.items()
+    for v in variants
+}
+
+
+def canonicalize_subscription_name(raw, canon, context=""):
+    """Canonicalize a platform/subscription Account Name so the same real
+    product lands on one canonical spelling instead of one row per
+    misspelling.
+
+    Tries, in order: (1) the explicit alias table above -- bridges the
+    short-name and low-similarity spelling families edit-distance can't
+    (e.g. 'Jhan Acadami' -> "Jan's English Academy"); (2) the generic
+    fuzzy/anagram/exact canonicalizer (common.Canonicalizer) for typos the
+    table doesn't enumerate (e.g. 'Adda 247' -> 'Adda247').
+    """
+    cleaned = collapse_ws(raw).strip('"').strip()
+    if not cleaned:
+        return cleaned
+    key = normalize_key(cleaned)
+    if key in SUBSCRIPTION_ALIASES:
+        return SUBSCRIPTION_ALIASES[key]
+    return canon.canonicalize(cleaned, context=context)
+
+
+# --------------------------------------------------------------------------
 # one-time schema migration shared by anything that writes exams/quizzes
 # --------------------------------------------------------------------------
 def relax_marks_schema(conn: sqlite3.Connection):
