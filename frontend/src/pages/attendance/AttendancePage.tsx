@@ -191,7 +191,7 @@ export function AttendancePage() {
         action={
           <div className="flex flex-col items-end gap-3">
             <div className="text-right">
-              <p className="text-[11px] uppercase tracking-[0.32em] text-slate-light">
+              <p className="text-xs uppercase tracking-[0.32em] text-slate-light">
                 Current time
               </p>
               <p className="mt-1 font-display text-2xl font-semibold tabular-nums text-ink">

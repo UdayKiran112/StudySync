@@ -175,7 +175,7 @@ export function DigitalLibraryPage() {
         description="Track sessions on JSTOR, Britannica Online, and other subscribed or self-owned platforms."
         action={
           <div className="rounded-2xl border border-border bg-card px-4 py-3 text-right text-slate">
-            <p className="text-[11px] uppercase tracking-[0.32em] text-slate-light">
+            <p className="text-xs uppercase tracking-[0.32em] text-slate-light">
               Current time
             </p>
             <p className="mt-1 text-lg font-semibold text-ink">

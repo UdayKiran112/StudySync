@@ -168,7 +168,7 @@ export function Layout() {
               <p className="font-display text-base font-semibold leading-none">
                 StudySync
               </p>
-              <p className="mt-1 text-[11px] uppercase tracking-widest text-paper/50">
+              <p className="mt-1 text-xs uppercase tracking-widest text-paper/70">
                 Front desk
               </p>
             </div>
@@ -186,7 +186,7 @@ export function Layout() {
         <nav className="flex-1 overflow-y-auto scrollbar-thin px-3 py-4">
           {NAV_SECTIONS.map((section) => (
             <div key={section.label} className="mb-5">
-              <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-widest text-paper/40">
+              <p className="mb-1.5 px-3 text-xs font-semibold uppercase tracking-widest text-paper/60">
                 {section.label}
               </p>
               <div className="space-y-0.5">

@@ -6,6 +6,9 @@
 # http://<this-machine-IP>. Port 80 means no port numbers to remember.
 
 :80 {
+	# ---- Compression for text/JS/CSS/JSON responses (incl. API) ----
+	encode zstd gzip
+
 	# ---- Static frontend root ----
 	root * C:\ProgramData\StudySync\app\frontend
 
@@ -25,11 +28,20 @@
 		reverse_proxy 127.0.0.1:8000
 	}
 
+	# ---- Content-addressed build assets: cache forever ----
+	# Vite emits hashed filenames (index-<hash>.js), so these are immutable.
+	handle /assets/* {
+		file_server
+		header Cache-Control "public, max-age=31536000, immutable"
+	}
+
 	# ---- Everything else: React SPA with history-API fallback ----
 	# Deep links like /students/42 return index.html so client-side routing works.
+	# index.html itself is never cached so a new deploy is picked up immediately.
 	handle {
 		try_files {path} /index.html
 		file_server
+		header Cache-Control "no-cache"
 	}
 
 	# ---- Security headers ----

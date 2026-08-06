@@ -95,7 +95,7 @@ export function AttendanceRecordsPage() {
         description="Search historical attendance by date range or session. Edit or remove records from the same list."
         action={
           <div className="rounded-2xl border border-border bg-card px-4 py-3 text-right text-slate">
-            <p className="text-[11px] uppercase tracking-[0.32em] text-slate-light">
+            <p className="text-xs uppercase tracking-[0.32em] text-slate-light">
               Current time
             </p>
             <p className="mt-1 text-lg font-semibold text-ink">
@@ -114,7 +114,7 @@ export function AttendanceRecordsPage() {
             </p>
             <Link
               to="/attendance"
-              className="mt-4 inline-flex items-center rounded-full bg-brass px-3 py-1.5 text-xs font-semibold text-ink shadow-sm transition hover:bg-brass/90"
+              className="mt-4 inline-flex items-center rounded-full bg-ink px-3 py-1.5 text-xs font-semibold text-paper shadow-sm transition hover:bg-ink-light"
             >
               Back to today's attendance
             </Link>

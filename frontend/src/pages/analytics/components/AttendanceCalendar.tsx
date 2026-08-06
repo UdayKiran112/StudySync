@@ -63,7 +63,7 @@ export function AttendanceCalendar({ history, weeks = 12 }: { history: Attendanc
         <div className="flex gap-1">
           {columns.weeks.map((week, wi) => (
             <div key={wi} className="flex flex-col gap-1">
-              <span className="block h-3 text-[10px] leading-3 text-slate-light">{columns.monthLabels[wi]}</span>
+              <span className="block h-3 text-xs leading-3 text-slate-light">{columns.monthLabels[wi]}</span>
               {week.map((day) => (
                 <div
                   key={day.iso}

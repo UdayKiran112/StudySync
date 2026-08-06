@@ -171,7 +171,7 @@ function InfoItem({
     <div className="flex items-start gap-2">
       <Icon size={15} className="mt-0.5 shrink-0 text-slate-light" />
       <div>
-        <p className="text-[11px] uppercase tracking-wide text-slate-light">
+        <p className="text-xs uppercase tracking-wide text-slate-light">
           {label}
         </p>
         <p className="text-ink">{value || "—"}</p>

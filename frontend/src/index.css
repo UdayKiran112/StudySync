@@ -1,5 +1,30 @@
 @import "tailwindcss";
 
+/* Self-hosted variable fonts (latin subset) — no external font CDN at runtime. */
+@font-face {
+  font-family: "Fraunces";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/fraunces-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/inter-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url("/fonts/jbmono-latin.woff2") format("woff2");
+}
+
 @theme {
   /* Color tokens — "reading room" palette: ink shelving, brass fixtures, paper */
   --color-ink: #1e2a38;
@@ -7,10 +32,10 @@
   --color-paper: #eff2ee;
   --color-paper-dim: #e4e8e2;
   --color-card: #ffffff;
-  --color-brass: #a9782f;
+  --color-brass: #96682a;
   --color-brass-light: #c79a4f;
   --color-slate: #5b6472;
-  --color-slate-light: #8b93a0;
+  --color-slate-light: #6d7682;
   --color-border: #dce1dd;
   --color-forest: #2f6f4e;
   --color-forest-bg: #e6f0e9;

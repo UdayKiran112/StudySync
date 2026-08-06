@@ -88,7 +88,7 @@ export function SessionList({
               {!cls.subject && !cls.instructor_name && <span className="text-slate-light">No subject or instructor set</span>}
             </div>
             {(cls.start_time || cls.end_time) && (
-              <div className="mt-1 font-mono text-[11px] text-slate-light">
+              <div className="mt-1 font-mono text-xs text-slate-light">
                 {cls.start_time ?? "—"}–{cls.end_time ?? "—"}
               </div>
             )}
