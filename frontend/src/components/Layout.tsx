@@ -20,6 +20,8 @@ import {
   PanelLeftOpen,
 } from "lucide-react";
 import { useSettings } from "../context/SettingsContext";
+import { useRealtimeEvents, type RenewalEvent } from "../api/realtime";
+import { RenewalDialog } from "./RenewalDialog";
 import clsx from "clsx";
 
 const NAV_SECTIONS = [
@@ -85,6 +87,16 @@ export function Layout() {
   const { isConfigured } = useSettings();
   const location = useLocation();
   const [open, setOpen] = useState(getInitialOpen);
+  const [renewals, setRenewals] = useState<RenewalEvent[]>([]);
+
+  // Live stream: punches written by the ZKTeco poller/ADMS push instantly
+  // invalidate the attendance queries (so rows appear with no polling
+  // delay), and auto-renewals queue a prompt for the desk below.
+  useRealtimeEvents({
+    onRenewal: (event) => setRenewals((pending) => [...pending, event]),
+  });
+
+  const activeRenewal = renewals[0];
 
   // Remember the toggle choice, but only for desktop — mobile always starts closed.
   useEffect(() => {
@@ -266,6 +278,13 @@ export function Layout() {
           <Outlet />
         </div>
       </main>
+
+      {activeRenewal && (
+        <RenewalDialog
+          renewal={activeRenewal}
+          onClose={() => setRenewals((pending) => pending.slice(1))}
+        />
+      )}
     </div>
   );
 }

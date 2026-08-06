@@ -15,6 +15,7 @@ from typing import List, Optional
 
 from database import get_db_dependency
 from models.students import StudentCreate, StudentUpdate, StudentResponse
+from realtime import publish
 from security import require_api_key
 
 # Fields permitted in dynamic UPDATE SET clauses (defense-in-depth).
@@ -104,6 +105,17 @@ def auto_renew_if_expired(
         SET status = CASE WHEN {VALID_UNTIL_EXPR} < ? THEN 'Inactive' ELSE 'Active' END
         WHERE student_id = ?""",
         (today_iso, student_id),
+    )
+    # Tell any connected frontend so it can prompt the desk to log the
+    # visit in the offline library (the data renewal itself is already
+    # done above). Fired from every caller: front-desk check-in, pyzk
+    # poll/live and the ADMS push path alike.
+    row = db.execute(
+        "SELECT name FROM students WHERE student_id = ?", (student_id,)
+    ).fetchone()
+    publish(
+        "renewal",
+        {"student_id": student_id, "name": row["name"] if row else None},
     )
     return True
 

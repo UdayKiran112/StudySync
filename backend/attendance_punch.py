@@ -40,6 +40,7 @@ from routers.attendance import (
     _determine_provisional_session,
     _minutes_between,
 )
+from realtime import publish
 
 
 def punch_debounce_minutes() -> int:
@@ -166,6 +167,15 @@ def apply_punch(
                 """,
                 (student_id, day, session, punch),
             )
+            publish(
+                "attendance",
+                {
+                    "student_id": student_id,
+                    "day": day,
+                    "punch": punch,
+                    "outcome": "checked_in",
+                },
+            )
             return "checked_in"
         except sqlite3.IntegrityError:
             return "duplicate"
@@ -183,6 +193,15 @@ def apply_punch(
             (punch, final_session, duration, open_session["attendance_id"]),
         )
         _auto_fill_offline_if_needed(db, student_id, day)
+        publish(
+            "attendance",
+            {
+                "student_id": student_id,
+                "day": day,
+                "punch": punch,
+                "outcome": "checked_out",
+            },
+        )
         return "checked_out"
 
     return "duplicate"

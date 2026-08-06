@@ -52,6 +52,7 @@ from routers import (
     dashboard,
     coaching,
     other_activities,
+    realtime,
 )
 
 # --- ZKTeco attendance integration: pick ONE transport, or run both ---
@@ -138,6 +139,12 @@ def _detect_lan_ip() -> Optional[str]:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     apply_runtime_schema_guards()
+    # SSE streams for live attendance/renewal events must be created and
+    # drained on the same loop the app runs on; pin it here so publish()
+    # (which can be called from worker threads) reaches them safely.
+    from realtime import bind
+
+    bind(asyncio.get_running_loop())
     lan_ip = _detect_lan_ip()
     if lan_ip:
         print(f"\n  On this network, reach the API at: http://{lan_ip}:8000/docs")
@@ -252,6 +259,7 @@ app.include_router(quizzes.scores_router)
 app.include_router(dashboard.router)
 app.include_router(coaching.router)
 app.include_router(other_activities.router)
+app.include_router(realtime.router)
 if pyzk_enabled and zkteco is not None:
     app.include_router(zkteco.router)
 if adms_enabled and adms is not None:
