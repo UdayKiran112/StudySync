@@ -189,44 +189,47 @@ export function AttendancePage() {
         title="Attendance"
         description="Log arrivals and departures. Today's attendance is shown below; historical records are available on a separate page."
         action={
-          <div className="rounded-2xl border border-border bg-card px-4 py-3 text-right text-slate">
-            <p className="text-[11px] uppercase tracking-[0.32em] text-slate-light">
-              Current time
-            </p>
-            <p className="mt-1 text-lg font-semibold text-ink">
-              {now.toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              })}
-            </p>
-            <p className="mt-1 text-sm text-slate">
-              {now.toLocaleDateString([], {
-                weekday: "long",
-                month: "long",
-                day: "numeric",
-              })}
-            </p>
-            <Link
-              to="/attendance/records"
-              className="mt-4 inline-flex items-center rounded-full bg-brass px-3 py-1.5 text-xs font-semibold text-ink shadow-sm transition hover:bg-brass/90"
-            >
-              View attendance records
-            </Link>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={handleZkSync}
-              disabled={zkSync.isPending}
-              className="mt-3 w-full"
-            >
-              <RefreshCw
-                size={14}
-                className={zkSync.isPending ? "animate-spin" : ""}
-              />
-              {zkSync.isPending ? "Syncing…" : "Sync from device"}
-            </Button>
+          <div className="flex flex-col items-end gap-3">
+            <div className="text-right">
+              <p className="text-[11px] uppercase tracking-[0.32em] text-slate-light">
+                Current time
+              </p>
+              <p className="mt-1 font-display text-2xl font-semibold tabular-nums text-ink">
+                {now.toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                })}
+              </p>
+              <p className="mt-0.5 text-sm text-slate">
+                {now.toLocaleDateString([], {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                })}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Link
+                to="/attendance/records"
+                className="inline-flex items-center rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-ink shadow-sm transition hover:bg-paper-dim"
+              >
+                View records
+              </Link>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={handleZkSync}
+                disabled={zkSync.isPending}
+              >
+                <RefreshCw
+                  size={14}
+                  className={zkSync.isPending ? "animate-spin" : ""}
+                />
+                {zkSync.isPending ? "Syncing…" : "Sync from device"}
+              </Button>
+            </div>
           </div>
         }
       />
