@@ -37,6 +37,22 @@ max_marks_corrections = []
 swap_corrections = []
 
 
+# One-off data-entry typos in the raw register where the recorded score
+# exceeds the block's max marks. Keyed by (Date of Exam, Name of Exam,
+# Marks Obtained) -- enough to uniquely identify the row:
+#   - Gowthami A 24.10.2025 A&R Exam '4033' = '4.33' (numpad '.' typed as
+#     the adjacent '0' key);
+#   - Vasudeva Rao D 14.07.2022 Reasoning '166' = '16.6' (decimal point
+#     dropped);
+#   - Janardhana D 21.02.2026 Arithmetic '62.66' = '26.66' (leading 6/2
+#     transposed).
+MARKS_CORRECTIONS = {
+    ("24.10.2025", "A&R Exam", "4033"): "4.33",
+    ("14.07.2022", "Reasoning", "166"): "16.6",
+    ("21.02.2026", "Arithmetic", "62.66"): "26.66",
+}
+
+
 def resolve_max_marks(lineno, c4, c5):
     """Max Marks is normally in c4 (the column right after Date), but in a
     number of blocks the Excel export leaves c4 blank and the value lands
@@ -172,6 +188,17 @@ with open(SRC, newline="", encoding="utf-8-sig") as f:
 
         anomalies.append((lineno, row, "unrecognized row shape"))
 
+marks_corrections_applied = []
+for r in rows_out:
+    key = (r["date"], r["exam"], r["marks"])
+    if key in MARKS_CORRECTIONS:
+        corrected = MARKS_CORRECTIONS[key]
+        marks_corrections_applied.append(
+            f"{r['name']!r} {r['date']} {r['exam']!r}: marks {r['marks']!r} "
+            f"(max {r['max_marks']!r}) -> corrected to {corrected!r}"
+        )
+        r["marks"] = corrected
+
 os.makedirs("outputs", exist_ok=True)
 with open(OUT, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
@@ -192,6 +219,10 @@ with open(OUT, "w", newline="", encoding="utf-8") as f:
         )
 
 print("Total student rows written:", len(rows_out))
+print()
+print("Marks corrections applied:", len(marks_corrections_applied))
+for note in marks_corrections_applied:
+    print(" ", note)
 print()
 print("Topic/date swap corrections:", len(swap_corrections))
 for note in swap_corrections:

@@ -690,7 +690,7 @@ _SUBSCRIPTION_ALIAS_GROUPS = {
         "Sreedhar ce", "Sreedher cce", "Sreedha cce", "Sreedhare cc",
         "Sreedharr cce", "Sreeddhar cce", "Sreedhacce", "Sedharcce",
         "Sreetdhar CC", "Screedhar CC", "Sreedjar CC", "Sreedhars cce",
-        "Sreedhar C", "Seedhar cce", "Sreedher",
+        "Sreedhar C", "Seedhar cce", "Sreedher", "Screedhar", "Screedhar cce",
     ],
     "Yes & Yes": [
         "Yes & Yes", "YES & YES", "Yes&Yes", "YES &YES", "Yes &yes",

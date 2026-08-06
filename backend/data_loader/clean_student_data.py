@@ -50,10 +50,13 @@ import pandas as pd
 from common import (
     CLOSE_TIME,
     OPEN_TIME,
+    SUBSCRIPTION_ALIASES,
     Canonicalizer,
     clamp_out_time,
+    collapse_ws,
     fix_checkin_pm_offset,
     fix_checkout_pm_offset,
+    normalize_key,
 )
 
 # --------------------------------------------------------------------------
@@ -671,6 +674,52 @@ def build_digital_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
     so unlike offline library's Book ID/Name split, a shorter list is always
     padded by reusing its last value rather than leaving a blank."""
 
+    # Some 'Account Name' cells jam two platform names together with no
+    # separator at all (e.g. 'TestbookScreedhar' = Testbook + Screedhar),
+    # the comma-less cousin of a multi-platform cell. The vocabulary of real
+    # platforms is the subscription alias table; a cell that is exactly the
+    # concatenation of two known platforms (and nothing else) is split into
+    # one platform per row. The whole cell is checked first so platforms
+    # whose own name merely contains another platform ('TestbookRRB',
+    # 'Sreedharcce', 'Chandanlogic', ...) are never touched, and the longest
+    # valid prefix wins so an ambiguous cell picks the wider split.
+    def split_jammed_platforms(cell):
+        key = normalize_key(cell)
+        if not key or key in SUBSCRIPTION_ALIASES:
+            return [cell]
+        split = None
+        for cut in range(1, len(key)):
+            if key[:cut] in SUBSCRIPTION_ALIASES and key[cut:] in SUBSCRIPTION_ALIASES:
+                split = cut
+        if not split or split < 3 or len(key) - split < 3:
+            return [cell]
+        seen = 0
+        raw_split = None
+        for i, ch in enumerate(cell):
+            if ch.isalnum():
+                seen += 1
+                if seen == split:
+                    raw_split = i + 1
+                    break
+        if raw_split is None:
+            return [cell]
+        first = collapse_ws(cell[:raw_split])
+        second = collapse_ws(cell[raw_split:])
+        if not first or not second:
+            return [cell]
+        log.add(
+            "digital_library",
+            "corrected",
+            row["Excel Row"],
+            row["Sl.No"],
+            row["ID NO"],
+            row["Name of the Student"],
+            f"Account Name cell holds 2 platforms typed together ('{cell}') "
+            f"- split into one row per platform ('{first}', '{second}')",
+            cell,
+        )
+        return [first, second]
+
     mask = (
         (df["Digital Library"] != "")
         | (df["Purpose"] != "")
@@ -782,6 +831,10 @@ def build_digital_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
         platforms = [
             collapse(x) for x in row["Digital Library"].split(",") if collapse(x) != ""
         ]
+        expanded = []
+        for p in platforms:
+            expanded.extend(split_jammed_platforms(p))
+        platforms = expanded
         purposes = [collapse(x) for x in row["Purpose"].split(",") if collapse(x) != ""]
         n = max(len(platforms), len(purposes))
         if n == 0:
@@ -1018,6 +1071,157 @@ def expand_book_id_cell(raw: str, log: ErrorLog, excel_row, sl_no, sid, sname):
     return ids
 
 
+# A P-periodical id in any of the hand-written formats the column actually
+# holds ('P249', 'P.249', 'p-249', 'P--315') -- all canonicalize to P-<n>.
+OFFLINE_P_REFORM = re.compile(r"^[Pp]\D*\d+$")
+# A lone backtick cell (typing artifact) with no id in it.
+OFFLINE_ID_JUNK = ("P", "Youtube", "`")
+
+
+def _canonical_offline_id(cell):
+    """Normalize a P-periodical id to its canonical 'P-<number>' form
+    ('P249'/'P.249'/'p-249'/'P--315' all become 'P-249')."""
+    if OFFLINE_P_REFORM.match(cell):
+        return "P-" + re.sub(r"[^0-9]", "", cell)
+    return cell
+
+
+def _offline_strip_title_suffix(cell, known_titles):
+    """If the cell ends with a known book title, return the cell with that
+    title suffix removed -- but only when what remains still looks like an
+    id (e.g. '1449S&T' -> '1449', '1370Hitech' -> '1370', 'P-238Polity' ->
+    'P-238')."""
+    low = cell.lower()
+    for title in sorted(known_titles, key=len, reverse=True):
+        t = title.lower()
+        if len(t) >= 3 and len(low) > len(t) and low.endswith(t):
+            head = cell[: -len(t)]
+            if re.match(r"^\d+$|^P-?\d*$", head):
+                return head
+    return None
+
+
+def _offline_two_id_split(cell, valid_ids):
+    """Interpret a Book ID cell as two ids typed into one cell. Returns a
+    list of the ids to split into, or None if it should stay a single id.
+
+    - Separator-based ('1686' 1541', '1736. P249'): split on the separator
+      when every resulting token is a real id seen elsewhere in the file.
+    - Pure-digit run ('15781578', '16851541', '17091626'): only when the
+      cell is long enough to plausibly be two jammed ids (>= 6 digits) AND
+      exactly one split point yields two ids that are both real ids.
+    """
+    tokens = [t for t in re.split(r"[\s'`]+", cell.replace(".", " ").strip()) if t]
+    if len(tokens) > 1:
+        tokens = [_canonical_offline_id(t) for t in tokens]
+        if len(tokens) == 2 and all(t in valid_ids for t in tokens):
+            return tokens
+        return None
+    if cell.isdigit() and len(cell) >= 6:
+        splits = [
+            (cell[:i], cell[i:])
+            for i in range(1, len(cell))
+            if cell[:i] in valid_ids and cell[i:] in valid_ids
+        ]
+        if len(splits) == 1:
+            return [splits[0][0], splits[0][1]]
+    return None
+
+
+def normalize_offline_book_ids(records, log):
+    """Post-pass over the collected offline records that fixes Book ID cells
+    the per-row split can't see, using the whole file as its reference:
+      - P-periodical format variants ('P249'/'p-249'/'P.249'/'P--315') collapse
+        onto the canonical 'P-<number>' form (one physical periodical).
+      - A cell holding a book title instead of an id ('Shine India',
+        'Polycet', 'Quicker Maths', 'Youtube', a bare 'P', or a backtick)
+        gets its id blanked -- the Book Name already carries it.
+      - A title jammed onto the end of an id ('1449S&T', '1370Hitech',
+        'P-238Polity') gets the title stripped off, leaving the id.
+      - Two ids typed into one cell ('1578 1578', "1686' 1541",
+        '1736. P249', '16851541', '17091626') become one row per id, but only
+        when both halves are real ids seen elsewhere; unverifiable cells stay
+        as they are and are flagged for review.
+    """
+    valid_ids = {
+        _canonical_offline_id(r["Book ID"]) for r in records if r["Book ID"]
+    }
+    known_titles = {
+        collapse_ws(r["Book Name"]) for r in records if r["Book Name"]
+    }
+
+    normalized = []
+    for rec in records:
+        raw = rec["Book ID"]
+        if not raw:
+            normalized.append(rec)
+            continue
+
+        def report(status, issue):
+            log.add(
+                "offline_library",
+                status,
+                rec["Serial No."],
+                rec["Serial No."],
+                rec["Student ID"],
+                rec["Student Name"],
+                issue,
+                raw,
+            )
+
+        cell = _canonical_offline_id(collapse_ws(raw))
+
+        # Title or junk typed into the id column -> blank the id. A purely
+        # numeric cell is never a title (numeric 'book names' like '1638'
+        # are themselves ID-typed-into-name errors), so only non-numeric
+        # cells are matched against the known titles.
+        is_numeric_cell = bool(re.match(r"^\d+$", cell))
+        if (not is_numeric_cell and cell in known_titles) or cell in OFFLINE_ID_JUNK:
+            report(
+                "corrected",
+                f"Book ID cell holds the book title {cell!r} (no catalog id) - "
+                f"id blanked",
+            )
+            rec["Book ID"] = ""
+            normalized.append(rec)
+            continue
+
+        # Title jammed onto an id -> strip it, keep the id.
+        stripped = _offline_strip_title_suffix(cell, known_titles)
+        if stripped is not None:
+            report(
+                "corrected",
+                f"Book ID cell has the title jammed onto the id "
+                f"({cell!r}) - kept id {stripped!r}",
+            )
+            cell = stripped
+
+        # Two ids in one cell -> one row per id.
+        pieces = _offline_two_id_split(cell, valid_ids)
+        if pieces is not None:
+            report(
+                "corrected",
+                f"Book ID cell holds 2 ids typed together ({raw!r}) - split "
+                f"into one row per id",
+            )
+            for piece in pieces:
+                split = dict(rec)
+                split["Book ID"] = piece
+                normalized.append(split)
+            continue
+
+        if cell != raw:
+            report(
+                "corrected",
+                f"Book ID cell normalized from {raw!r} to {cell!r} "
+                f"(formatting)",
+            )
+        rec["Book ID"] = cell
+        normalized.append(rec)
+
+    return normalized
+
+
 def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
     """Multiple comma-separated Book IDs mean the student took out multiple
     books in one visit - each one becomes its own row here, rather than
@@ -1132,6 +1336,8 @@ def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
 
             for bid, bname in zip(ids, names):
                 add_record(bid, bname)
+
+    records = normalize_offline_book_ids(records, log)
 
     return pd.DataFrame(
         records,

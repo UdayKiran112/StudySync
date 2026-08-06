@@ -714,6 +714,22 @@ def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
             if not topic:
                 continue  # already logged inside canonicalize_exam_topic
             exam_id = loader.get_or_create_exam(topic, date)
+            if max_marks is not None and marks_obtained > max_marks:
+                loader.log(
+                    f"line {line_no} ({name!r}): marks_obtained {marks_obtained} "
+                    f"exceeds max_marks {max_marks} for {topic_raw!r} on {date} "
+                    f"-> KEPT, flagged for manual review",
+                    ERR_MARKS,
+                )
+                loader._review(
+                    "marks_above_max",
+                    f"marks_obtained {marks_obtained} > max_marks {max_marks} "
+                    f"(exam {topic_raw!r}); kept as-is -- verify the score "
+                    f"and/or the exam's max marks",
+                    line_no,
+                    name,
+                    date,
+                )
             loader.apply_exam_mark(
                 student_id, exam_id, marks_obtained, max_marks, line_no, date
             )
