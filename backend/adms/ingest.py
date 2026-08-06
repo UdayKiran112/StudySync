@@ -4,13 +4,13 @@ adms/ingest.py
 Turn a raw ZKTeco ADMS ATTLOG push into attendance rows.
 
 This is the ADMS equivalent of zkteco/sync.py, and it deliberately
-shares zkteco/apply.py with it (and with the pyzk live-capture module, if
-you're still using it) -- apply_punch() is the single source of truth for
-"what does one punch do to the attendance table", so it doesn't matter
-whether the punch arrived via a poll, a pyzk live_capture() event, or an
-ADMS HTTP push: the resulting row is identical. zkteco/apply.py has no
-pyzk dependency, so pulling it in here does NOT pull pyzk into this
-module or its import graph.
+shares attendance_punch.py with it (and with the pyzk live-capture
+module, if you're still using it) -- apply_punch() is the single source
+of truth for "what does one punch do to the attendance table", so it
+doesn't matter whether the punch arrived via a poll, a pyzk
+live_capture() event, or an ADMS HTTP push: the resulting row is
+identical. attendance_punch.py has no pyzk dependency, so pulling it in
+here does NOT pull pyzk into this module or its import graph.
 
 ATTLOG PAYLOAD FORMAT
 -----------------------

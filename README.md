@@ -163,6 +163,34 @@ Device `user_id`s are matched to `students.student_id` numerically, so
 enroll students on the scanner with the same numeric ID they have in
 StudySync.
 
+### ADMS push (device → server)
+
+The backend is also a ZKTeco **ADMS** server: point the machine's Comm >
+Cloud Server Setting at this PC (port 80) and it *pushes* punches over HTTP
+to `/iclock/*` in real time — no polling, no `ZK_DEVICE_IP`. Handshake and
+ATTLOG pushes are verified against the ZKTeco HTTP Push SDK spec. Because
+the protocol has no authentication, gate which devices may push with
+`ZK_ADMS_ALLOWED_SERIALS` and keep `/iclock/*` on your LAN segment:
+
+```powershell
+$env:ZK_ADMS_ALLOWED_SERIALS = ""        # empty = accept any SN (default)
+$env:ZK_ADMS_DELAY_SECONDS = "10"        # handshake "Delay" (heartbeat cadence)
+$env:ZK_ADMS_ERROR_DELAY_SECONDS = "30"  # device retry wait after a failed push
+```
+
+`ZK_INTEGRATION` (default `both`) selects which integration(s) the process
+wires up: `both` / `pyzk` / `adms` / `none`. Live push diagnostics (per-SN
+last handshake / push / import tally) are at `GET /api/adms/status`
+(API-key protected).
+
+### Step-by-step testing guide
+
+`deploy/BIOMETRIC_TESTING.md` is a complete walkthrough for testing **both**
+integrations on a deployed system (Windows service + Caddy on port 80): how
+to find the machine's IP, configure the MB360's Cloud Server Setting for
+ADMS, configure pyzk in `.env`, verify with `Test-NetConnection ... -Port
+4370`, simulate the device with PowerShell/curl, and clean up test data.
+
 ## API tests
 
 The backend integration suite covers students, books, subscriptions,

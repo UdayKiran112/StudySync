@@ -14,6 +14,17 @@
 		reverse_proxy 127.0.0.1:8000
 	}
 
+	# ---- ZKTeco ADMS device push protocol (device -> server) ----
+	# The MB360 connects OUT to this machine and POSTs attendance to
+	# /iclock/* (no auth, plain-text protocol). Without this block the
+	# device's handshake/push would fall through to the SPA below and it
+	# would never register. Port 80 is already firewalled open for the LAN,
+	# so point the device's Comm > Cloud Server Setting at this machine's
+	# LAN IP on port 80.
+	handle /iclock/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
 	# ---- Everything else: React SPA with history-API fallback ----
 	# Deep links like /students/42 return index.html so client-side routing works.
 	handle {

@@ -63,6 +63,15 @@ Start-Sleep -Seconds 1
 #    whole app/api and app/frontend and app/caddy trees are swapped.
 $apiKey = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_API_KEY=(.+)$').Matches[0].Groups[1].Value
 $dbEnv = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_DB_PATH=(.+)$').Matches[0].Groups[1].Value
+# Capture any device-integration / operator settings BEFORE the app swap
+# deletes app\api (the package ships no .env), so a configured ZKTeco device
+# keeps working across updates.
+$extraLines = @()
+if (Test-Path "$APP_DIR\app\api\.env") {
+    $extraLines = Get-Content -Path "$APP_DIR\app\api\.env" | Where-Object {
+        $_ -match '^\s*(ZK_|ADMS_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
+    }
+}
 Write-Log "Preserving API key (kept from current install)."
 
 foreach ($rel in @("app\api", "app\frontend", "app\caddy", "config\winsw", "scripts", "tools")) {
@@ -75,12 +84,13 @@ foreach ($rel in @("app\api", "app\frontend", "app\caddy", "config\winsw", "scri
 }
 Write-Log "New application files copied."
 
-# 4. Recreate .env with the SAME api key and db path (never rotate the key on update).
-@"
-# StudySync production environment (preserved across updates)
-STUDYSYNC_API_KEY=$apiKey
-STUDYSYNC_DB_PATH=$dbEnv
-"@ | Set-Content -Path "$APP_DIR\app\api\.env" -Encoding ASCII
+# 4. Recreate .env with the SAME api key and db path (never rotate the key on
+#    update), plus the preserved device/operator settings captured above.
+@(
+    "# StudySync production environment (preserved across updates)"
+    "STUDYSYNC_API_KEY=$apiKey"
+    "STUDYSYNC_DB_PATH=$dbEnv"
+) + $extraLines | Set-Content -Path "$APP_DIR\app\api\.env" -Encoding ASCII
 Write-Log ".env preserved."
 
 # 5. Restart services. Do NOT re-run `install`: the registrations already
