@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import toast from "react-hot-toast";
 import { Download, Printer, ChevronDown, FileSpreadsheet } from "lucide-react";
+import clsx from "clsx";
 import { Button } from "./Button";
+import { useDropdownFlip } from "./dropdown";
 import { downloadCsv } from "../../lib/csvExport";
 import { downloadExcel } from "../../lib/excelExport";
 import type { ExcelColumn } from "../../lib/excelExport";
@@ -45,6 +47,7 @@ export function ExportMenu({
   const [busy, setBusy] = useState<"csv" | "excel" | "pdf" | null>(null);
   const [printRows, setPrintRows] = useState<ExportRow[] | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const { menuRef, openUp } = useDropdownFlip(open);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -123,7 +126,13 @@ export function ExportMenu({
           <ChevronDown size={13} />
         </Button>
         {open && (
-          <div className="absolute right-0 z-10 mt-1 w-72 overflow-hidden rounded-md border border-border bg-card shadow-lg">
+          <div
+            ref={menuRef}
+            className={clsx(
+              "absolute right-0 z-30 w-72 overflow-hidden rounded-md border border-border bg-card shadow-lg",
+              openUp ? "bottom-full mb-1" : "top-full mt-1",
+            )}
+          >
             <button
               onClick={printPdf}
               className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm hover:bg-paper-dim"

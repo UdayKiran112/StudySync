@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { Download, Printer, ChevronDown, FileSpreadsheet } from "lucide-react";
+import clsx from "clsx";
 import { Button } from "../../../components/ui/Button";
+import { useDropdownFlip } from "../../../components/ui/dropdown";
 import { downloadCsv } from "../../../lib/csvExport";
 import type { StudentDashboardResponse } from "../../../api/types";
 import type { HolidayAwareAttendanceStats } from "../../../lib/attendanceStats";
@@ -14,6 +16,7 @@ export function ExportMenu({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const { menuRef, openUp } = useDropdownFlip(open);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -132,7 +135,13 @@ export function ExportMenu({
         <Download size={15} /> Export <ChevronDown size={13} />
       </Button>
       {open && (
-        <div className="absolute right-0 z-10 mt-1 w-64 overflow-hidden rounded-md border border-border bg-card shadow-lg">
+        <div
+          ref={menuRef}
+          className={clsx(
+            "absolute right-0 z-30 w-64 overflow-hidden rounded-md border border-border bg-card shadow-lg",
+            openUp ? "bottom-full mb-1" : "top-full mt-1",
+          )}
+        >
           <button
             onClick={() => window.print()}
             className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm hover:bg-paper-dim"
