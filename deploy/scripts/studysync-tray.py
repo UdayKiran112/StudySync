@@ -18,6 +18,7 @@ PyInstaller (--noconsole), so it never flashes a console window.
 
 import ctypes
 import queue
+import socket
 import subprocess
 import sys
 import threading
@@ -114,6 +115,24 @@ def _display_state(raw: str) -> str:
     return mapping.get(raw, raw.title())
 
 
+# --------------------------------------------------------- mDNS probe
+def resolve_mdns_name() -> tuple[bool, str]:
+    """Return (ok, detail) for whether studysync.local currently resolves.
+
+    This is the user-facing question the whole advertisement feature answers:
+    can devices (and this PC) reach the app by name right now? Runs in the
+    monitor's background thread so the blocking lookup never freezes the tray.
+    """
+    try:
+        infos = socket.getaddrinfo("studysync.local", 80, socket.AF_INET)
+        addrs = sorted({i[4][0] for i in infos})
+        if addrs:
+            return True, "-> " + ", ".join(addrs)
+        return False, "no address"
+    except OSError as exc:
+        return False, str(exc)
+
+
 def _state_color(raw: str) -> str:
     if raw == "RUNNING":
         return "#2ea043"
@@ -158,6 +177,9 @@ class Monitor:
         self.icon = icon
         self.states: dict[str, str] = {name: "UNKNOWN" for name, _, _ in SERVICES}
         self.last_checked = ""
+        self.mdns_ok = False
+        self.mdns_detail = "checking\u2026"
+        self.mdns_checked = ""
         self.lock = threading.Lock()
         self.stop = threading.Event()
 
@@ -171,14 +193,33 @@ class Monitor:
             return _BAD
         return _WARN
 
+    def mdns_color(self):
+        # Service down => grey (unreachable either way). Service up but the
+        # name missing => red. Resolving => green. Else amber.
+        if any(self.states.get(n) != "RUNNING" for n, _, _ in SERVICES):
+            return _WARN
+        if not self.mdns_ok:
+            return _BAD
+        return _OK
+
     def run(self) -> None:
         _log("StudySync tray monitor started")
+        tick = 0
         while not self.stop.is_set():
             try:
                 current = {name: service_state(name) for name, _, _ in SERVICES}
                 with self.lock:
                     self.states.update(current)
                     self.last_checked = datetime.now().strftime("%H:%M:%S")
+                # mDNS probe every 60 s (12 x 5 s ticks) - the getaddrinfo
+                # lookup can block for a moment, so keep it in this thread.
+                if tick == 0 or tick % 12 == 0:
+                    ok, detail = resolve_mdns_name()
+                    with self.lock:
+                        self.mdns_ok = ok
+                        self.mdns_detail = detail
+                        self.mdns_checked = datetime.now().strftime("%H:%M:%S")
+                tick += 1
                 try:
                     self.icon.icon = make_icon(self.overall_color())
                 except Exception:  # noqa: BLE001
@@ -220,6 +261,8 @@ def _restart_all_worker(monitor: Monitor) -> None:
 def build_menu(monitor: Monitor) -> Menu:
     with monitor.lock:
         states = dict(monitor.states)
+        mdns_ok = monitor.mdns_ok
+        mdns_detail = monitor.mdns_detail
     items = [
         MenuItem("Open Status", lambda icon, item: show_status_window(), default=True),
         Menu.SEPARATOR,
@@ -228,6 +271,11 @@ def build_menu(monitor: Monitor) -> Menu:
         items.append(
             MenuItem(f"{display}: {_display_state(states.get(name, 'UNKNOWN'))}", None, enabled=False)
         )
+    items.append(Menu.SEPARATOR)
+    mdns_label = "mDNS studysync.local: " + (
+        f"OK {mdns_detail}" if mdns_ok else f"MISSING ({mdns_detail})"
+    )
+    items.append(MenuItem(mdns_label, None, enabled=False))
     items.append(Menu.SEPARATOR)
     items.append(MenuItem("Restart All Stopped", lambda icon, item: restart_all(monitor)))
     items.append(MenuItem("Exit", lambda icon, item: quit_app()))
@@ -244,6 +292,8 @@ class StatusWindow:
         self.root.withdraw()  # hidden until the user clicks the tray icon
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
         self._rows = []
+        self._mdns_state_lbl = None
+        self._mdns_detail_lbl = None
         self._build()
         self.root.after(100, self._poll_queue)
         self.root.after(5000, self._auto_refresh)
@@ -268,11 +318,25 @@ class StatusWindow:
             btn.grid(row=i, column=2, sticky="e", padx=(6, 12), pady=3)
             self._rows.append((name, state_lbl, btn))
 
+        mdns_row = len(SERVICES) + 1
+        mdns_lbl = tk.Label(self.root, text="mDNS (studysync.local)", font=("Segoe UI", 9), anchor="w")
+        mdns_lbl.grid(row=mdns_row, column=0, sticky="w", padx=(12, 6), pady=3)
+
+        self._mdns_state_lbl = tk.Label(
+            self.root, text="", font=("Segoe UI", 9, "bold"), width=12, anchor="w"
+        )
+        self._mdns_state_lbl.grid(row=mdns_row, column=1, sticky="w", padx=6, pady=3)
+
+        self._mdns_detail_lbl = tk.Label(
+            self.root, text="", font=("Segoe UI", 8), fg="#666666", anchor="w"
+        )
+        self._mdns_detail_lbl.grid(row=mdns_row, column=2, sticky="w", padx=(6, 12), pady=3)
+
         self._last = tk.Label(self.root, text="", font=("Segoe UI", 8), fg="#666666")
-        self._last.grid(row=len(SERVICES) + 1, column=0, columnspan=3, sticky="w", padx=12, pady=(6, 0))
+        self._last.grid(row=len(SERVICES) + 2, column=0, columnspan=3, sticky="w", padx=12, pady=(6, 0))
 
         footer = tk.Frame(self.root)
-        footer.grid(row=len(SERVICES) + 2, column=0, columnspan=3, sticky="ew", padx=12, pady=(8, 12))
+        footer.grid(row=len(SERVICES) + 3, column=0, columnspan=3, sticky="ew", padx=12, pady=(8, 12))
         tk.Button(footer, text="Refresh", font=("Segoe UI", 9), command=self.refresh).pack(side="left")
         tk.Button(footer, text="Restart All Stopped", font=("Segoe UI", 9),
                   command=lambda: restart_all(self.monitor)).pack(side="left", padx=6)
@@ -292,9 +356,21 @@ class StatusWindow:
         with self.monitor.lock:
             states = dict(self.monitor.states)
             last = self.monitor.last_checked
+            mdns_ok = self.monitor.mdns_ok
+            mdns_detail = self.monitor.mdns_detail
+            mdns_checked = self.monitor.mdns_checked
         for name, state_lbl, _btn in self._rows:
             raw = states.get(name, "UNKNOWN")
             state_lbl.config(text=_display_state(raw), fg=_state_color(raw))
+        if self._mdns_state_lbl is not None:
+            self._mdns_state_lbl.config(
+                text="OK" if mdns_ok else "MISSING",
+                fg="#2ea043" if mdns_ok else "#dc3c3c",
+            )
+        if self._mdns_detail_lbl is not None:
+            self._mdns_detail_lbl.config(
+                text=f"{mdns_detail}  ({mdns_checked})" if mdns_checked else mdns_detail
+            )
         self._last.config(text=f"Last checked: {last}")
 
     def _poll_queue(self) -> None:
