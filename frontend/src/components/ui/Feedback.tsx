@@ -74,6 +74,41 @@ export function CardSkeleton({ className }: { className?: string }) {
   );
 }
 
+/** Matches the stat-card grid + chart boxes of the Student/Subscription
+ *  summary dashboards while their (lazy-loaded) chart chunks download. */
+export function SummaryDashboardSkeleton({
+  cards = 6,
+  wide = false,
+}: {
+  cards?: number;
+  /** Use a 4-column card grid (e.g. subscriptions) instead of 3. */
+  wide?: boolean;
+}) {
+  return (
+    <div className="mb-6 space-y-4">
+      <div
+        className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${
+          wide ? "lg:grid-cols-4" : "lg:grid-cols-3"
+        }`}
+      >
+        {Array.from({ length: cards }).map((_, i) => (
+          <CardSkeleton key={i} className="min-h-32 p-5" />
+        ))}
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="h-64 rounded-lg border border-border bg-card p-4">
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="mt-4 h-40 w-full" />
+        </div>
+        <div className="h-64 rounded-lg border border-border bg-card p-4">
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="mt-4 h-40 w-full" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ErrorBanner({ message }: { message: string }) {
   return (
     <div className="flex items-start gap-2 rounded-md border border-rust/30 bg-rust-bg px-4 py-3 text-sm text-rust">

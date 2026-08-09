@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Plus, Search, Pencil, Trash2 } from "lucide-react";
@@ -8,6 +8,7 @@ import {
   ErrorBanner,
   EmptyState,
   Pagination,
+  SummaryDashboardSkeleton,
 } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Input, Select, Field } from "../../components/ui/Form";
@@ -30,7 +31,12 @@ import { extractErrorMessage } from "../../api/client";
 import { todayIso } from "../../lib/format";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import type { Subscription } from "../../api/types";
-import { SubscriptionSummaryDashboard } from "./SubscriptionSummaryDashboard";
+
+const SubscriptionSummaryDashboard = lazy(() =>
+  import("./SubscriptionSummaryDashboard").then((m) => ({
+    default: m.SubscriptionSummaryDashboard,
+  })),
+);
 
 const LIMIT = 20;
 
@@ -98,10 +104,12 @@ export function SubscriptionsPage() {
         }
       />
 
-      <SubscriptionSummaryDashboard
-        summary={summary.data}
-        loading={summary.isLoading}
-      />
+      <Suspense fallback={<SummaryDashboardSkeleton cards={7} wide />}>
+        <SubscriptionSummaryDashboard
+          summary={summary.data}
+          loading={summary.isLoading}
+        />
+      </Suspense>
 
       <div className="mb-4 flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[220px]">

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Plus, Search, Pencil, Trash2, RefreshCw } from "lucide-react";
@@ -8,6 +8,7 @@ import {
   EmptyState,
   Pagination,
   TableSkeletonRows,
+  SummaryDashboardSkeleton,
 } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Field, Input, Select } from "../../components/ui/Form";
@@ -27,7 +28,12 @@ import { formatDate } from "../../lib/format";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import { StudentFormModal } from "./StudentFormModal";
 import type { Student } from "../../api/types";
-import { StudentSummaryDashboard } from "./StudentSummaryDashboard";
+
+const StudentSummaryDashboard = lazy(() =>
+  import("./StudentSummaryDashboard").then((m) => ({
+    default: m.StudentSummaryDashboard,
+  })),
+);
 
 const LIMIT = 20;
 
@@ -117,10 +123,12 @@ export function StudentsList() {
         }
       />
 
-      <StudentSummaryDashboard
-        summary={summary.data}
-        loading={summary.isLoading}
-      />
+      <Suspense fallback={<SummaryDashboardSkeleton />}>
+        <StudentSummaryDashboard
+          summary={summary.data}
+          loading={summary.isLoading}
+        />
+      </Suspense>
 
       <div className="mb-4 flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[220px]">
