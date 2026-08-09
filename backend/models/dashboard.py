@@ -1,13 +1,27 @@
 """Response models for the staff-facing student profile dashboard."""
 
 from datetime import date as date_type
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel
 
 from models.attendance import AttendanceResponse
 from models.digital_library import DigitalLibraryResponse
 from models.students import StudentResponse
+
+
+class PresentItem(BaseModel):
+    """One student currently in the building: either checked in for
+    attendance or logged into a digital library station. Joins the
+    session record with the student's name so the front desk list is
+    readable without a second lookup."""
+
+    student_id: int
+    name: str
+    activity: Literal["attendance", "digital_library"]
+    date: date_type
+    time: Optional[str] = None
+    detail: Optional[str] = None
 
 
 class OfflineLibraryProfileItem(BaseModel):

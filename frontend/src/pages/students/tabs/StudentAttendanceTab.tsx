@@ -10,8 +10,9 @@ import { extractErrorMessage } from "../../../api/client";
 import { formatDate, formatDuration } from "../../../lib/format";
 
 export function StudentAttendanceTab({ studentId }: { studentId: number }) {
-  const { data, isLoading, isError, error } = useAttendanceList({
+  const { data: page, isLoading, isError, error } = useAttendanceList({
     student_id: studentId,
+    limit: 100,
   });
 
   const [now, setNow] = useState(new Date());
@@ -20,15 +21,14 @@ export function StudentAttendanceTab({ studentId }: { studentId: number }) {
     return () => window.clearInterval(timer);
   }, []);
 
+  const data = page?.items;
+
   if (isLoading) return <Spinner label="Loading attendance…" />;
   if (isError) return <ErrorBanner message={extractErrorMessage(error)} />;
   if (!data || data.length === 0)
     return <EmptyState title="No attendance recorded yet" />;
 
-  // The backend already orders newest-first and returns the full history
-  // unbounded — cap what we render to keep this tab readable.
-  const recent = data.slice(0, 100);
-
+  // The backend already orders newest-first and caps this at 100 rows.
   return (
     <Table>
       <Thead>
@@ -39,7 +39,7 @@ export function StudentAttendanceTab({ studentId }: { studentId: number }) {
         <Th>Duration</Th>
       </Thead>
       <tbody>
-        {recent.map((a) => {
+        {data.map((a) => {
           const checkInDate = a.check_in ? new Date(`${a.date}T${a.check_in}`) : null;
           const checkOutDate = a.check_out ? new Date(`${a.date}T${a.check_out}`) : null;
           const effectiveCheckOutDate = checkOutDate ?? now;

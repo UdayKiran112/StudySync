@@ -18,10 +18,12 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
+  Search as SearchIcon,
 } from "lucide-react";
 import { useSettings } from "../context/SettingsContext";
 import { useRealtimeEvents, type RenewalEvent } from "../api/realtime";
 import { RenewalDialog } from "./RenewalDialog";
+import { CommandPalette } from "./ui/CommandPalette";
 import clsx from "clsx";
 
 const NAV_SECTIONS = [
@@ -88,6 +90,39 @@ export function Layout() {
   const location = useLocation();
   const [open, setOpen] = useState(getInitialOpen);
   const [renewals, setRenewals] = useState<RenewalEvent[]>([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Ctrl/Cmd+K and "/" open the quick-find palette from anywhere. "/" is
+  // skipped while typing so it doesn't hijack form fields.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const typing =
+        e.target instanceof HTMLElement &&
+        (e.target.tagName === "INPUT" ||
+          e.target.tagName === "TEXTAREA" ||
+          e.target.tagName === "SELECT" ||
+          e.target.isContentEditable);
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+        return;
+      }
+      if (e.key === "/" && !typing) {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Cross-page navigation should start from the top, not from wherever the
+  // previous page was scrolled (pagination clicks stay put — they don't
+  // change the route).
+  const { pathname } = location;
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
 
   // Live stream: punches written by the ZKTeco poller/ADMS push instantly
   // invalidate the attendance queries (so rows appear with no polling
@@ -141,6 +176,14 @@ export function Layout() {
           S
         </div>
         <p className="font-display text-sm font-semibold text-ink">StudySync</p>
+        <button
+          onClick={() => setPaletteOpen(true)}
+          className="ml-auto rounded-md p-1.5 text-ink hover:bg-paper-dim"
+          aria-label="Quick find"
+          title="Quick find (Ctrl+K)"
+        >
+          <SearchIcon size={18} />
+        </button>
       </div>
 
       {/* Backdrop — mobile only, shown while the drawer is open */}
@@ -184,6 +227,17 @@ export function Layout() {
         </div>
 
         <nav className="flex-1 overflow-y-auto scrollbar-thin px-3 py-4">
+          <button
+            onClick={() => setPaletteOpen(true)}
+            className="mb-5 flex w-full items-center gap-2.5 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-paper/70 transition-colors hover:bg-white/10 hover:text-white"
+            title="Quick find (Ctrl+K)"
+          >
+            <SearchIcon size={15} />
+            <span className="flex-1 text-left">Quick find…</span>
+            <kbd className="rounded border border-white/20 px-1.5 py-0.5 font-mono text-[10px]">
+              Ctrl K
+            </kbd>
+          </button>
           {NAV_SECTIONS.map((section) => (
             <div key={section.label} className="mb-5">
               <p className="mb-1.5 px-3 text-xs font-semibold uppercase tracking-widest text-paper/60">
@@ -285,6 +339,8 @@ export function Layout() {
           onClose={() => setRenewals((pending) => pending.slice(1))}
         />
       )}
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }

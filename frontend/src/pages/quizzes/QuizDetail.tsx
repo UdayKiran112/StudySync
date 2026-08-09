@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { ArrowLeft, Plus, Pencil, Trash2 } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Trash2, ListPlus } from "lucide-react";
 import { Spinner, ErrorBanner, EmptyState, PageHeader } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Button } from "../../components/ui/Button";
@@ -9,18 +10,21 @@ import { Field, Input, Textarea } from "../../components/ui/Form";
 import { Modal } from "../../components/ui/Modal";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { StudentPicker } from "../../components/ui/StudentPicker";
+import { BulkScoresModal, type BulkSaveRow } from "../../components/ui/BulkScoresModal";
 import { useQuiz, useScoresForQuiz, useAddQuizScore, useUpdateQuizScore, useDeleteQuizScore } from "../../api/quizzes";
-import { extractErrorMessage } from "../../api/client";
+import { apiClient, extractErrorMessage } from "../../api/client";
 import { formatDate } from "../../lib/format";
 import type { Student, QuizScore } from "../../api/types";
 
 export function QuizDetail() {
   const { quizId } = useParams();
   const id = Number(quizId);
+  const qc = useQueryClient();
   const { data: quiz, isLoading, isError, error } = useQuiz(id);
   const scores = useScoresForQuiz(id);
 
   const [addOpen, setAddOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [editingScore, setEditingScore] = useState<QuizScore | undefined>(undefined);
   const [deletingScore, setDeletingScore] = useState<QuizScore | undefined>(undefined);
   const deleteMutation = useDeleteQuizScore(id);
@@ -34,6 +38,33 @@ export function QuizDetail() {
     } catch (err) {
       toast.error(extractErrorMessage(err));
     }
+  }
+
+  async function handleBulkSave(rows: BulkSaveRow[]) {
+    let added = 0;
+    let updated = 0;
+    for (const row of rows) {
+      if (row.recordId != null) {
+        await apiClient.patch(`/api/quiz-scores/${row.recordId}`, {
+          score: row.value,
+          remarks: row.remarks,
+        });
+        updated++;
+      } else {
+        await apiClient.post(`/api/quizzes/${id}/scores`, {
+          student_id: row.studentId,
+          score: row.value,
+          remarks: row.remarks,
+        });
+        added++;
+      }
+    }
+    qc.invalidateQueries({ queryKey: ["quiz-scores"] });
+    toast.success(
+      `Saved ${added + updated} score${added + updated === 1 ? "" : "s"}${
+        updated ? ` · ${updated} updated` : ""
+      }`,
+    );
   }
 
   if (isLoading) return <Spinner label="Loading quiz…" />;
@@ -50,9 +81,14 @@ export function QuizDetail() {
         title={quiz.quiz_name}
         description={`${formatDate(quiz.quiz_date)} · Max marks ${quiz.max_marks}`}
         action={
-          <Button variant="primary" onClick={() => setAddOpen(true)}>
-            <Plus size={16} /> Record score
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => setBulkOpen(true)}>
+              <ListPlus size={16} /> Bulk entry
+            </Button>
+            <Button variant="primary" onClick={() => setAddOpen(true)}>
+              <Plus size={16} /> Record score
+            </Button>
+          </div>
         }
       />
 
@@ -95,6 +131,22 @@ export function QuizDetail() {
       )}
 
       <AddScoreModal open={addOpen} onClose={() => setAddOpen(false)} quizId={id} maxMarks={quiz.max_marks} />
+      <BulkScoresModal
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        title="Bulk scores entry"
+        label="Score"
+        maxMarks={quiz.max_marks}
+        existing={
+          scores.data?.map((s) => ({
+            student_id: s.student_id,
+            recordId: s.score_id,
+            value: s.score,
+            remarks: s.remarks ?? null,
+          })) ?? []
+        }
+        onSave={handleBulkSave}
+      />
       {editingScore && (
         <EditScoreModal
           open={Boolean(editingScore)}

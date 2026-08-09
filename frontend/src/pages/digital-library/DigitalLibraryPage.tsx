@@ -3,10 +3,10 @@ import toast from "react-hot-toast";
 import { Trash2, LogIn, LogOut } from "lucide-react";
 import {
   PageHeader,
-  Spinner,
   ErrorBanner,
   EmptyState,
   Pagination,
+  TableSkeletonRows,
 } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Field, Input, Select, Textarea } from "../../components/ui/Form";
@@ -106,6 +106,7 @@ export function DigitalLibraryPage() {
   const [deleting, setDeleting] = useState<DigitalLibraryUsage | undefined>(
     undefined,
   );
+  const [deleteError, setDeleteError] = useState("");
 
   const checkIn = useDigitalCheckIn();
   const checkOut = useDigitalCheckOut();
@@ -205,11 +206,13 @@ export function DigitalLibraryPage() {
 
   async function handleDelete() {
     if (!deleting) return;
+    setDeleteError("");
     try {
       await deleteMutation.mutateAsync(deleting.usage_id);
       toast.success("Session removed");
       setDeleting(undefined);
     } catch (err) {
+      setDeleteError(extractErrorMessage(err));
       toast.error(extractErrorMessage(err));
     }
   }
@@ -267,7 +270,7 @@ export function DigitalLibraryPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <Field label="Student" required>
-            <StudentPicker value={student} onChange={setStudent} />
+            <StudentPicker value={student} onChange={setStudent} autoFocus />
           </Field>
 
           {mode === "check-in" && (
@@ -413,7 +416,21 @@ export function DigitalLibraryPage() {
         }
       />
 
-      {isLoading && <Spinner label="Loading sessions…" />}
+      {isLoading && (
+        <Table>
+          <Thead>
+            <Th>Student</Th>
+            <Th>Date</Th>
+            <Th>Platform</Th>
+            <Th>Account</Th>
+            <Th>In</Th>
+            <Th>Out</Th>
+            <Th>Duration</Th>
+            <Th className="text-right">Actions</Th>
+          </Thead>
+          <TableSkeletonRows rows={6} columns={8} />
+        </Table>
+      )}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
       {data && data.length === 0 && (
         <EmptyState title="No digital library sessions match these filters" />
@@ -496,7 +513,10 @@ export function DigitalLibraryPage() {
                         size="sm"
                         variant="ghost"
                         aria-label="Delete digital library session"
-                        onClick={() => setDeleting(u)}
+                        onClick={() => {
+                          setDeleteError("");
+                          setDeleting(u);
+                        }}
                       >
                         <Trash2 size={14} className="text-rust" />
                       </Button>
@@ -517,11 +537,15 @@ export function DigitalLibraryPage() {
 
       <ConfirmDialog
         open={Boolean(deleting)}
-        onClose={() => setDeleting(undefined)}
+        onClose={() => {
+          setDeleting(undefined);
+          setDeleteError("");
+        }}
         onConfirm={handleDelete}
         title="Delete session"
         message="This removes the digital library session permanently."
         pending={deleteMutation.isPending}
+        error={deleteError || undefined}
       />
     </div>
   );

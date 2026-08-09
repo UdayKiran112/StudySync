@@ -9,10 +9,13 @@ export function StudentPicker({
   value,
   onChange,
   activeOnly = true,
+  autoFocus = false,
 }: {
   value: Student | null;
   onChange: (student: Student | null) => void;
   activeOnly?: boolean;
+  /** Focus the search field on mount so staff can start typing immediately. */
+  autoFocus?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -79,6 +82,7 @@ export function StudentPicker({
           className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-light"
         />
         <input
+          autoFocus={autoFocus}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);

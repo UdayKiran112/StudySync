@@ -19,7 +19,7 @@ expressible as a pure SQL generated-column formula.
 """
 
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, Literal
+from typing import List, Optional, Literal
 from datetime import date as date_type
 from models.common import RequestModel
 from models.validators import validate_hhmm
@@ -90,7 +90,7 @@ class AttendanceResponse(BaseModel):
 class AttendanceUpdate(RequestModel):
     """
     Manual correction of a mistaken entry (e.g. staff typo'd a time).
-    All fields optional — only supplied fields are changed.
+    All fields optional -- only supplied fields are changed.
 
     session and duration_minutes are NOT accepted here -- they are
     recomputed automatically by the router whenever a correction changes
@@ -110,3 +110,12 @@ class AttendanceUpdate(RequestModel):
     @classmethod
     def validate_check_out(cls, value: Optional[str]) -> Optional[str]:
         return validate_hhmm(value)
+
+
+class AttendancePage(BaseModel):
+    """A single page of the paginated attendance list, plus the total
+    number of records matching the filters (so the UI can show accurate
+    counts and page navigation without fetching the full history)."""
+
+    items: List[AttendanceResponse]
+    total: int

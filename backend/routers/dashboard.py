@@ -29,7 +29,7 @@ from reportlab.platypus import (
 )
 
 from database import get_db_dependency
-from models.dashboard import StudentDashboardResponse
+from models.dashboard import PresentItem, StudentDashboardResponse
 from security import require_api_key
 
 logger = logging.getLogger("studysync.dashboard")
@@ -1012,6 +1012,60 @@ def _render_report_pdf(data: dict) -> bytes:
 
     doc.build(story)
     return buffer.getvalue()
+
+
+@router.get("/currently-present", response_model=List[PresentItem])
+def currently_present(db: sqlite3.Connection = Depends(get_db_dependency)):
+    """
+    Who is in the building right now: students with an open attendance
+    session (checked in, not yet out) plus students on a digital library
+    station (checked in, not yet out). Student names are joined in so the
+    front-desk dashboard list is readable without a second lookup.
+
+    An attendance session left open overnight is closed automatically on
+    that student's next check-in, so in practice these are today's.
+    """
+    items: List[dict] = []
+
+    attendance_rows = db.execute(
+        """SELECT a.student_id, s.name, a.date, a.check_in, a.session
+           FROM attendance a
+           JOIN students s ON s.student_id = a.student_id
+           WHERE a.check_out IS NULL
+           ORDER BY a.check_in""",
+    ).fetchall()
+    for row in attendance_rows:
+        items.append(
+            {
+                "student_id": row["student_id"],
+                "name": row["name"],
+                "activity": "attendance",
+                "date": row["date"],
+                "time": row["check_in"],
+                "detail": row["session"],
+            }
+        )
+
+    digital_rows = db.execute(
+        """SELECT d.student_id, s.name, d.date, d.in_time, d.account_type
+           FROM digital_library_usage d
+           JOIN students s ON s.student_id = d.student_id
+           WHERE d.out_time IS NULL
+           ORDER BY d.in_time""",
+    ).fetchall()
+    for row in digital_rows:
+        items.append(
+            {
+                "student_id": row["student_id"],
+                "name": row["name"],
+                "activity": "digital_library",
+                "date": row["date"],
+                "time": row["in_time"],
+                "detail": row["account_type"],
+            }
+        )
+
+    return items
 
 
 @router.get("/students/{student_id}", response_model=StudentDashboardResponse)

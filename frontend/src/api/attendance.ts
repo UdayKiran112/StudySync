@@ -10,16 +10,23 @@ import type {
 /**
  * Matches backend/routers/attendance.py's list_attendance signature.
  *
- * Note: the backend takes a date RANGE (date_from / date_to), not a
- * single `date_` — and it no longer supports limit/offset at all, so
- * this always returns every matching record. Any pagination has to
- * happen client-side (see AttendancePage).
+ * The backend takes a date RANGE (date_from / date_to) and paginates
+ * server-side with limit/offset, returning { items, total } so a page
+ * never has to download the full (growing) history. Ordering is
+ * newest date first, then session, then check-in time.
  */
 export interface AttendanceListParams {
   student_id?: number;
   date_from?: string;
   date_to?: string;
   session?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface AttendancePage {
+  items: Attendance[];
+  total: number;
 }
 
 const keys = {
@@ -32,7 +39,7 @@ export function useAttendanceList(params: AttendanceListParams) {
   return useQuery({
     queryKey: keys.list(params),
     queryFn: async () => {
-      const { data } = await apiClient.get<Attendance[]>("/api/attendance", {
+      const { data } = await apiClient.get<AttendancePage>("/api/attendance", {
         params,
       });
       return data;

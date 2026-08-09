@@ -1,13 +1,13 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Plus, Search, Pencil, Trash2 } from "lucide-react";
 import {
   PageHeader,
-  Spinner,
   ErrorBanner,
   EmptyState,
   Pagination,
+  TableSkeletonRows,
   SummaryDashboardSkeleton,
 } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
@@ -49,6 +49,7 @@ export function SubscriptionsPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Subscription | undefined>(undefined);
   const [deleting, setDeleting] = useState<Subscription | undefined>(undefined);
+  const [deleteError, setDeleteError] = useState("");
 
   const debouncedSearch = useDebouncedValue(search);
   const viewFilters =
@@ -76,14 +77,21 @@ export function SubscriptionsPage() {
 
   async function handleDelete() {
     if (!deleting) return;
+    setDeleteError("");
     try {
       await deleteMutation.mutateAsync(deleting.subscription_id);
       toast.success(`Removed ${deleting.name}`);
       setDeleting(undefined);
     } catch (err) {
+      setDeleteError(extractErrorMessage(err));
       toast.error(extractErrorMessage(err));
     }
   }
+
+  // If the last item on a page was deleted, fall back to the previous page.
+  useEffect(() => {
+    if (data && data.length === 0 && offset > 0) setOffset(0);
+  }, [data, offset]);
 
   return (
     <div>
@@ -143,10 +151,37 @@ export function SubscriptionsPage() {
         </Select>
       </div>
 
-      {isLoading && <Spinner label="Loading subscriptions…" />}
+      {isLoading && (
+        <Table>
+          <Thead>
+            <Th>Subscription</Th>
+            <Th>Type</Th>
+            <Th>Cost</Th>
+            <Th>Validity</Th>
+            <Th>Valid until</Th>
+            <Th>Status</Th>
+            <Th className="text-right">Actions</Th>
+          </Thead>
+          <TableSkeletonRows rows={6} columns={7} />
+        </Table>
+      )}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
       {data && data.length === 0 && (
-        <EmptyState title="No subscriptions found" />
+        <EmptyState
+          title="No subscriptions found"
+          description="Try a different search, or add the first subscription."
+          action={
+            <Button
+              variant="primary"
+              onClick={() => {
+                setEditing(undefined);
+                setFormOpen(true);
+              }}
+            >
+              <Plus size={16} /> Add subscription
+            </Button>
+          }
+        />
       )}
 
       {data && data.length > 0 && (
@@ -200,7 +235,10 @@ export function SubscriptionsPage() {
                         size="sm"
                         variant="ghost"
                         aria-label="Delete subscription"
-                        onClick={() => setDeleting(s)}
+                        onClick={() => {
+                          setDeleteError("");
+                          setDeleting(s);
+                        }}
                       >
                         <Trash2 size={14} className="text-rust" />
                       </Button>
@@ -220,6 +258,7 @@ export function SubscriptionsPage() {
       )}
 
       <SubscriptionFormModal
+        key={editing?.subscription_id ?? "new"}
         open={formOpen}
         onClose={() => setFormOpen(false)}
         subscription={editing}
@@ -227,11 +266,15 @@ export function SubscriptionsPage() {
 
       <ConfirmDialog
         open={Boolean(deleting)}
-        onClose={() => setDeleting(undefined)}
+        onClose={() => {
+          setDeleting(undefined);
+          setDeleteError("");
+        }}
         onConfirm={handleDelete}
         title="Delete subscription"
         message={`Delete ${deleting?.name}? This fails if any digital library sessions reference it.`}
         pending={deleteMutation.isPending}
+        error={deleteError || undefined}
       />
     </div>
   );

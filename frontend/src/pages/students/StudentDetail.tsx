@@ -13,17 +13,20 @@ import {
   Target,
   Compass,
   RefreshCw,
+  Pencil,
 } from "lucide-react";
 import { Spinner, ErrorBanner } from "../../components/ui/Feedback";
 import { StatusTab, studentStatusTone, IdTab } from "../../components/ui/Tabs";
+import { Button } from "../../components/ui/Button";
 import { useStudent } from "../../api/students";
 import { extractErrorMessage } from "../../api/client";
-import { formatDate } from "../../lib/format";
+import { formatDate, daysUntil } from "../../lib/format";
 import { StudentAttendanceTab } from "./tabs/StudentAttendanceTab";
 import { StudentDigitalLibraryTab } from "./tabs/StudentDigitalLibraryTab";
 import { StudentOfflineLibraryTab } from "./tabs/StudentOfflineLibraryTab";
 import { StudentExamsTab } from "./tabs/StudentExamsTab";
 import { StudentQuizzesTab } from "./tabs/StudentQuizzesTab";
+import { StudentFormModal } from "./StudentFormModal";
 import clsx from "clsx";
 
 const TABS = [
@@ -41,10 +44,13 @@ export function StudentDetail() {
   const id = Number(studentId);
   const { data: student, isLoading, isError, error } = useStudent(id);
   const [tab, setTab] = useState<TabKey>("attendance");
+  const [editOpen, setEditOpen] = useState(false);
 
   if (isLoading) return <Spinner label="Loading student…" />;
   if (isError || !student)
     return <ErrorBanner message={extractErrorMessage(error)} />;
+
+  const expiryDays = student.valid_until ? daysUntil(student.valid_until) : null;
 
   return (
     <div>
@@ -79,6 +85,13 @@ export function StudentDetail() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setEditOpen(true)}
+            >
+              <Pencil size={14} /> Edit
+            </Button>
             <Link
               to={`/analytics/${student.student_id}`}
               className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-ink hover:bg-paper-dim"
@@ -90,6 +103,29 @@ export function StudentDetail() {
             </StatusTab>
           </div>
         </div>
+
+        {student.status === "Active" &&
+          expiryDays != null &&
+          expiryDays <= 30 && (
+            <div className="mt-4 flex flex-wrap items-center gap-2 rounded-md border border-brass/40 bg-brass/10 px-3 py-2 text-sm text-ink">
+              <RefreshCw size={14} className="text-brass" />
+              <span>
+                Membership {expiryDays < 0 ? "expired" : "expires"} in{" "}
+                {expiryDays < 0
+                  ? `${Math.abs(expiryDays)} day${Math.abs(expiryDays) === 1 ? "" : "s"}`
+                  : `${expiryDays} day${expiryDays === 1 ? "" : "s"}`}
+                {" · "}
+                {formatDate(student.valid_until)}
+              </span>
+              <span className="text-xs text-slate">
+                Renew from the{" "}
+                <Link to="/students" className="font-medium text-brass hover:underline">
+                  students list
+                </Link>{" "}
+                to keep the ID active.
+              </span>
+            </div>
+          )}
 
         <div className="mt-5 grid grid-cols-1 gap-3 border-t border-border pt-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <InfoItem icon={Phone} label="Phone" value={student.phone} />
@@ -141,6 +177,13 @@ export function StudentDetail() {
       {tab === "offline" && <StudentOfflineLibraryTab studentId={id} />}
       {tab === "exams" && <StudentExamsTab studentId={id} />}
       {tab === "quizzes" && <StudentQuizzesTab studentId={id} />}
+
+      <StudentFormModal
+        key={student.student_id}
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        student={student}
+      />
 
       <p className="mt-6 text-xs text-slate-light">
         Looking for exams or quizzes catalog management? See{" "}

@@ -83,3 +83,10 @@ export function nowHHMM(date: Date = new Date()): string {
   const { hour, minute } = istParts(date);
   return `${hour}:${minute}`;
 }
+
+/** Whole days from today (IST) until the given YYYY-MM-DD date. Negative when past. */
+export function daysUntil(dateIso: string): number {
+  const target = new Date(`${dateIso}T00:00:00`);
+  const today = new Date(`${todayIso()}T00:00:00`);
+  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+}

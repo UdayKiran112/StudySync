@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { SubscriptionSummary } from "../../api/types";
 import { AnalyticsStatCard } from "../analytics/components/AnalyticsStatCard";
+import { SummaryDashboardSkeleton } from "../../components/ui/Feedback";
 
 const colours = ["#1e2a38", "#a9782f", "#5b7c71", "#a35d4e"];
 
@@ -30,6 +31,7 @@ export function SubscriptionSummaryDashboard({
   summary?: SubscriptionSummary;
   loading: boolean;
 }) {
+  if (loading) return <SummaryDashboardSkeleton cards={7} wide />;
   return (
     <section className="mb-6 space-y-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -38,39 +40,35 @@ export function SubscriptionSummaryDashboard({
           to="/subscriptions"
           icon={LibraryBig}
           label="Total subscriptions"
-          value={loading ? "…" : (summary?.total ?? 0)}
+          value={summary?.total ?? 0}
         />
         <AnalyticsStatCard
           className="min-h-32 p-5"
           to="/subscriptions?view=active"
           icon={CircleCheck}
           label="Active subscriptions"
-          value={loading ? "…" : (summary?.active ?? 0)}
+          value={summary?.active ?? 0}
         />
         <AnalyticsStatCard
           className="min-h-32 p-5"
           to="/subscriptions?view=expired"
           icon={CircleX}
           label="Expired subscriptions"
-          value={loading ? "…" : (summary?.expired ?? 0)}
+          value={summary?.expired ?? 0}
         />
         <AnalyticsStatCard
           className="min-h-32 p-5"
           to="/subscriptions?view=expiring"
           icon={CalendarClock}
           label="Expiring in 30 days"
-          value={loading ? "…" : (summary?.expiring ?? 0)}
+          value={summary?.expiring ?? 0}
         />
         <AnalyticsStatCard
           className="min-h-32 p-5"
           to="/subscriptions"
           icon={BadgeIndianRupee}
           label="Catalog cost"
-          value={
-            loading
-              ? "…"
-              : `₹${(summary?.total_cost ?? 0).toLocaleString("en-IN")}`
-          }
+          value={`₹${(summary?.total_cost ?? 0).toLocaleString("en-IN")}`}
         />
         <AnalyticsStatCard
           className="min-h-32 p-5"
@@ -78,11 +76,9 @@ export function SubscriptionSummaryDashboard({
           icon={CalendarDays}
           label="Average validity"
           value={
-            loading
-              ? "…"
-              : summary?.average_validity_days == null
-                ? "—"
-                : `${Math.round(summary.average_validity_days)} days`
+            summary?.average_validity_days == null
+              ? "—"
+              : `${Math.round(summary.average_validity_days)} days`
           }
         />
         <AnalyticsStatCard
@@ -90,7 +86,7 @@ export function SubscriptionSummaryDashboard({
           to="/subscriptions?view=used-today"
           icon={MonitorCheck}
           label="Used today"
-          value={loading ? "…" : (summary?.used_today ?? 0)}
+          value={summary?.used_today ?? 0}
         />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">

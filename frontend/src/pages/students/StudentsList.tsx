@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Plus, Search, Pencil, Trash2, RefreshCw } from "lucide-react";
@@ -47,6 +47,7 @@ export function StudentsList() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Student | undefined>(undefined);
   const [deleting, setDeleting] = useState<Student | undefined>(undefined);
+  const [deleteError, setDeleteError] = useState("");
   const [renewOpen, setRenewOpen] = useState(false);
   const [renewing, setRenewing] = useState<Student | null>(null);
 
@@ -79,11 +80,13 @@ export function StudentsList() {
 
   async function handleDelete() {
     if (!deleting) return;
+    setDeleteError("");
     try {
       await deleteMutation.mutateAsync(deleting.student_id);
       toast.success(`Removed ${deleting.name}`);
       setDeleting(undefined);
     } catch (err) {
+      setDeleteError(extractErrorMessage(err));
       toast.error(extractErrorMessage(err));
     }
   }
@@ -98,6 +101,12 @@ export function StudentsList() {
       toast.error(extractErrorMessage(err));
     }
   }
+
+  // If the last item on a page was deleted, fall back to the previous page
+  // instead of leaving the user staring at an empty filtered list.
+  useEffect(() => {
+    if (data && data.length === 0 && offset > 0) setOffset(0);
+  }, [data, offset]);
 
   return (
     <div>
@@ -243,7 +252,10 @@ export function StudentsList() {
                         size="sm"
                         variant="ghost"
                         aria-label="Delete student"
-                        onClick={() => setDeleting(s)}
+                        onClick={() => {
+                          setDeleteError("");
+                          setDeleting(s);
+                        }}
                       >
                         <Trash2 size={14} className="text-rust" />
                       </Button>
@@ -263,6 +275,7 @@ export function StudentsList() {
       )}
 
       <StudentFormModal
+        key={editing?.student_id ?? "new"}
         open={formOpen}
         onClose={() => setFormOpen(false)}
         student={editing}
@@ -336,11 +349,15 @@ export function StudentsList() {
 
       <ConfirmDialog
         open={Boolean(deleting)}
-        onClose={() => setDeleting(undefined)}
+        onClose={() => {
+          setDeleting(undefined);
+          setDeleteError("");
+        }}
         onConfirm={handleDelete}
         title="Delete student"
         message={`Delete ${deleting?.name}? This only works if the student has no attendance, library, exam, or quiz history — otherwise set status to Inactive instead.`}
         pending={deleteMutation.isPending}
+        error={deleteError || undefined}
       />
     </div>
   );

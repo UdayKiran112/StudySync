@@ -496,3 +496,12 @@ export interface StudentDashboardResponse {
   score_trend: AssessmentAttempt[];
   analytics: PerformanceAnalytics;
 }
+
+export interface PresentItem {
+  student_id: number;
+  name: string;
+  activity: "attendance" | "digital_library";
+  date: string;
+  time: string | null;
+  detail: string | null;
+}

@@ -26,8 +26,8 @@ mirrors the same open-session pattern already used for digital_library.
 import logging
 import sqlite3
 from datetime import date, datetime
-from fastapi import APIRouter, Depends, HTTPException
-from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Optional
 
 from database import get_db_dependency
 from models.attendance import (
@@ -35,6 +35,7 @@ from models.attendance import (
     AttendanceCheckOut,
     AttendanceUpdate,
     AttendanceResponse,
+    AttendancePage,
 )
 from routers.students import auto_renew_if_expired
 from security import require_api_key
@@ -385,17 +386,24 @@ def check_out(
     return dict(row)
 
 
-@router.get("", response_model=List[AttendanceResponse])
+@router.get("", response_model=AttendancePage)
 def list_attendance(
     student_id: Optional[int] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     session: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     """
     List attendance records, optionally filtered by student, date range,
     and/or session ("Morning" / "Afternoon" / "Full Day").
+
+    Paginated server-side via limit/offset so the front-end never has to
+    download the full (growing) history: returns one page plus the total
+    count of matching records. Ordering is newest date first, then
+    session, then check-in time.
     """
     query = "SELECT * FROM attendance WHERE 1=1"
     params = []
@@ -416,10 +424,11 @@ def list_attendance(
         query += " AND session = ?"
         params.append(session)
 
-    query += " ORDER BY date DESC, session"
+    total = db.execute(f"SELECT COUNT(*) FROM ({query})", params).fetchone()[0]
 
-    rows = db.execute(query, params).fetchall()
-    return [dict(row) for row in rows]
+    query += " ORDER BY date DESC, session, check_in"
+    rows = db.execute(query + " LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
+    return {"items": [dict(row) for row in rows], "total": total}
 
 
 @router.get("/{attendance_id}", response_model=AttendanceResponse)

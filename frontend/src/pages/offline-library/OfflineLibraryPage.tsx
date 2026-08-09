@@ -3,10 +3,10 @@ import toast from "react-hot-toast";
 import { Trash2, BookOpenCheck, CircleAlert } from "lucide-react";
 import {
   PageHeader,
-  Spinner,
   ErrorBanner,
   EmptyState,
   Pagination,
+  TableSkeletonRows,
 } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Field, Input } from "../../components/ui/Form";
@@ -77,6 +77,7 @@ export function OfflineLibraryPage() {
   const [deleting, setDeleting] = useState<OfflineLibraryUsage | undefined>(
     undefined,
   );
+  const [deleteError, setDeleteError] = useState("");
 
   const createMutation = useCreateOfflineUsage();
   const deleteMutation = useDeleteOfflineUsage();
@@ -124,11 +125,13 @@ export function OfflineLibraryPage() {
 
   async function handleDelete() {
     if (!deleting) return;
+    setDeleteError("");
     try {
       await deleteMutation.mutateAsync(deleting.usage_id);
       toast.success("Visit removed");
       setDeleting(undefined);
     } catch (err) {
+      setDeleteError(extractErrorMessage(err));
       toast.error(extractErrorMessage(err));
     }
   }
@@ -232,7 +235,17 @@ export function OfflineLibraryPage() {
         }
       />
 
-      {isLoading && <Spinner label="Loading visits…" />}
+      {isLoading && (
+        <Table>
+          <Thead>
+            <Th>Student</Th>
+            <Th>Date</Th>
+            <Th>Book</Th>
+            <Th className="text-right">Actions</Th>
+          </Thead>
+          <TableSkeletonRows rows={6} columns={4} />
+        </Table>
+      )}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
       {data && data.length === 0 && (
         <EmptyState title="No offline library visits match these filters" />
@@ -265,14 +278,17 @@ export function OfflineLibraryPage() {
                     )}
                   </Td>
                   <Td className="text-right">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      aria-label="Delete offline library visit"
-                      onClick={() => setDeleting(u)}
-                    >
-                      <Trash2 size={14} className="text-rust" />
-                    </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label="Delete offline library visit"
+                        onClick={() => {
+                          setDeleteError("");
+                          setDeleting(u);
+                        }}
+                      >
+                        <Trash2 size={14} className="text-rust" />
+                      </Button>
                   </Td>
                 </Tr>
               ))}
@@ -289,11 +305,15 @@ export function OfflineLibraryPage() {
 
       <ConfirmDialog
         open={Boolean(deleting)}
-        onClose={() => setDeleting(undefined)}
+        onClose={() => {
+          setDeleting(undefined);
+          setDeleteError("");
+        }}
         onConfirm={handleDelete}
         title="Delete visit"
         message="This removes the offline library visit permanently."
         pending={deleteMutation.isPending}
+        error={deleteError || undefined}
       />
     </div>
   );

@@ -101,7 +101,7 @@ class ApiModuleTests(unittest.TestCase):
         self.assertEqual(after["status"], "Active")
         self.assertGreaterEqual(after["renewal_count"], 2)
         self.assertGreaterEqual(after["valid_until"], today)
-        self.assertEqual(len(self.request("GET", "/api/attendance?student_id=9002").json()), 1)
+        self.assertEqual(len(self.request("GET", "/api/attendance?student_id=9002").json()["items"]), 1)
 
         # A student who is already valid is left untouched (idempotent).
         self.assertEqual(self.request("GET", "/api/students/9001").json()["renewal_count"], 0)
@@ -143,6 +143,29 @@ class ApiModuleTests(unittest.TestCase):
         response = self.request("GET", "/api/dashboard/students/9001")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["student"]["student_id"], 9001)
+
+    def test_09b_currently_present_lists_open_sessions_with_names(self):
+        # 9001 has an open attendance session from test_04b; open a digital
+        # library session too, then confirm the dashboard list joins both
+        # with names.
+        self.assertEqual(
+            self.request(
+                "POST", "/api/digital-library/check-in",
+                json={"student_id": 9001, "date": "2026-06-07", "in_time": "10:15",
+                      "account_type": "Library Subscription",
+                      "subscription_id": "TEST-SUB", "platform_name": "Test Research"},
+            ).status_code,
+            201,
+        )
+        response = self.request("GET", "/api/dashboard/currently-present")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        ids = {(item["student_id"], item["activity"]) for item in body}
+        self.assertIn((9001, "attendance"), ids)
+        self.assertIn((9001, "digital_library"), ids)
+        for item in body:
+            self.assertIn("name", item)
+            self.assertTrue(item["name"])
 
     def test_10_coaching_classes_module(self):
         instructor = self.request("POST", "/api/coaching-classes/instructors", json={"name": "Test Instructor"})

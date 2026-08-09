@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Plus, Search, Pencil, Trash2 } from "lucide-react";
 import {
   PageHeader,
-  Spinner,
   ErrorBanner,
   EmptyState,
   Pagination,
+  TableSkeletonRows,
 } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Input } from "../../components/ui/Form";
@@ -34,6 +34,7 @@ export function BooksPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Book | undefined>(undefined);
   const [deleting, setDeleting] = useState<Book | undefined>(undefined);
+  const [deleteError, setDeleteError] = useState("");
 
   const debouncedSearch = useDebouncedValue(search);
   const { data, isLoading, isError, error } = useBooks({
@@ -45,14 +46,21 @@ export function BooksPage() {
 
   async function handleDelete() {
     if (!deleting) return;
+    setDeleteError("");
     try {
       await deleteMutation.mutateAsync(deleting.book_id);
       toast.success(`Removed "${deleting.title}"`);
       setDeleting(undefined);
     } catch (err) {
+      setDeleteError(extractErrorMessage(err));
       toast.error(extractErrorMessage(err));
     }
   }
+
+  // If the last item on a page was deleted, fall back to the previous page.
+  useEffect(() => {
+    if (data && data.length === 0 && offset > 0) setOffset(0);
+  }, [data, offset]);
 
   return (
     <div>
@@ -90,9 +98,36 @@ export function BooksPage() {
         />
       </div>
 
-      {isLoading && <Spinner label="Loading books…" />}
+      {isLoading && (
+        <Table>
+          <Thead>
+            <Th>Book</Th>
+            <Th>Category</Th>
+            <Th>Author</Th>
+            <Th>Added</Th>
+            <Th className="text-right">Actions</Th>
+          </Thead>
+          <TableSkeletonRows rows={6} columns={5} />
+        </Table>
+      )}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
-      {data && data.length === 0 && <EmptyState title="No books found" />}
+      {data && data.length === 0 && (
+        <EmptyState
+          title="No books found"
+          description="Try a different search, or add the first book to the catalog."
+          action={
+            <Button
+              variant="primary"
+              onClick={() => {
+                setEditing(undefined);
+                setFormOpen(true);
+              }}
+            >
+              <Plus size={16} /> Add book
+            </Button>
+          }
+        />
+      )}
 
       {data && data.length > 0 && (
         <>
@@ -133,7 +168,10 @@ export function BooksPage() {
                         size="sm"
                         variant="ghost"
                         aria-label="Delete book"
-                        onClick={() => setDeleting(b)}
+                        onClick={() => {
+                          setDeleteError("");
+                          setDeleting(b);
+                        }}
                       >
                         <Trash2 size={14} className="text-rust" />
                       </Button>
@@ -153,6 +191,7 @@ export function BooksPage() {
       )}
 
       <BookFormModal
+        key={editing?.book_id ?? "new"}
         open={formOpen}
         onClose={() => setFormOpen(false)}
         book={editing}
@@ -160,11 +199,15 @@ export function BooksPage() {
 
       <ConfirmDialog
         open={Boolean(deleting)}
-        onClose={() => setDeleting(undefined)}
+        onClose={() => {
+          setDeleting(undefined);
+          setDeleteError("");
+        }}
         onConfirm={handleDelete}
         title="Delete book"
         message={`Delete "${deleting?.title}"? This fails if the book has offline-library history attached.`}
         pending={deleteMutation.isPending}
+        error={deleteError || undefined}
       />
     </div>
   );

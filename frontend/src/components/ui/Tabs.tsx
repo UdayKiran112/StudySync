@@ -41,6 +41,12 @@ export function studentStatusTone(status: string): StatusTone {
   return status === "Active" ? "forest" : "slate";
 }
 
+export function sessionTone(session: string): StatusTone {
+  if (session === "Full Day") return "forest";
+  if (session === "Morning") return "brass";
+  return "slate";
+}
+
 export function subscriptionStatusTone(status: string): StatusTone {
   return status === "Active" ? "forest" : "rust";
 }

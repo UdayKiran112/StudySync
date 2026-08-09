@@ -5,7 +5,7 @@ import { CalendarPlus } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Field, Input } from "../../components/ui/Form";
 import { Modal } from "../../components/ui/Modal";
-import { EmptyState, ErrorBanner, PageHeader, Spinner } from "../../components/ui/Feedback";
+import { EmptyState, ErrorBanner, PageHeader, CardSkeleton } from "../../components/ui/Feedback";
 import { formatDate, todayIso } from "../../lib/format";
 import { useOtherActivities, useCreateOtherActivity } from "../../api/other-activities";
 import { extractErrorMessage } from "../../api/client";
@@ -26,7 +26,13 @@ export function OtherActivitiesPage() {
           </Button>
         }
       />
-      {isLoading && <Spinner label="Loading activities…" />}
+      {isLoading && (
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <CardSkeleton key={i} className="min-h-36" />
+          ))}
+        </div>
+      )}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
       {!isLoading && !isError && !activities?.length && (
         <EmptyState title="No activities" description="Create a session to begin tracking attendance." />

@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import type { StudentSummary } from "../../api/types";
 import { AnalyticsStatCard } from "../analytics/components/AnalyticsStatCard";
+import { SummaryDashboardSkeleton } from "../../components/ui/Feedback";
 
 const colours = ["#1e2a38", "#a9782f", "#5b7c71", "#a35d4e"];
 
@@ -29,6 +30,7 @@ export function StudentSummaryDashboard({
   summary?: StudentSummary;
   loading: boolean;
 }) {
+  if (loading) return <SummaryDashboardSkeleton />;
   const registrations =
     summary?.monthly_registrations.map((item) => ({
       ...item,
@@ -42,12 +44,12 @@ export function StudentSummaryDashboard({
   return (
     <section className="mb-6 space-y-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <AnalyticsStatCard className={cardClass} to="/students" icon={Users} label="Total students" value={loading ? "…" : summary?.total ?? 0} />
-        <AnalyticsStatCard className={cardClass} to="/students?view=active" icon={UserCheck} label="Active students" value={loading ? "…" : summary?.active ?? 0} />
-        <AnalyticsStatCard className={cardClass} to="/students?view=inactive" icon={UserMinus} label="Inactive students" value={loading ? "…" : summary?.inactive ?? 0} />
-        <AnalyticsStatCard className={cardClass} to="/students?view=new" icon={CalendarPlus} label="New this month" value={loading ? "…" : summary?.new_this_month ?? 0} />
-        <AnalyticsStatCard className={cardClass} to="/students?view=expiring" icon={CircleUserRound} label="Expiring in 30 days" value={loading ? "…" : summary?.expiring ?? 0} />
-        <AnalyticsStatCard className={cardClass} to="/students?view=present" icon={UserRoundCheck} label="Present today" value={loading ? "…" : summary?.present_today ?? 0} />
+        <AnalyticsStatCard className={cardClass} to="/students" icon={Users} label="Total students" value={summary?.total ?? 0} />
+        <AnalyticsStatCard className={cardClass} to="/students?view=active" icon={UserCheck} label="Active students" value={summary?.active ?? 0} />
+        <AnalyticsStatCard className={cardClass} to="/students?view=inactive" icon={UserMinus} label="Inactive students" value={summary?.inactive ?? 0} />
+        <AnalyticsStatCard className={cardClass} to="/students?view=new" icon={CalendarPlus} label="New this month" value={summary?.new_this_month ?? 0} />
+        <AnalyticsStatCard className={cardClass} to="/students?view=expiring" icon={CircleUserRound} label="Expiring in 30 days" value={summary?.expiring ?? 0} />
+        <AnalyticsStatCard className={cardClass} to="/students?view=present" icon={UserRoundCheck} label="Present today" value={summary?.present_today ?? 0} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">

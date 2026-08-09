@@ -4,10 +4,10 @@ import toast from "react-hot-toast";
 import { Trash2, Pencil, LogIn, LogOut, RefreshCw, X } from "lucide-react";
 import {
   PageHeader,
-  Spinner,
   ErrorBanner,
   EmptyState,
   Pagination,
+  TableSkeletonRows,
 } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Field, Input, Select } from "../../components/ui/Form";
@@ -20,7 +20,7 @@ import {
 import { StudentPicker } from "../../components/ui/StudentPicker";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Modal } from "../../components/ui/Modal";
-import { StatusTab } from "../../components/ui/Tabs";
+import { StatusTab, sessionTone } from "../../components/ui/Tabs";
 import {
   useAttendanceList,
   useCheckIn,
@@ -41,12 +41,6 @@ import type { Student, Attendance } from "../../api/types";
 
 const LIMIT = 20;
 
-function sessionTone(session: string): "forest" | "brass" | "slate" {
-  if (session === "Full Day") return "forest";
-  if (session === "Morning") return "brass";
-  return "slate";
-}
-
 export function AttendancePage() {
   const [mode, setMode] = useState<"check-in" | "check-out">("check-in");
   const [student, setStudent] = useState<Student | null>(null);
@@ -61,6 +55,7 @@ export function AttendancePage() {
   const [offset, setOffset] = useState(0);
   const [editing, setEditing] = useState<Attendance | undefined>(undefined);
   const [deleting, setDeleting] = useState<Attendance | undefined>(undefined);
+  const [deleteError, setDeleteError] = useState("");
 
   const today = todayIso();
 
@@ -69,10 +64,9 @@ export function AttendancePage() {
   const deleteMutation = useDeleteAttendance();
   const zkSync = useZkSync();
 
-  // Backend takes a date range (date_from/date_to), not a single date, and
-  // no longer paginates this endpoint — it always returns everything
-  // matching the filter. A single-day filter is just date_from === date_to;
-  // paging happens client-side below with the full result set in hand.
+  // Backend takes a date range (date_from/date_to) and paginates
+  // server-side. Today's sheet is a single day, so a generous limit
+  // grabs the whole day in one page; paging matters on the records page.
 
   // Keep the check-in/out date & time fields following the live clock until
   // the staff member edits one manually. This ticks every second, but the
@@ -90,7 +84,7 @@ export function AttendancePage() {
   }, [dateTouched, timeTouched]);
 
   const {
-    data: allData,
+    data: todayPage,
     isLoading,
     isError,
     error,
@@ -98,7 +92,11 @@ export function AttendancePage() {
     date_from: today,
     date_to: today,
     session: filterSession || undefined,
+    limit: 500,
   });
+
+  const allData = todayPage?.items;
+  const totalToday = todayPage?.total ?? 0;
 
   const sortedTodayRecords = useMemo(
     () =>
@@ -113,7 +111,6 @@ export function AttendancePage() {
   );
 
   const data = sortedTodayRecords?.slice(offset, offset + LIMIT);
-  const totalToday = allData?.length ?? 0;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -156,11 +153,13 @@ export function AttendancePage() {
 
   async function handleDelete() {
     if (!deleting) return;
+    setDeleteError("");
     try {
       await deleteMutation.mutateAsync(deleting.attendance_id);
       toast.success("Attendance record removed");
       setDeleting(undefined);
     } catch (err) {
+      setDeleteError(extractErrorMessage(err));
       toast.error(extractErrorMessage(err));
     }
   }
@@ -252,7 +251,7 @@ export function AttendancePage() {
           }
         >
           <Field label="Student" required>
-            <StudentPicker value={student} onChange={setStudent} />
+            <StudentPicker value={student} onChange={setStudent} autoFocus />
           </Field>
           {mode === "check-in" && (
             <Field label="Date" required>
@@ -330,7 +329,20 @@ export function AttendancePage() {
         </div>
       </div>
 
-      {isLoading && <Spinner label="Loading attendance…" />}
+      {isLoading && (
+        <Table>
+          <Thead>
+            <Th>Student</Th>
+            <Th>Date</Th>
+            <Th>Session</Th>
+            <Th>Check-in</Th>
+            <Th>Check-out</Th>
+            <Th>Duration</Th>
+            <Th className="text-right">Actions</Th>
+          </Thead>
+          <TableSkeletonRows rows={6} columns={7} />
+        </Table>
+      )}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
       {data && data.length === 0 && (
         <EmptyState title="No attendance records match these filters" />
@@ -414,7 +426,10 @@ export function AttendancePage() {
                           size="sm"
                           variant="ghost"
                           aria-label="Delete attendance record"
-                          onClick={() => setDeleting(a)}
+                          onClick={() => {
+                            setDeleteError("");
+                            setDeleting(a);
+                          }}
                         >
                           <Trash2 size={14} className="text-rust" />
                         </Button>
@@ -429,7 +444,7 @@ export function AttendancePage() {
             offset={offset}
             limit={LIMIT}
             count={data.length}
-            total={allData?.length}
+            total={totalToday}
             onOffsetChange={setOffset}
           />
         </>
@@ -445,11 +460,15 @@ export function AttendancePage() {
 
       <ConfirmDialog
         open={Boolean(deleting)}
-        onClose={() => setDeleting(undefined)}
+        onClose={() => {
+          setDeleting(undefined);
+          setDeleteError("");
+        }}
         onConfirm={handleDelete}
         title="Delete attendance record"
         message="This removes the record permanently. Use Edit instead if you just need to fix a typo'd time."
         pending={deleteMutation.isPending}
+        error={deleteError || undefined}
       />
     </div>
   );

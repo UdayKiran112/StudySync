@@ -9,6 +9,7 @@ export function ConfirmDialog({
   message,
   confirmLabel = "Delete",
   pending,
+  error,
 }: {
   open: boolean;
   onClose: () => void;
@@ -17,10 +18,17 @@ export function ConfirmDialog({
   message: string;
   confirmLabel?: string;
   pending?: boolean;
+  /** Show a durable, in-dialog reason when the action failed. */
+  error?: string;
 }) {
   return (
     <Modal open={open} onClose={onClose} title={title} width="sm">
       <p className="text-sm text-slate">{message}</p>
+      {error && (
+        <p className="mt-3 rounded-md border border-rust/30 bg-rust-bg px-3 py-2 text-sm text-rust">
+          {error}
+        </p>
+      )}
       <div className="mt-5 flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>
           Cancel

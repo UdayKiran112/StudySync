@@ -1,13 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Plus, Search, Pencil, Trash2 } from "lucide-react";
 import {
   PageHeader,
-  Spinner,
   ErrorBanner,
   EmptyState,
   Pagination,
+  TableSkeletonRows,
 } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Input, Field } from "../../components/ui/Form";
@@ -34,6 +34,7 @@ export function QuizzesList() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Quiz | undefined>(undefined);
   const [deleting, setDeleting] = useState<Quiz | undefined>(undefined);
+  const [deleteError, setDeleteError] = useState("");
 
   const debouncedSearch = useDebouncedValue(search);
   const { data, isLoading, isError, error } = useQuizzes({
@@ -45,14 +46,21 @@ export function QuizzesList() {
 
   async function handleDelete() {
     if (!deleting) return;
+    setDeleteError("");
     try {
       await deleteMutation.mutateAsync(deleting.quiz_id);
       toast.success(`Removed ${deleting.quiz_name}`);
       setDeleting(undefined);
     } catch (err) {
+      setDeleteError(extractErrorMessage(err));
       toast.error(extractErrorMessage(err));
     }
   }
+
+  // If the last item on a page was deleted, fall back to the previous page.
+  useEffect(() => {
+    if (data && data.length === 0 && offset > 0) setOffset(0);
+  }, [data, offset]);
 
   return (
     <div>
@@ -90,9 +98,36 @@ export function QuizzesList() {
         />
       </div>
 
-      {isLoading && <Spinner label="Loading quizzes…" />}
+      {isLoading && (
+        <Table>
+          <Thead>
+            <Th>Quiz</Th>
+            <Th>Subject</Th>
+            <Th>Date</Th>
+            <Th>Max marks</Th>
+            <Th className="text-right">Actions</Th>
+          </Thead>
+          <TableSkeletonRows rows={6} columns={5} />
+        </Table>
+      )}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
-      {data && data.length === 0 && <EmptyState title="No quizzes found" />}
+      {data && data.length === 0 && (
+        <EmptyState
+          title="No quizzes found"
+          description="Try a different search, or add the first quiz."
+          action={
+            <Button
+              variant="primary"
+              onClick={() => {
+                setEditing(undefined);
+                setFormOpen(true);
+              }}
+            >
+              <Plus size={16} /> Add quiz
+            </Button>
+          }
+        />
+      )}
 
       {data && data.length > 0 && (
         <>
@@ -134,7 +169,10 @@ export function QuizzesList() {
                         size="sm"
                         variant="ghost"
                         aria-label="Delete quiz"
-                        onClick={() => setDeleting(q)}
+                        onClick={() => {
+                          setDeleteError("");
+                          setDeleting(q);
+                        }}
                       >
                         <Trash2 size={14} className="text-rust" />
                       </Button>
@@ -154,6 +192,7 @@ export function QuizzesList() {
       )}
 
       <QuizFormModal
+        key={editing?.quiz_id ?? "new"}
         open={formOpen}
         onClose={() => setFormOpen(false)}
         quiz={editing}
@@ -161,11 +200,15 @@ export function QuizzesList() {
 
       <ConfirmDialog
         open={Boolean(deleting)}
-        onClose={() => setDeleting(undefined)}
+        onClose={() => {
+          setDeleting(undefined);
+          setDeleteError("");
+        }}
         onConfirm={handleDelete}
         title="Delete quiz"
         message={`Delete ${deleting?.quiz_name}? This fails if scores have already been recorded for it.`}
         pending={deleteMutation.isPending}
+        error={deleteError || undefined}
       />
     </div>
   );

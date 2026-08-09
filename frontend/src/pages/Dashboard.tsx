@@ -6,24 +6,38 @@ import {
   BookOpen,
   ArrowRight,
 } from "lucide-react";
-import { PageHeader, ErrorBanner } from "../components/ui/Feedback";
+import {
+  PageHeader,
+  ErrorBanner,
+  CardSkeleton,
+  Skeleton,
+} from "../components/ui/Feedback";
 import { useAttendanceList } from "../api/attendance";
 import { useDigitalLibraryList } from "../api/digitalLibrary";
 import { useOfflineLibraryList } from "../api/offlineLibrary";
+import { useCurrentlyPresent } from "../api/dashboard";
 import { extractErrorMessage } from "../api/client";
-import { todayIso } from "../lib/format";
+import { formatClockTime, todayIso } from "../lib/format";
 import { useSettings } from "../context/SettingsContext";
+import { IdTab } from "../components/ui/Tabs";
+import { OpenSessionDuration } from "../components/ui/LiveClock";
+import type { PresentItem } from "../api/types";
 
 export function Dashboard() {
   const { isConfigured } = useSettings();
   const today = todayIso();
 
-  const attendance = useAttendanceList({ date_from: today, date_to: today });
+  const attendance = useAttendanceList({
+    date_from: today,
+    date_to: today,
+    limit: 500,
+  });
   const digital = useDigitalLibraryList({ date_: today, limit: 200 });
   const offline = useOfflineLibraryList({ date_: today, limit: 200 });
+  const present = useCurrentlyPresent();
 
   const attendanceOpen =
-    attendance.data?.filter((a) => !a.check_out).length ?? 0;
+    attendance.data?.items.filter((a) => !a.check_out).length ?? 0;
   const digitalOpen = digital.data?.filter((u) => !u.out_time).length ?? 0;
 
   return (
@@ -71,7 +85,7 @@ export function Dashboard() {
               value={
                 attendance.isLoading
                   ? undefined
-                  : (attendance.data?.length ?? 0)
+                  : (attendance.data?.items.length ?? 0)
               }
               hint={`${attendanceOpen} still checked in`}
               to="/attendance"
@@ -93,6 +107,41 @@ export function Dashboard() {
               }
               to="/offline-library"
             />
+          </div>
+
+          <h2 className="mt-8 mb-3 font-display text-base font-semibold text-ink">
+            Currently in the library
+          </h2>
+          <div className="rounded-lg border border-border bg-card">
+            {present.isLoading ? (
+              <div className="space-y-3 p-5">
+                <Skeleton className="h-5 w-2/3" />
+                <Skeleton className="h-5 w-1/2" />
+                <Skeleton className="h-5 w-3/5" />
+              </div>
+            ) : present.isError ? (
+              <p className="p-5 text-sm text-rust">
+                Couldn't load the live list — refresh to try again.
+              </p>
+            ) : (present.data ?? []).length === 0 ? (
+              <p className="p-5 text-sm text-slate">
+                No one is currently checked in. When a student arrives, check
+                them in from the{" "}
+                <Link
+                  to="/attendance"
+                  className="font-medium text-brass hover:underline"
+                >
+                  attendance
+                </Link>{" "}
+                page.
+              </p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {present.data?.map((item) => (
+                  <PresentRow key={`${item.activity}-${item.student_id}`} item={item} />
+                ))}
+              </ul>
+            )}
           </div>
 
           <h2 className="mt-8 mb-3 font-display text-base font-semibold text-ink">
@@ -130,6 +179,41 @@ export function Dashboard() {
   );
 }
 
+function PresentRow({ item }: { item: PresentItem }) {
+  const checkInDate =
+    item.time != null ? new Date(`${item.date}T${item.time}`) : null;
+  return (
+    <li>
+      <Link
+        to={`/students/${item.student_id}`}
+        className="flex flex-wrap items-center gap-3 px-5 py-3 transition-colors hover:bg-paper-dim"
+      >
+        <span
+          className={
+            item.activity === "attendance"
+              ? "rounded-full bg-brass/15 px-2.5 py-1 text-xs font-medium text-brass"
+              : "rounded-full bg-forest/15 px-2.5 py-1 text-xs font-medium text-forest"
+          }
+        >
+          {item.activity === "attendance" ? "Present" : "Digital library"}
+        </span>
+        <IdTab>{item.student_id}</IdTab>
+        <span className="flex-1 min-w-0 text-sm font-medium text-ink">
+          {item.name}
+        </span>
+        <span className="flex items-center gap-3 text-sm text-slate">
+          {checkInDate && (
+            <span className="tabular-nums">
+              in at {formatClockTime(checkInDate)}
+            </span>
+          )}
+          {checkInDate && <OpenSessionDuration checkInDate={checkInDate} />}
+        </span>
+      </Link>
+    </li>
+  );
+}
+
 function StatCard({
   icon: Icon,
   label,
@@ -143,6 +227,7 @@ function StatCard({
   hint?: string;
   to: string;
 }) {
+  if (value === undefined) return <CardSkeleton />;
   return (
     <Link
       to={to}
@@ -155,12 +240,8 @@ function StatCard({
           className="text-slate-light opacity-0 transition-opacity group-hover:opacity-100"
         />
       </div>
-      <p className="mt-3 font-display text-3xl font-semibold text-ink">
-        {value === undefined ? (
-          <span className="text-slate-light">···</span>
-        ) : (
-          value
-        )}
+      <p className="mt-3 font-display text-3xl font-semibold tabular-nums text-ink">
+        {value}
       </p>
       <p className="mt-1 text-sm text-slate">{label}</p>
       {hint && <p className="mt-0.5 text-xs text-slate-light">{hint}</p>}

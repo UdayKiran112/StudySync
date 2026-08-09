@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { ArrowLeft, Plus, Pencil, Trash2 } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Trash2, ListPlus } from "lucide-react";
 import { Spinner, ErrorBanner, EmptyState, PageHeader } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Button } from "../../components/ui/Button";
@@ -9,18 +10,21 @@ import { Field, Input, Textarea } from "../../components/ui/Form";
 import { Modal } from "../../components/ui/Modal";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { StudentPicker } from "../../components/ui/StudentPicker";
+import { BulkScoresModal, type BulkSaveRow } from "../../components/ui/BulkScoresModal";
 import { useExam, useMarksForExam, useAddExamMark, useUpdateExamMark, useDeleteExamMark } from "../../api/exams";
-import { extractErrorMessage } from "../../api/client";
+import { apiClient, extractErrorMessage } from "../../api/client";
 import { formatDate } from "../../lib/format";
 import type { Student, ExamMark } from "../../api/types";
 
 export function ExamDetail() {
   const { examId } = useParams();
   const id = Number(examId);
+  const qc = useQueryClient();
   const { data: exam, isLoading, isError, error } = useExam(id);
   const marks = useMarksForExam(id);
 
   const [addOpen, setAddOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [editingMark, setEditingMark] = useState<ExamMark | undefined>(undefined);
   const [deletingMark, setDeletingMark] = useState<ExamMark | undefined>(undefined);
   const deleteMutation = useDeleteExamMark(id);
@@ -34,6 +38,33 @@ export function ExamDetail() {
     } catch (err) {
       toast.error(extractErrorMessage(err));
     }
+  }
+
+  async function handleBulkSave(rows: BulkSaveRow[]) {
+    let added = 0;
+    let updated = 0;
+    for (const row of rows) {
+      if (row.recordId != null) {
+        await apiClient.patch(`/api/exam-marks/${row.recordId}`, {
+          marks_obtained: row.value,
+          remarks: row.remarks,
+        });
+        updated++;
+      } else {
+        await apiClient.post(`/api/exams/${id}/marks`, {
+          student_id: row.studentId,
+          marks_obtained: row.value,
+          remarks: row.remarks,
+        });
+        added++;
+      }
+    }
+    qc.invalidateQueries({ queryKey: ["exam-marks"] });
+    toast.success(
+      `Saved ${added + updated} mark${added + updated === 1 ? "" : "s"}${
+        updated ? ` · ${updated} updated` : ""
+      }`,
+    );
   }
 
   if (isLoading) return <Spinner label="Loading exam…" />;
@@ -50,9 +81,14 @@ export function ExamDetail() {
         title={exam.exam_name}
         description={`${formatDate(exam.exam_date)} · Max marks ${exam.max_marks}`}
         action={
-          <Button variant="primary" onClick={() => setAddOpen(true)}>
-            <Plus size={16} /> Record marks
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => setBulkOpen(true)}>
+              <ListPlus size={16} /> Bulk entry
+            </Button>
+            <Button variant="primary" onClick={() => setAddOpen(true)}>
+              <Plus size={16} /> Record marks
+            </Button>
+          </div>
         }
       />
 
@@ -95,6 +131,22 @@ export function ExamDetail() {
       )}
 
       <AddMarkModal open={addOpen} onClose={() => setAddOpen(false)} examId={id} maxMarks={exam.max_marks} />
+      <BulkScoresModal
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        title="Bulk marks entry"
+        label="Marks"
+        maxMarks={exam.max_marks}
+        existing={
+          marks.data?.map((m) => ({
+            student_id: m.student_id,
+            recordId: m.mark_id,
+            value: m.marks_obtained,
+            remarks: m.remarks ?? null,
+          })) ?? []
+        }
+        onSave={handleBulkSave}
+      />
       {editingMark && (
         <EditMarkModal
           open={Boolean(editingMark)}

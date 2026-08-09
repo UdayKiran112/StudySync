@@ -1,20 +1,21 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Trash2, Pencil } from "lucide-react";
 import {
   PageHeader,
-  Spinner,
   ErrorBanner,
   EmptyState,
   Pagination,
+  TableSkeletonRows,
 } from "../../components/ui/Feedback";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Field, Input, Select } from "../../components/ui/Form";
 import { Button } from "../../components/ui/Button";
-import { StatusTab } from "../../components/ui/Tabs";
+import { StatusTab, sessionTone } from "../../components/ui/Tabs";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Modal } from "../../components/ui/Modal";
+import { StudentPicker } from "../../components/ui/StudentPicker";
 import {
   useAttendanceList,
   useUpdateAttendance,
@@ -26,9 +27,15 @@ import { LiveClock, OpenSessionTime, OpenSessionDuration } from "../../component
 import { ExportMenu } from "../../components/ui/ExportMenu";
 import type { ExportColumn, ExportRow } from "../../components/ui/ExportMenu";
 import { RecordToolbar } from "../../components/ui/RecordToolbar";
-import type { Attendance } from "../../api/types";
+import type { Attendance, Student } from "../../api/types";
 
 const LIMIT = 20;
+
+function daysAgoIso(days: number) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
+}
 
 const EXPORT_COLUMNS: ExportColumn[] = [
   { key: "student_id", label: "Student ID" },
@@ -51,48 +58,42 @@ function toExportRow(record: Attendance): ExportRow {
 }
 
 export function AttendanceRecordsPage() {
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const [dateFrom, setDateFrom] = useState(daysAgoIso(30));
+  const [dateTo, setDateTo] = useState(todayIso());
   const [session, setSession] = useState("");
+  const [studentFilter, setStudentFilter] = useState<Student | null>(null);
   const [offset, setOffset] = useState(0);
   const [editing, setEditing] = useState<Attendance | undefined>(undefined);
   const [deleting, setDeleting] = useState<Attendance | undefined>(undefined);
+  const [deleteError, setDeleteError] = useState("");
 
   const {
-    data: allData,
+    data: page,
     isLoading,
     isError,
     error,
   } = useAttendanceList({
+    student_id: studentFilter?.student_id,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
     session: session || undefined,
+    limit: LIMIT,
+    offset,
   });
 
-  const sortedData = useMemo(
-    () =>
-      allData
-        ? [...allData].sort(
-            (a, b) =>
-              b.date.localeCompare(a.date) ||
-              (a.check_in ?? "").localeCompare(b.check_in ?? "") ||
-              a.attendance_id - b.attendance_id,
-          )
-        : undefined,
-    [allData],
-  );
-
-  const data = sortedData?.slice(offset, offset + LIMIT);
-  const total = allData?.length ?? 0;
+  const data = page?.items;
+  const total = page?.total ?? 0;
   const deleteMutation = useDeleteAttendance();
 
   async function handleDelete() {
     if (!deleting) return;
+    setDeleteError("");
     try {
       await deleteMutation.mutateAsync(deleting.attendance_id);
       toast.success("Attendance record removed");
       setDeleting(undefined);
     } catch (err) {
+      setDeleteError(extractErrorMessage(err));
       toast.error(extractErrorMessage(err));
     }
   }
@@ -101,8 +102,9 @@ export function AttendanceRecordsPage() {
     setDateFrom("");
     setDateTo("");
     setSession("");
-      setOffset(0);
-    }
+    setStudentFilter(null);
+    setOffset(0);
+  }
 
   return (
     <div>
@@ -132,6 +134,16 @@ export function AttendanceRecordsPage() {
         }
         controls={
           <>
+            <Field label="Student">
+              <StudentPicker
+                value={studentFilter}
+                onChange={(s) => {
+                  setStudentFilter(s);
+                  setOffset(0);
+                }}
+                activeOnly={false}
+              />
+            </Field>
             <Field label="From">
               <Input
                 type="date"
@@ -174,7 +186,7 @@ export function AttendanceRecordsPage() {
               title="Attendance records"
               filename={`attendance-records-${todayIso()}`}
               columns={EXPORT_COLUMNS}
-              getRows={() => (sortedData ?? []).map(toExportRow)}
+              getRows={() => (data ?? []).map(toExportRow)}
             />
             <Button variant="secondary" size="sm" onClick={resetFilters}>
               Clear filters
@@ -183,7 +195,20 @@ export function AttendanceRecordsPage() {
         }
       />
 
-      {isLoading && <Spinner label="Loading attendance records…" />}
+      {isLoading && (
+        <Table>
+          <Thead>
+            <Th>Student</Th>
+            <Th>Date</Th>
+            <Th>Session</Th>
+            <Th>Check-in</Th>
+            <Th>Check-out</Th>
+            <Th>Duration</Th>
+            <Th className="text-right">Actions</Th>
+          </Thead>
+          <TableSkeletonRows rows={6} columns={7} />
+        </Table>
+      )}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
       {data && data.length === 0 && (
         <EmptyState title="No attendance records match these filters" />
@@ -243,7 +268,10 @@ export function AttendanceRecordsPage() {
                                         size="sm"
                                         variant="ghost"
                                         aria-label="Delete attendance record"
-                                        onClick={() => setDeleting(record)}
+                                        onClick={() => {
+                                          setDeleteError("");
+                                          setDeleting(record);
+                                        }}
                                       >
                                         <Trash2 size={14} className="text-rust" />
                                       </Button>
@@ -274,20 +302,18 @@ export function AttendanceRecordsPage() {
 
       <ConfirmDialog
         open={Boolean(deleting)}
-        onClose={() => setDeleting(undefined)}
+        onClose={() => {
+          setDeleting(undefined);
+          setDeleteError("");
+        }}
         onConfirm={handleDelete}
         title="Delete attendance record"
         message="This removes the record permanently. Use Edit instead if you just need to fix a typo'd time."
         pending={deleteMutation.isPending}
+        error={deleteError || undefined}
       />
     </div>
   );
-}
-
-function sessionTone(session: string): "forest" | "brass" | "slate" {
-  if (session === "Full Day") return "forest";
-  if (session === "Morning") return "brass";
-  return "slate";
 }
 
 function EditAttendanceModal({
