@@ -213,25 +213,23 @@ foreach ($prof in (Get-NetConnectionProfile -ErrorAction SilentlyContinue | Wher
     }
 }
 
-# ------------------------------------------------- Bonjour for Windows
-# Windows PCs cannot resolve http://studysync.local without Apple Bonjour
-# (the built-in DNS client only resolves the machine's own hostname, e.g.
-# Myth.local). Install it silently if not present, and keep a copy under
-# $APP_DIR\tools so staff PCs can be set up from the server.
+# ------------------------------------------------- Bonjour for Windows (client PCs only)
+# The StudySync server advertises http://studysync.local itself over mDNS
+# (the API's zeroconf responder), so it must NOT also run Apple Bonjour --
+# two mDNS responders on one machine fight over UDP 5353 and break the name.
+# Bonjour is only for OTHER Windows PCs on the LAN, which cannot resolve
+# *.local without it (Windows' built-in DNS client only resolves the machine's
+# own hostname). The MSI stays under $APP_DIR\tools so staff PCs can be set
+# up from the server; it is deliberately NOT installed here. If Bonjour is
+# already present on this server (installed for other reasons), the API skips
+# its own mDNS advertisement rather than conflict with it.
 $bonjourMsi = "$APP_DIR\tools\Bonjour64.msi"
 if (Get-Service -Name "Bonjour Service" -ErrorAction SilentlyContinue) {
-    Write-Log "Bonjour already installed (mDNS name resolution available)."
+    Write-Log "Bonjour already installed on this server - the API will skip its own mDNS advertisement (see api.log)."
 } elseif (Test-Path $bonjourMsi) {
-    Write-Log "Installing Bonjour for Windows (lets PC resolve http://studysync.local)..."
-    $p = Start-Process msiexec -ArgumentList "/i", $bonjourMsi, "/qn", "/norestart" -Wait -PassThru
-    # msiexec: 0 = success, 3010 = success but reboot required.
-    if (($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) -and (Get-Service -Name "Bonjour Service" -ErrorAction SilentlyContinue)) {
-        Write-Log "Bonjour installed successfully."
-    } else {
-        Write-Log "WARN: Bonjour install returned exit $($p.ExitCode); studysync.local will not resolve on Windows PCs without it."
-    }
+    Write-Log "Bonjour MSI kept at $APP_DIR\tools\Bonjour64.msi for Windows staff PCs (not installed here - the server advertises mDNS itself)."
 } else {
-    Write-Log "WARN: Bonjour64.msi not found in tools; studysync.local will not resolve on Windows PCs without it."
+    Write-Log "WARN: Bonjour64.msi not found in tools; Windows staff PCs will need http://<server-IP> instead of http://studysync.local."
 }
 
 # -------------------------------------------------- scheduled tasks
@@ -290,5 +288,5 @@ Write-Host "  App URL : http://localhost   (LAN: http://studysync.local)" -Foreg
 Write-Host "  API key: $apiKey" -ForegroundColor Yellow
 Write-Host "  Save the API key somewhere safe. Staff enter it ONCE per browser in Settings." -ForegroundColor Yellow
 Write-Host "  LAN access: Apple/Android use http://studysync.local directly; Windows PCs need" -ForegroundColor Cyan
-Write-Host "  Apple Bonjour (bundled - auto-installed on this server, and at" -ForegroundColor Cyan
-Write-Host "  $APP_DIR\tools\Bonjour64.msi for staff PCs)." -ForegroundColor Cyan
+Write-Host "  Apple Bonjour (kept at $APP_DIR\tools\Bonjour64.msi - install it on each staff PC," -ForegroundColor Cyan
+Write-Host "  NOT on this server, which advertises the name itself)." -ForegroundColor Cyan

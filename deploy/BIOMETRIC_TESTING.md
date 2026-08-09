@@ -260,7 +260,9 @@ second line with a later time (e.g. `12:00:00`) for the same PIN/day.
 
 > The device serial `TEST001` will show up in `/api/adms/status` in-memory
 > diagnostics. It resets on service restart and is not written to the
-> database.
+> database. (One serial is reserved: `STUDYSYNC-HEALTHCHECK-PROBE` is used by
+> the server's own healthcheck and is silently dropped — do not use it for a
+> real device.)
 
 ---
 
@@ -383,7 +385,7 @@ Set these in the backend `.env` — dev: `backend\.env`; production:
 | `ZK_ATTENDANCE_MODE` | `poll` | `poll` (periodic buffer pull) or `live` (persistent `live_capture`). One at a time. |
 | `ZK_POLL_INTERVAL` | `3` | Seconds between poller cycles (poll mode). |
 | `ZK_LIVE_RECONNECT_SECONDS` | `5` | Reconnect backoff for live mode. |
-| `ZK_PUNCH_DEBOUNCE_MINUTES` | `5` | A swipe within this many minutes of the student's previous swipe that day is ignored as a double-tap (`0` disables). |
+| `ZK_PUNCH_DEBOUNCE_MINUTES` | `1` | A swipe within this many minutes of the student's previous swipe that day is ignored as a double-tap (`0` disables). |
 | `ZK_ADMS_ALLOWED_SERIALS` | *(empty)* | Comma-separated device serials allowed to push ADMS data. Empty = accept any. Set once you've confirmed the real serial. |
 | `ZK_ADMS_DELAY_SECONDS` | `10` | `Delay` sent to the device in the handshake (getrequest cadence). |
 | `ZK_ADMS_ERROR_DELAY_SECONDS` | `30` | `ErrorDelay` — device retry wait after a failed push. |
@@ -412,7 +414,7 @@ Set these in the backend `.env` — dev: `backend\.env`; production:
 | `/api/adms/status` shows no device | Device can't reach server | Same network; correct IP/port 80; firewall `StudySync HTTP (port 80)` enabled; Caddy `/iclock/*` proxied. |
 | Device shows "connection failed" / retries | Handshake blocked or `Encrypt=On` | Set Encrypt Off on device; verify step 7 checklist. |
 | Push returns 200 but `imported: 0, unknown_students: N` | Device PIN has no matching student | Enroll with PIN == `student_id`. |
-| `imported: 0, duplicates: N` on a fresh punch | Punch within the 5-min debounce of a previous one | Wait >5 min or set `ZK_PUNCH_DEBOUNCE_MINUTES=0`. |
+| `imported: 0, duplicates: N` on a fresh punch | Punch within the 1-min debounce of a previous one | Wait >1 min or set `ZK_PUNCH_DEBOUNCE_MINUTES=0`. |
 | `/api/zkteco/*` returns **503** | `ZK_DEVICE_IP` not set | Add it to `.env`, restart `StudySyncAPI`. |
 | `/api/zkteco/*` returns **502** | Device unreachable, or comm-key mismatch | Check log; `Test-NetConnection ... -Port 4370`; verify `ZK_COMM_KEY`. |
 | Punch creates one row per swipe instead of in/out pairs | Poller is reading a device that also has ADMS pushing — dedup usually hides it; or buffer was cleared externally | Use one transport for the test; check `duplicates` tally. |

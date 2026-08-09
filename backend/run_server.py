@@ -108,6 +108,58 @@ def _get_lan_ipv4s() -> list[str]:
     return addrs
 
 
+def _other_mdns_responder_present() -> tuple[bool, str]:
+    """Detect whether another mDNS responder is already answering for this
+    host, so we never fight it for the name (two responders on one machine
+    causes studysync.local to resolve unreliably, or the second responder to
+    fail its UDP 5353 bind outright).
+
+    Two independent signals are checked:
+      1. A Windows service named "Bonjour Service" (Apple's mDNSResponder) is
+         running -- the API service may be running on a machine where the
+         admin installed Bonjour for its own Windows-client reasons.
+      2. UDP port 5353 rejects a SO_REUSEADDR bind, which happens when an
+         exclusive-mode responder (Bonjour, or a second zeroconf instance)
+         already owns it. Python's zeroconf would then fail to advertise at
+         all, so skipping up front is cheaper and logs a clear reason.
+
+    Returns (is_conflict, reason). Never raises; any probe error is treated
+    as "no conflict detected" so advertising can proceed and fail normally.
+    """
+    import socket
+    import subprocess
+
+    if sys.platform.startswith("win"):
+        try:
+            out = subprocess.run(
+                ["sc", "query", "Bonjour Service"],
+                capture_output=True,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                timeout=5,
+            ).stdout
+            for line in out.splitlines():
+                if "STATE" in line:
+                    tokens = line.split(":", 1)[1].strip().split()
+                    state = tokens[1] if len(tokens) > 1 else tokens[0]
+                    if state == "RUNNING":
+                        return True, "Apple Bonjour Service is running (its mDNS responder owns UDP 5353)"
+                    break
+        except Exception:  # noqa: BLE001 - probe is best-effort
+            pass
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("", 5353))
+        finally:
+            s.close()
+    except OSError:
+        return True, "another process already owns UDP port 5353"
+    return False, ""
+
+
 def _advertise_mdns() -> None:
     """Advertise studysync.local over mDNS so LAN devices can reach the app by
     name (http://studysync.local) instead of a raw IP. Runs in a daemon thread:
@@ -116,7 +168,13 @@ def _advertise_mdns() -> None:
     Self-healing: the machine's addresses are re-resolved every 60 s and the
     advertisement is re-registered when they change, so moving the laptop to
     another Wi-Fi (or a DHCP lease change) is picked up within a minute - no
-    service restart needed."""
+    service restart needed.
+
+    Coexistence: if another mDNS responder (Apple Bonjour Service, or any
+    process bound to UDP 5353) is already running on this host, we skip the
+    advertisement and log the reason once instead of fighting for the name.
+    StudySync's own LAN advertising is a convenience; the app is still fully
+    reachable by http://<LAN-IP> in that case."""
     import logging
     import socket
 
@@ -126,6 +184,15 @@ def _advertise_mdns() -> None:
         from zeroconf import ServiceInfo, Zeroconf
     except Exception as exc:  # pragma: no cover - missing dependency
         logger.warning("mDNS advertisement disabled (zeroconf unavailable): %s", exc)
+        return
+
+    conflict, reason = _other_mdns_responder_present()
+    if conflict:
+        logger.warning(
+            "mDNS advertisement skipped: %s. LAN devices should use "
+            "http://<this-PC-IP> instead of http://studysync.local.",
+            reason,
+        )
         return
 
     zc = None

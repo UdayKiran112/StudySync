@@ -52,6 +52,7 @@ the database, not in the arrival order.
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 from datetime import datetime
@@ -61,6 +62,22 @@ from database import get_connection
 from attendance_punch import capture_and_apply, new_punch_tally, record_punch_tally
 
 logger = logging.getLogger("adms.ingest")
+
+# Healthcheck probes (deploy/scripts/healthcheck.py) hit the real /iclock/*
+# path every few minutes to prove Caddy -> backend still serves the device
+# protocol. Their synthetic serial must never appear in device status or be
+# ingested as a punch, so all note/ingest entry points ignore it. The env var
+# lets a deployment override the serial to match healthcheck.py's default.
+HEALTHCHECK_SERIAL = os.getenv(
+    "STUDYSYNC_HEALTHCHECK_SERIAL", "STUDYSYNC-HEALTHCHECK-PROBE"
+)
+
+
+def is_probe_serial(sn: str) -> bool:
+    """True for the healthcheck's synthetic serial - probe traffic is
+    acknowledged by the router but never recorded or ingested."""
+    return bool(sn) and sn.strip().upper() == HEALTHCHECK_SERIAL.upper()
+
 
 # ---------------------------------------------------------------------
 # In-memory "have we heard from this device" status, purely for the
@@ -74,6 +91,8 @@ _devices: dict = {}
 
 
 def _touch(sn: str, **fields) -> None:
+    if is_probe_serial(sn):
+        return
     with _state_lock:
         entry = _devices.setdefault(sn, {})
         entry.update(fields)
@@ -145,6 +164,11 @@ def ingest_attlog(sn: str, body: str) -> dict:
     sitting in the device's buffer, so the pyzk poller / reconciliation
     loop picks it up -- ADMS is the fast path, never the only path.
     """
+    if is_probe_serial(sn):
+        # Healthcheck probe data must never touch device_punches /
+        # device_state. Acknowledge and drop (tally mirrors an empty push).
+        logger.debug("ADMS ATTLOG from probe serial %s dropped.", sn)
+        return new_punch_tally()
     records = _parse_attlog_body(body)
     for rec in records:
         # Catch and log the payload BEFORE any matching/writing happens,
@@ -224,6 +248,8 @@ def get_sync_status() -> dict:
             status[row["device_serial"]] = entry
         with _state_lock:
             for sn, live in _devices.items():
+                if is_probe_serial(sn):
+                    continue
                 entry = status.setdefault(sn, {"device_serial": sn})
                 entry.update(live)
         return status

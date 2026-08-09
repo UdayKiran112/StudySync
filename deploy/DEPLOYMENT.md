@@ -24,9 +24,12 @@ SQLite database (WAL)   C:\ProgramData\StudySync\data\library.db
 The API service advertises the LAN name **`http://studysync.local`** over mDNS
 (no PC rename needed). The advertisement self-heals: if the machine's IP changes
 (another Wi-Fi, DHCP), it re-registers within ~60 s. Apple/Android devices
-resolve it natively; Windows PCs need Apple Bonjour (bundled in the installer
-and auto-installed on the server, plus kept at `tools\Bonjour64.msi` for staff
-PCs). See OPERATIONS.md.
+resolve it natively; Windows PCs need Apple Bonjour (kept at `tools\Bonjour64.msi`
+for staff PCs). Bonjour is **not installed on the server itself** — the server
+advertises the name through its own mDNS responder, and a second responder
+(Apple's) would fight it for UDP 5353 and break the name. If Bonjour is already
+present on a server for other reasons, the API detects it and skips its own
+advertisement instead of conflicting. See OPERATIONS.md.
 
 No Python, Node, or npm is needed on the target machine. Everything ships inside
 the installer as compiled executables (PyInstaller bundle + Caddy binary).
@@ -127,15 +130,16 @@ The Inno script (`deploy\installer\studysync.iss`) is deliberately thin:
      works even on a network Windows marks Public,
    - switches any Public network to Private (best-effort) to also enable
      Windows network discovery,
-   - installs Apple Bonjour (`tools\Bonjour64.msi`, silently) so Windows PCs
-     can resolve `http://studysync.local`; the MSI also stays on the server for
-     staff PCs,
+   - keeps Apple Bonjour (`tools\Bonjour64.msi`) on the server for Windows
+     staff PCs but does **not** install it there (the server advertises
+     `studysync.local` itself via its own mDNS responder; a second responder
+     would conflict over UDP 5353),
    - registers the two scheduled tasks,
    - writes the desktop shortcut.
 5. Uninstall: Control Panel → StudySync runs `uninstall.ps1 -Yes`, which makes a
    final backup, removes services/tasks/firewall/shortcut, then deletes
    `C:\ProgramData\StudySync`. Bonjour is a shared Windows component (also used
-   by iTunes etc.) and is intentionally left installed.
+   by iTunes etc.) and is intentionally left installed on any PC that has it.
 
 ## Critical operational warnings
 

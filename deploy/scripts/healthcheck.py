@@ -23,6 +23,14 @@ LOG_DIR = APP_DIR / "logs" / "health"
 API_URL = "http://127.0.0.1:8000/"
 WEB_URL = "http://127.0.0.1/"
 
+# Synthetic serial used for the ADMS /iclock* probe. The backend treats this
+# serial specially (adms/ingest.HEALTHCHECK_SERIAL): the probe proves the
+# device-push path (Caddy -> backend) works, but is never recorded in device
+# status and never ingested as a punch. Keep it in sync with the backend.
+HEALTHCHECK_SERIAL = os.getenv(
+    "STUDYSYNC_HEALTHCHECK_SERIAL", "STUDYSYNC-HEALTHCHECK-PROBE"
+)
+
 
 def log(msg: str) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -74,6 +82,36 @@ def check_http(url: str, timeout: float = 5.0) -> bool:
         return False
 
 
+def check_adms_path(url: str, timeout: float = 5.0):
+    """Exercise the exact ADMS device-push path the ZKTeco device uses.
+
+    A GET to /iclock/cdata is the device's handshake: the backend answers with
+    a "GET OPTION FROM:<SN>" config block and records nothing (the probe
+    serial is filtered by the backend, so it never lands in device status or
+    the attendance ledger). A healthy response proves Caddy is proxying
+    /iclock/* to the backend, uncompressed and unfiltered -- the same route a
+    real ATTLOG push would take.
+
+    Returns True = healthy, None = route not deployed (backend answered 404,
+    i.e. this install runs ZK_INTEGRATION=pyzk/none without the ADMS router),
+    False = deployed but broken (non-404 failure: Caddy down, backend down,
+    or the ADMS handler erroring).
+    """
+    url = f"{url}?SN={HEALTHCHECK_SERIAL}"
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            if r.status != 200:
+                return False
+            body = r.read(4096).decode("utf-8", errors="replace")
+            return "GET OPTION FROM:" in body
+    except urllib.error.HTTPError as exc:
+        return None if exc.code == 404 else False
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def main() -> int:
     problems = []
 
@@ -97,6 +135,20 @@ def main() -> int:
         problems.append("API not responding on 127.0.0.1:8000")
     if not check_http(WEB_URL):
         problems.append("Web server not responding on port 80")
+
+    # ADMS device-push path: once directly (backend) and once through Caddy
+    # (the route the device actually uses). Fails separately so the log pinpoints
+    # whether Caddy's /iclock/* proxying broke or the backend's ADMS handler did.
+    # A 404 means this install deliberately runs without the ADMS router
+    # (ZK_INTEGRATION=pyzk/none) - that is not a fault.
+    api_adms_ok = check_adms_path(API_URL.rstrip("/") + "/iclock/cdata")
+    web_adms_ok = check_adms_path(WEB_URL.rstrip("/") + "/iclock/cdata")
+    if api_adms_ok is False:
+        problems.append("ADMS /iclock path not serving on 127.0.0.1:8000")
+    if web_adms_ok is False:
+        problems.append("ADMS /iclock path not served through Caddy on port 80")
+    if api_adms_ok is True or web_adms_ok is True:
+        log("ADMS /iclock probe OK (Caddy -> backend device-push path)")
 
     if problems:
         log(f"UNHEALTHY: {'; '.join(problems)}")

@@ -33,6 +33,12 @@ C:\ProgramData\StudySync\scripts\healthcheck.exe
 - Exit 0 = `HEALTHY`, logged to `logs\health\health.log`.
 - Non-zero = something was down; it logs `UNHEALTHY: ...` and attempts to
   restart the offending service itself.
+- Every run also probes the **ADMS device-push path**: a GET to
+  `/iclock/cdata` directly (127.0.0.1:8000) and through Caddy (port 80) using
+  the synthetic serial `STUDYSYNC-HEALTHCHECK-PROBE`. The backend acknowledges
+  the handshake but records nothing — the probe never creates a punch or a
+  device-status entry. A failing probe means Caddy's `/iclock/*` proxying or the
+  backend's ADMS handler broke, even though the web page still loads.
 - If the health log shows repeated `UNHEALTHY` lines, run diagnostics and check
   `logs\api\api.log` and `config\winsw\*.err.log`.
 
@@ -65,8 +71,7 @@ this PC, started at every logon by the `StudySyncTray` scheduled task (elevated,
 so it can restart services without a UAC prompt). The icon color reflects overall
 health:
 
-- **Green** — all three services (`StudySyncAPI`, `StudySyncCaddy`,
-  `Bonjour Service`) running.
+- **Green** — both services (`StudySyncAPI`, `StudySyncCaddy`) running.
 - **Amber** — a service is starting/stopping, or a state is unknown.
 - **Red** — a service is stopped or not installed.
 
@@ -181,10 +186,14 @@ How the device resolves it depends on the OS:
 - The advertisement is **self-healing**: the API re-resolves the machine's IP
   every 60 s and re-registers the name if it changed. Moving the laptop to
   another Wi-Fi (different IP) is picked up within a minute with no restart.
+  If another mDNS responder (e.g. Apple Bonjour) is running on the server, the
+  API detects it and skips its own advertisement instead of fighting for the
+  name — use `http://<server-IP>` in that case.
 - **Windows PCs need Apple Bonjour** to resolve `*.local` names (Windows' built-in
-  DNS client only resolves its own hostname). The installer auto-installs it on
-  the server and keeps a copy at `C:\ProgramData\StudySync\tools\Bonjour64.msi`.
-  For each Windows staff PC: double-click that MSI (or
+  DNS client only resolves its own hostname). Bonjour is **not auto-installed on
+  the server** (the server advertises the name itself); the installer keeps a copy
+  at `C:\ProgramData\StudySync\tools\Bonjour64.msi`. For each Windows staff PC:
+  double-click that MSI (or
   `\\<server-name>\C$\ProgramData\StudySync\tools\Bonjour64.msi`) once, then
   `http://studysync.local` resolves. If a PC lacks Bonjour, use `http://Myth`.
 - Staff enter the API key once per browser in Settings.

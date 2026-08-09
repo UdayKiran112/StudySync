@@ -91,6 +91,7 @@ from adms.config import (
 from adms.ingest import (
     get_sync_status,
     ingest_attlog,
+    is_probe_serial,
     note_handshake,
     note_heartbeat,
 )
@@ -163,8 +164,13 @@ async def adms_handshake(SN: str = Query(default="")):
         logger.warning("ADMS handshake from unrecognised serial SN=%s -- ignoring.", SN)
         return PlainTextResponse("OK")
 
-    note_handshake(SN)
-    logger.info("ADMS handshake from SN=%s", SN)
+    if is_probe_serial(SN):
+        # Healthcheck probe (deploy/scripts/healthcheck.py) - exercise the real
+        # handshake path (same config block a device gets) but record nothing.
+        pass
+    else:
+        note_handshake(SN)
+        logger.info("ADMS handshake from SN=%s", SN)
 
     lines = [
         f"GET OPTION FROM:{SN}",
@@ -206,6 +212,11 @@ async def adms_data_push(
         )
         return PlainTextResponse("OK")
 
+    if is_probe_serial(SN):
+        # Healthcheck probe - drop any synthetic ATTLOG before it could be
+        # ingested into device_punches / the attendance table.
+        return PlainTextResponse("OK")
+
     if not _serial_allowed(SN):
         logger.warning(
             "ADMS push rejected: unrecognised device serial SN=%s (table=%s, %d bytes)",
@@ -239,7 +250,7 @@ async def adms_data_push(
 @router.get("/getrequest")
 async def adms_getrequest(SN: str = Query(default="")):
     """Heartbeat / command poll. We never queue commands -> always 'OK'."""
-    if SN:
+    if SN and not is_probe_serial(SN):
         note_heartbeat(SN)
     return PlainTextResponse("OK")
 

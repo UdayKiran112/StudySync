@@ -34,7 +34,6 @@ from pystray import Icon, Menu, MenuItem
 SERVICES = [
     ("StudySyncAPI", "StudySync API", True),
     ("StudySyncCaddy", "StudySync Web Server (Caddy)", True),
-    ("Bonjour Service", "Bonjour (mDNS name resolver)", True),
 ]
 
 APP_DIR = Path(
