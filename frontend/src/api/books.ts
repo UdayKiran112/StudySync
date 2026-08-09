@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiClient } from "./client";
 import type { Book, BookCreateInput, BookUpdateInput } from "./types";
 
@@ -21,6 +26,7 @@ export function useBooks(params: BookListParams) {
       const { data } = await apiClient.get<Book[]>("/api/books", { params });
       return data;
     },
+    placeholderData: keepPreviousData,
   });
 }
 

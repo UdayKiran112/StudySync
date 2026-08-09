@@ -42,7 +42,21 @@ export function Tr({
   return (
     <tr
       onClick={onClick}
-      className={`border-b border-border transition-colors last:border-0 ${onClick ? "cursor-pointer hover:bg-paper-dim/50" : ""}`}
+      role={onClick ? "link" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
+      className={`border-b border-border transition-colors last:border-0 ${
+        onClick ? "cursor-pointer hover:bg-paper-dim/50" : ""
+      }`}
     >
       {children}
     </tr>

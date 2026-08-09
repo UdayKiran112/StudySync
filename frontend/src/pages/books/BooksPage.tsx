@@ -86,6 +86,7 @@ export function BooksPage() {
           }}
           placeholder="Search by title…"
           className="pl-9"
+          aria-label="Search books by title"
         />
       </div>
 
@@ -120,6 +121,7 @@ export function BooksPage() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        aria-label="Edit book"
                         onClick={() => {
                           setEditing(b);
                           setFormOpen(true);
@@ -130,6 +132,7 @@ export function BooksPage() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        aria-label="Delete book"
                         onClick={() => setDeleting(b)}
                       >
                         <Trash2 size={14} className="text-rust" />

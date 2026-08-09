@@ -86,6 +86,7 @@ export function ExamsList() {
           }}
           placeholder="Search by exam name…"
           className="pl-9"
+          aria-label="Search exams by name"
         />
       </div>
 
@@ -121,6 +122,7 @@ export function ExamsList() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        aria-label="Edit exam"
                         onClick={() => {
                           setEditing(ex);
                           setFormOpen(true);
@@ -131,6 +133,7 @@ export function ExamsList() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        aria-label="Delete exam"
                         onClick={() => setDeleting(ex)}
                       >
                         <Trash2 size={14} className="text-rust" />

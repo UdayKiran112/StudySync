@@ -22,6 +22,7 @@ import { useBooks } from "../../api/books";
 import { apiClient, extractErrorMessage } from "../../api/client";
 import { formatDate, todayIso } from "../../lib/format";
 import { ExportMenu } from "../../components/ui/ExportMenu";
+import { RecordToolbar } from "../../components/ui/RecordToolbar";
 import type { Student, OfflineLibraryUsage } from "../../api/types";
 import type { ExportColumn, ExportRow } from "../../components/ui/ExportMenu";
 
@@ -200,27 +201,36 @@ export function OfflineLibraryPage() {
         </form>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-3">
-        <Input
-          type="date"
-          value={filterDate}
-          onChange={(e) => {
-            setFilterDate(e.target.value);
-            setOffset(0);
-          }}
-          className="w-44"
-        />
-        <ExportMenu
-          title="Offline library visits"
-          filename={`offline-library-records-${todayIso()}`}
-          columns={EXPORT_COLUMNS}
-          getRows={async () =>
-            (await fetchAllOfflineLibrary(filterDate)).map((u) =>
-              toExportRow(u, booksById),
-            )
-          }
-        />
-      </div>
+      <RecordToolbar
+        title="Offline library visits"
+        description="Filter by date, then export the matching records."
+        controls={
+          <Field label="Date">
+            <Input
+              type="date"
+              value={filterDate}
+              onChange={(e) => {
+                setFilterDate(e.target.value);
+                setOffset(0);
+              }}
+              className="w-44"
+              aria-label="Filter visits by date"
+            />
+          </Field>
+        }
+        actions={
+          <ExportMenu
+            title="Offline library visits"
+            filename={`offline-library-records-${todayIso()}`}
+            columns={EXPORT_COLUMNS}
+            getRows={async () =>
+              (await fetchAllOfflineLibrary(filterDate)).map((u) =>
+                toExportRow(u, booksById),
+              )
+            }
+          />
+        }
+      />
 
       {isLoading && <Spinner label="Loading visits…" />}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
@@ -258,6 +268,7 @@ export function OfflineLibraryPage() {
                     <Button
                       size="sm"
                       variant="ghost"
+                      aria-label="Delete offline library visit"
                       onClick={() => setDeleting(u)}
                     >
                       <Trash2 size={14} className="text-rust" />

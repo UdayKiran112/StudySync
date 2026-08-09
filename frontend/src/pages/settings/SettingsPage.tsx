@@ -70,7 +70,11 @@ export function SettingsPage() {
         <Field label="API base URL" required error={urlError || undefined} hint="The address where the FastAPI backend is running, e.g. http://localhost:8000 or your LAN IP.">
           <Input
             value={localBaseUrl}
-            onChange={(e) => { setLocalBaseUrl(e.target.value); setUrlError(""); }}
+            onChange={(e) => {
+              setLocalBaseUrl(e.target.value);
+              setUrlError("");
+              setTestState("idle");
+            }}
             placeholder="http://localhost:8000"
           />
         </Field>
@@ -79,7 +83,10 @@ export function SettingsPage() {
           <Input
             type="password"
             value={localApiKey}
-            onChange={(e) => setLocalApiKey(e.target.value)}
+            onChange={(e) => {
+              setLocalApiKey(e.target.value);
+              setTestState("idle");
+            }}
             placeholder="Paste the staff key"
           />
         </Field>

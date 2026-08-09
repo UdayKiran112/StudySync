@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { ArrowLeft, Plus, Pencil, Trash2 } from "lucide-react";
 import { Spinner, ErrorBanner, EmptyState, PageHeader } from "../../components/ui/Feedback";
@@ -16,7 +16,6 @@ import type { Student, ExamMark } from "../../api/types";
 
 export function ExamDetail() {
   const { examId } = useParams();
-  const navigate = useNavigate();
   const id = Number(examId);
   const { data: exam, isLoading, isError, error } = useExam(id);
   const marks = useMarksForExam(id);
@@ -42,9 +41,9 @@ export function ExamDetail() {
 
   return (
     <div>
-      <button onClick={() => navigate("/exams")} className="mb-4 flex items-center gap-1.5 text-sm text-slate hover:text-ink">
+      <Link to="/exams" className="mb-4 flex items-center gap-1.5 text-sm text-slate hover:text-ink">
         <ArrowLeft size={15} /> Back to exams
-      </button>
+      </Link>
 
       <PageHeader
         eyebrow={exam.subject ?? "Exam"}
@@ -81,10 +80,10 @@ export function ExamDetail() {
                 <Td className="text-slate">{m.remarks ?? "—"}</Td>
                 <Td>
                   <div className="flex justify-end gap-1">
-                    <Button size="sm" variant="ghost" onClick={() => setEditingMark(m)}>
+                    <Button size="sm" variant="ghost" aria-label="Edit mark" onClick={() => setEditingMark(m)}>
                       <Pencil size={14} />
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setDeletingMark(m)}>
+                    <Button size="sm" variant="ghost" aria-label="Delete mark" onClick={() => setDeletingMark(m)}>
                       <Trash2 size={14} className="text-rust" />
                     </Button>
                   </div>

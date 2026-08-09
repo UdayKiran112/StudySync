@@ -86,6 +86,7 @@ export function QuizzesList() {
           }}
           placeholder="Search by quiz name…"
           className="pl-9"
+          aria-label="Search quizzes by name"
         />
       </div>
 
@@ -121,6 +122,7 @@ export function QuizzesList() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        aria-label="Edit quiz"
                         onClick={() => {
                           setEditing(q);
                           setFormOpen(true);
@@ -131,6 +133,7 @@ export function QuizzesList() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        aria-label="Delete quiz"
                         onClick={() => setDeleting(q)}
                       >
                         <Trash2 size={14} className="text-rust" />

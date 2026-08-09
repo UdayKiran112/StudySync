@@ -136,6 +136,7 @@ export function StudentsList() {
             }}
             placeholder="Search by name or student ID…"
             className="pl-9"
+            aria-label="Search students by name or student ID"
           />
         </div>
         <Select
@@ -145,6 +146,7 @@ export function StudentsList() {
             setOffset(0);
           }}
           className="w-40"
+          aria-label="Filter students by status"
         >
           <option value="">All statuses</option>
           <option value="Active">Active</option>
@@ -221,6 +223,7 @@ export function StudentsList() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        aria-label="Edit student"
                         onClick={() => {
                           setEditing(s);
                           setFormOpen(true);
@@ -231,6 +234,7 @@ export function StudentsList() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        aria-label="Delete student"
                         onClick={() => setDeleting(s)}
                       >
                         <Trash2 size={14} className="text-rust" />

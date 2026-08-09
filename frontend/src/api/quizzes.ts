@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiClient } from "./client";
 import type { Quiz, QuizCreateInput, QuizUpdateInput, QuizScore, QuizScoreCreateInput, QuizScoreUpdateInput } from "./types";
 
@@ -25,6 +30,7 @@ export function useQuizzes(params: QuizListParams) {
       const { data } = await apiClient.get<Quiz[]>("/api/quizzes", { params });
       return data;
     },
+    placeholderData: keepPreviousData,
   });
 }
 

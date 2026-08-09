@@ -25,6 +25,7 @@ import { formatDate, formatDuration, formatClockTime, todayIso } from "../../lib
 import { LiveClock, OpenSessionTime, OpenSessionDuration } from "../../components/ui/LiveClock";
 import { ExportMenu } from "../../components/ui/ExportMenu";
 import type { ExportColumn, ExportRow } from "../../components/ui/ExportMenu";
+import { RecordToolbar } from "../../components/ui/RecordToolbar";
 import type { Attendance } from "../../api/types";
 
 const LIMIT = 20;
@@ -122,64 +123,65 @@ export function AttendanceRecordsPage() {
         }
       />
 
-      <div className="mb-6 grid gap-4 lg:grid-cols-[1fr_auto]">
-        <div className="rounded-2xl border border-border bg-paper p-4 text-sm text-slate">
-          <p className="font-medium text-ink">Search historic attendance</p>
-          <p className="mt-2">
-            {total === 0
-              ? "Use the filters to narrow the record set."
-              : `Found ${total} matching record${total === 1 ? "" : "s"}.`}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <ExportMenu
-            title="Attendance records"
-            filename={`attendance-records-${todayIso()}`}
-            columns={EXPORT_COLUMNS}
-            getRows={() => (sortedData ?? []).map(toExportRow)}
-          />
-          <Button variant="secondary" size="sm" onClick={resetFilters}>
-            Clear filters
-          </Button>
-        </div>
-      </div>
-
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-[220px_220px_1fr]">
-        <Field label="From">
-          <Input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => {
-              setDateFrom(e.target.value);
-              setOffset(0);
-            }}
-          />
-        </Field>
-        <Field label="To">
-          <Input
-            type="date"
-            value={dateTo}
-            onChange={(e) => {
-              setDateTo(e.target.value);
-              setOffset(0);
-            }}
-          />
-        </Field>
-        <Field label="Session">
-          <Select
-            value={session}
-            onChange={(e) => {
-              setSession(e.target.value);
-              setOffset(0);
-            }}
-          >
-            <option value="">All sessions</option>
-            <option value="Morning">Morning</option>
-            <option value="Afternoon">Afternoon</option>
-            <option value="Full Day">Full Day</option>
-          </Select>
-        </Field>
-      </div>
+      <RecordToolbar
+        title="Search historic attendance"
+        description={
+          total === 0
+            ? "Use the filters to narrow the record set."
+            : `Found ${total} matching record${total === 1 ? "" : "s"}.`
+        }
+        controls={
+          <>
+            <Field label="From">
+              <Input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => {
+                  setDateFrom(e.target.value);
+                  setOffset(0);
+                }}
+              />
+            </Field>
+            <Field label="To">
+              <Input
+                type="date"
+                value={dateTo}
+                onChange={(e) => {
+                  setDateTo(e.target.value);
+                  setOffset(0);
+                }}
+              />
+            </Field>
+            <Field label="Session">
+              <Select
+                value={session}
+                onChange={(e) => {
+                  setSession(e.target.value);
+                  setOffset(0);
+                }}
+              >
+                <option value="">All sessions</option>
+                <option value="Morning">Morning</option>
+                <option value="Afternoon">Afternoon</option>
+                <option value="Full Day">Full Day</option>
+              </Select>
+            </Field>
+          </>
+        }
+        actions={
+          <>
+            <ExportMenu
+              title="Attendance records"
+              filename={`attendance-records-${todayIso()}`}
+              columns={EXPORT_COLUMNS}
+              getRows={() => (sortedData ?? []).map(toExportRow)}
+            />
+            <Button variant="secondary" size="sm" onClick={resetFilters}>
+              Clear filters
+            </Button>
+          </>
+        }
+      />
 
       {isLoading && <Spinner label="Loading attendance records…" />}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
@@ -232,6 +234,7 @@ export function AttendanceRecordsPage() {
                                       <Button
                                         size="sm"
                                         variant="ghost"
+                                        aria-label="Edit attendance record"
                                         onClick={() => setEditing(record)}
                                       >
                                         <Pencil size={14} />
@@ -239,6 +242,7 @@ export function AttendanceRecordsPage() {
                                       <Button
                                         size="sm"
                                         variant="ghost"
+                                        aria-label="Delete attendance record"
                                         onClick={() => setDeleting(record)}
                                       >
                                         <Trash2 size={14} className="text-rust" />

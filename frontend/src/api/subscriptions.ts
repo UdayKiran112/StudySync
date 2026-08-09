@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiClient } from "./client";
 import type {
   Subscription,
@@ -32,6 +37,7 @@ export function useSubscriptions(params: SubscriptionListParams) {
       );
       return data;
     },
+    placeholderData: keepPreviousData,
   });
 }
 

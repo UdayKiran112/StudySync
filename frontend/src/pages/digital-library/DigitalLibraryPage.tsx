@@ -28,6 +28,7 @@ import {
   nowHHMM,
 } from "../../lib/format";
 import { ExportMenu } from "../../components/ui/ExportMenu";
+import { RecordToolbar } from "../../components/ui/RecordToolbar";
 import type {
   Student,
   AccountType,
@@ -383,25 +384,34 @@ export function DigitalLibraryPage() {
         </form>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-3">
-        <Input
-          type="date"
-          value={filterDate}
-          onChange={(e) => {
-            setFilterDate(e.target.value);
-            setOffset(0);
-          }}
-          className="w-44"
-        />
-        <ExportMenu
-          title="Digital library sessions"
-          filename={`digital-library-records-${todayIso()}`}
-          columns={EXPORT_COLUMNS}
-          getRows={async () =>
-            (await fetchAllDigitalLibrary(filterDate)).map(toExportRow)
-          }
-        />
-      </div>
+      <RecordToolbar
+        title="Digital library sessions"
+        description="Filter by date, then export the matching records."
+        controls={
+          <Field label="Date">
+            <Input
+              type="date"
+              value={filterDate}
+              onChange={(e) => {
+                setFilterDate(e.target.value);
+                setOffset(0);
+              }}
+              className="w-44"
+              aria-label="Filter sessions by date"
+            />
+          </Field>
+        }
+        actions={
+          <ExportMenu
+            title="Digital library sessions"
+            filename={`digital-library-records-${todayIso()}`}
+            columns={EXPORT_COLUMNS}
+            getRows={async () =>
+              (await fetchAllDigitalLibrary(filterDate)).map(toExportRow)
+            }
+          />
+        }
+      />
 
       {isLoading && <Spinner label="Loading sessions…" />}
       {isError && <ErrorBanner message={extractErrorMessage(error)} />}
@@ -485,6 +495,7 @@ export function DigitalLibraryPage() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        aria-label="Delete digital library session"
                         onClick={() => setDeleting(u)}
                       >
                         <Trash2 size={14} className="text-rust" />

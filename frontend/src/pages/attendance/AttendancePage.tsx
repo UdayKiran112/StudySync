@@ -405,6 +405,7 @@ export function AttendancePage() {
                         <Button
                           size="sm"
                           variant="ghost"
+                          aria-label="Edit attendance record"
                           onClick={() => setEditing(a)}
                         >
                           <Pencil size={14} />
@@ -412,6 +413,7 @@ export function AttendancePage() {
                         <Button
                           size="sm"
                           variant="ghost"
+                          aria-label="Delete attendance record"
                           onClick={() => setDeleting(a)}
                         >
                           <Trash2 size={14} className="text-rust" />

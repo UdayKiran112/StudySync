@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import axios from "axios";
 import { apiClient } from "./client";
 import type { Student, StudentCreateInput, StudentSummary, StudentUpdateInput } from "./types";
@@ -29,6 +34,7 @@ export function useStudents(params: StudentListParams, enabled = true) {
       return data;
     },
     staleTime: 5 * 60 * 1000,
+    placeholderData: keepPreviousData,
     enabled,
   });
 }

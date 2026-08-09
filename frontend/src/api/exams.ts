@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiClient } from "./client";
 import type { Exam, ExamCreateInput, ExamUpdateInput, ExamMark, ExamMarkCreateInput, ExamMarkUpdateInput } from "./types";
 
@@ -25,6 +30,7 @@ export function useExams(params: ExamListParams) {
       const { data } = await apiClient.get<Exam[]>("/api/exams", { params });
       return data;
     },
+    placeholderData: keepPreviousData,
   });
 }
 

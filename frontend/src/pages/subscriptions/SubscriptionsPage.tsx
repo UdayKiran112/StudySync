@@ -117,6 +117,7 @@ export function SubscriptionsPage() {
             }}
             placeholder="Search by name…"
             className="pl-9"
+            aria-label="Search subscriptions by name"
           />
         </div>
         <Select
@@ -126,6 +127,7 @@ export function SubscriptionsPage() {
             setOffset(0);
           }}
           className="w-40"
+          aria-label="Filter subscriptions by status"
         >
           <option value="">All statuses</option>
           <option value="Active">Active</option>
@@ -178,6 +180,7 @@ export function SubscriptionsPage() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        aria-label="Edit subscription"
                         onClick={() => {
                           setEditing(s);
                           setFormOpen(true);
@@ -188,6 +191,7 @@ export function SubscriptionsPage() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        aria-label="Delete subscription"
                         onClick={() => setDeleting(s)}
                       >
                         <Trash2 size={14} className="text-rust" />

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { ArrowLeft, Download, UserPlus, Trash2, BarChart3 } from "lucide-react";
 import { Spinner, ErrorBanner, EmptyState, PageHeader } from "../../components/ui/Feedback";
@@ -7,6 +7,7 @@ import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Button } from "../../components/ui/Button";
 import { Field, Select } from "../../components/ui/Form";
 import { Modal } from "../../components/ui/Modal";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { StudentPicker } from "../../components/ui/StudentPicker";
 import { ExternalStudentPicker } from "../../components/ui/ExternalStudentPicker";
 import { useCoachingClasses, useCoachingEnrollments, useAddCoachingEnrollment, useDeleteCoachingEnrollment, useDeleteCoachingClass } from "../../api/coaching";
@@ -24,17 +25,16 @@ export function CoachingClassDetail() {
   const enrollments = useCoachingEnrollments(id);
   const [participantModal, setParticipantModal] = useState(false);
   const [metricsTab, setMetricsTab] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const deleteClass = useDeleteCoachingClass();
 
   const handleDelete = async () => {
-    if (confirm("Delete this coaching session?")) {
-      try {
-        await deleteClass.mutateAsync(id);
-        toast.success("Session deleted");
-        navigate("/coaching-classes");
-      } catch (err) {
-        toast.error(extractErrorMessage(err));
-      }
+    try {
+      await deleteClass.mutateAsync(id);
+      toast.success("Session deleted");
+      navigate("/coaching-classes");
+    } catch (err) {
+      toast.error(extractErrorMessage(err));
     }
   };
 
@@ -60,12 +60,12 @@ export function CoachingClassDetail() {
 
   return (
     <div>
-      <button 
-        onClick={() => navigate("/coaching-classes")} 
+      <Link 
+        to="/coaching-classes" 
         className="mb-4 flex items-center gap-1.5 text-sm text-slate hover:text-ink"
       >
         <ArrowLeft size={15} /> Back to sessions
-      </button>
+      </Link>
 
       <PageHeader
         eyebrow={session.subject ?? "Coaching Class"}
@@ -79,11 +79,8 @@ export function CoachingClassDetail() {
             <Button variant="secondary" onClick={() => setMetricsTab(!metricsTab)}>
               <BarChart3 size={16}/> {metricsTab ? 'Hide Metrics' : 'Metrics'}
             </Button>
-            <Button onClick={() => setParticipantModal(true)}>
+            <Button variant="primary" onClick={() => setParticipantModal(true)}>
               <UserPlus size={16}/> Add participant
-            </Button>
-            <Button variant="ghost" onClick={handleDelete}>
-              <Trash2 size={16} className="text-rust"/>
             </Button>
           </div>
         }
@@ -117,10 +114,10 @@ export function CoachingClassDetail() {
       )}
 
       {enrollments.data && enrollments.data.length > 0 && (
-        <div className="rounded-xl border border-border bg-card overflow-hidden">
-          <div className="p-5 border-b border-border">
-            <h2 className="font-semibold text-lg">Attendees ({enrollments.data.length})</h2>
-          </div>
+        <>
+          <h2 className="mb-3 font-display text-base font-semibold text-ink">
+            Attendees ({enrollments.data.length})
+          </h2>
           <Table>
             <Thead>
               <Th>Participant</Th>
@@ -146,8 +143,23 @@ export function CoachingClassDetail() {
               ))}
             </tbody>
           </Table>
-        </div>
+        </>
       )}
+
+      <div className="mt-8 flex justify-end border-t border-border pt-4">
+        <Button variant="ghost" onClick={() => setConfirmDelete(true)}>
+          <Trash2 size={15} className="text-rust" /> Delete session
+        </Button>
+      </div>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={handleDelete}
+        title="Delete this coaching session?"
+        message={`This permanently deletes "${session.title}" and all of its attendees.`}
+        pending={deleteClass.isPending}
+      />
 
       <ParticipantForm 
         open={participantModal} 
@@ -160,31 +172,42 @@ export function CoachingClassDetail() {
 
 function RemoveParticipantButton({ enrollmentId, classId, participantName }: { enrollmentId: number; classId: number; participantName: string }) {
   const deleteEnrollment = useDeleteCoachingEnrollment(classId);
+  const [confirming, setConfirming] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const handleDelete = async () => {
-    if (confirm(`Remove ${participantName} from this session?`)) {
-      try {
-        setIsDeleting(true);
-        await deleteEnrollment.mutateAsync(enrollmentId);
-        toast.success("Participant removed");
-      } catch (err) {
-        toast.error(extractErrorMessage(err));
-      } finally {
-        setIsDeleting(false);
-      }
+    try {
+      setIsDeleting(true);
+      await deleteEnrollment.mutateAsync(enrollmentId);
+      toast.success("Participant removed");
+    } catch (err) {
+      toast.error(extractErrorMessage(err));
+    } finally {
+      setIsDeleting(false);
+      setConfirming(false);
     }
   };
 
   return (
-    <Button 
-      size="sm" 
-      variant="ghost" 
-      onClick={handleDelete}
-      disabled={isDeleting}
-    >
-      <Trash2 size={14} className="text-rust" />
-    </Button>
+    <>
+      <Button 
+        size="sm" 
+        variant="ghost"
+        aria-label={`Remove ${participantName} from this session`}
+        onClick={() => setConfirming(true)}
+        disabled={isDeleting}
+      >
+        <Trash2 size={14} className="text-rust" />
+      </Button>
+      <ConfirmDialog
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        onConfirm={handleDelete}
+        title="Remove participant"
+        message={`Remove ${participantName} from this session?`}
+        pending={isDeleting}
+      />
+    </>
   );
 }
 

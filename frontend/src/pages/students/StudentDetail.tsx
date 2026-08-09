@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
   Mail,
@@ -38,7 +38,6 @@ type TabKey = (typeof TABS)[number]["key"];
 
 export function StudentDetail() {
   const { studentId } = useParams();
-  const navigate = useNavigate();
   const id = Number(studentId);
   const { data: student, isLoading, isError, error } = useStudent(id);
   const [tab, setTab] = useState<TabKey>("attendance");
@@ -49,12 +48,12 @@ export function StudentDetail() {
 
   return (
     <div>
-      <button
-        onClick={() => navigate("/students")}
+      <Link
+        to="/students"
         className="mb-4 flex items-center gap-1.5 text-sm text-slate hover:text-ink"
       >
         <ArrowLeft size={15} /> Back to students
-      </button>
+      </Link>
 
       <div className="mb-6 rounded-lg border border-border bg-card p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -120,7 +119,7 @@ export function StudentDetail() {
         </div>
       </div>
 
-      <div className="mb-4 flex gap-1 border-b border-border">
+      <div className="mb-4 flex gap-1 overflow-x-auto border-b border-border scrollbar-thin">
         {TABS.map((t) => (
           <button
             key={t.key}

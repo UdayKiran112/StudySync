@@ -5,12 +5,13 @@ import { CalendarPlus } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Field, Input } from "../../components/ui/Form";
 import { Modal } from "../../components/ui/Modal";
-import { EmptyState, PageHeader, Spinner } from "../../components/ui/Feedback";
+import { EmptyState, ErrorBanner, PageHeader, Spinner } from "../../components/ui/Feedback";
 import { formatDate, todayIso } from "../../lib/format";
 import { useOtherActivities, useCreateOtherActivity } from "../../api/other-activities";
+import { extractErrorMessage } from "../../api/client";
 
 export function OtherActivitiesPage() {
-  const { data: activities, isLoading } = useOtherActivities();
+  const { data: activities, isLoading, isError, error } = useOtherActivities();
   const [modal, setModal] = useState(false);
 
   return (
@@ -20,13 +21,14 @@ export function OtherActivitiesPage() {
         title="Other activities"
         description="Create sessions with external speakers or faculty, and manage attendance."
         action={
-          <Button onClick={() => setModal(true)}>
+          <Button variant="primary" onClick={() => setModal(true)}>
             <CalendarPlus size={16} /> Add New Session
           </Button>
         }
       />
       {isLoading && <Spinner label="Loading activities…" />}
-      {!isLoading && !activities?.length && (
+      {isError && <ErrorBanner message={extractErrorMessage(error)} />}
+      {!isLoading && !isError && !activities?.length && (
         <EmptyState title="No activities" description="Create a session to begin tracking attendance." />
       )}
       {!!activities?.length && <ActivitiesList activities={activities} />}
@@ -100,11 +102,11 @@ function SessionForm({ open, onClose }: { open: boolean; onClose: () => void }) 
             <Input required value={sessionType} onChange={(e) => setSessionType(e.target.value)} placeholder="e.g., Seminar, Workshop, Guest Lecture" />
           </Field>
         </div>
-        <div className="flex justify-end gap-2">
+        <div className="flex justify-end gap-2 border-t border-border pt-4">
           <Button type="button" variant="ghost" onClick={handleClose}>
             Cancel
           </Button>
-          <Button type="submit" disabled={create.isPending || !sessionName || !speakerName || !sessionType}>
+          <Button type="submit" variant="primary" disabled={create.isPending || !sessionName || !speakerName || !sessionType}>
             {create.isPending ? "Creating..." : "Create Session"}
           </Button>
         </div>

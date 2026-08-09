@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { ArrowLeft, Plus, Pencil, Trash2 } from "lucide-react";
 import { Spinner, ErrorBanner, EmptyState, PageHeader } from "../../components/ui/Feedback";
@@ -16,7 +16,6 @@ import type { Student, QuizScore } from "../../api/types";
 
 export function QuizDetail() {
   const { quizId } = useParams();
-  const navigate = useNavigate();
   const id = Number(quizId);
   const { data: quiz, isLoading, isError, error } = useQuiz(id);
   const scores = useScoresForQuiz(id);
@@ -42,9 +41,9 @@ export function QuizDetail() {
 
   return (
     <div>
-      <button onClick={() => navigate("/quizzes")} className="mb-4 flex items-center gap-1.5 text-sm text-slate hover:text-ink">
+      <Link to="/quizzes" className="mb-4 flex items-center gap-1.5 text-sm text-slate hover:text-ink">
         <ArrowLeft size={15} /> Back to quizzes
-      </button>
+      </Link>
 
       <PageHeader
         eyebrow={quiz.subject ?? "Quiz"}
@@ -81,10 +80,10 @@ export function QuizDetail() {
                 <Td className="text-slate">{s.remarks ?? "—"}</Td>
                 <Td>
                   <div className="flex justify-end gap-1">
-                    <Button size="sm" variant="ghost" onClick={() => setEditingScore(s)}>
+                    <Button size="sm" variant="ghost" aria-label="Edit score" onClick={() => setEditingScore(s)}>
                       <Pencil size={14} />
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setDeletingScore(s)}>
+                    <Button size="sm" variant="ghost" aria-label="Delete score" onClick={() => setDeletingScore(s)}>
                       <Trash2 size={14} className="text-rust" />
                     </Button>
                   </div>

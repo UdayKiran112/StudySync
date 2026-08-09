@@ -64,7 +64,7 @@ export function Dashboard() {
             />
           )}
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <StatCard
               icon={ClipboardCheck}
               label="Attendance sessions today"
@@ -93,16 +93,12 @@ export function Dashboard() {
               }
               to="/offline-library"
             />
-            <StatCard
-              icon={Users}
-              label="Manage students"
-              value={undefined}
-              hint="Search, add, edit records"
-              to="/students"
-            />
           </div>
 
-          <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <h2 className="mt-8 mb-3 font-display text-base font-semibold text-ink">
+            Quick access
+          </h2>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <QuickActionCard
               title="Check a student in or out"
               description="Record arrivals and departures for Morning and Afternoon sessions."
@@ -114,6 +110,18 @@ export function Dashboard() {
               description="Log a student using JSTOR, Britannica Online, or another platform."
               to="/digital-library"
               cta="Open digital library"
+            />
+            <QuickActionCard
+              title="Log an offline library visit"
+              description="Record a student reading a catalogued book or their own material."
+              to="/offline-library"
+              cta="Open offline library"
+            />
+            <QuickActionCard
+              title="Manage students"
+              description="Search, add, edit, and renew student records."
+              to="/students"
+              cta="Open students"
             />
           </div>
         </>

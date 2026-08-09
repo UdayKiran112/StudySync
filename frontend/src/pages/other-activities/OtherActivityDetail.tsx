@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { ArrowLeft, Download, UserPlus, Trash2, BarChart3 } from "lucide-react";
 import { Spinner, ErrorBanner, EmptyState, PageHeader } from "../../components/ui/Feedback";
@@ -7,6 +7,7 @@ import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Button } from "../../components/ui/Button";
 import { Field, Select } from "../../components/ui/Form";
 import { Modal } from "../../components/ui/Modal";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { StudentPicker } from "../../components/ui/StudentPicker";
 import { ExternalStudentPicker } from "../../components/ui/ExternalStudentPicker";
 import { useOtherActivities, useOtherActivityAttendance, useAddOtherActivityAttendance, useDeleteOtherActivityAttendance, useDeleteOtherActivity } from "../../api/other-activities";
@@ -24,17 +25,16 @@ export function OtherActivityDetail() {
   const attendance = useOtherActivityAttendance(id);
   const [participantModal, setParticipantModal] = useState(false);
   const [metricsTab, setMetricsTab] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const deleteActivity = useDeleteOtherActivity();
 
   const handleDelete = async () => {
-    if (confirm("Delete this activity session?")) {
-      try {
-        await deleteActivity.mutateAsync(id);
-        toast.success("Session deleted");
-        navigate("/other-activities");
-      } catch (err) {
-        toast.error(extractErrorMessage(err));
-      }
+    try {
+      await deleteActivity.mutateAsync(id);
+      toast.success("Session deleted");
+      navigate("/other-activities");
+    } catch (err) {
+      toast.error(extractErrorMessage(err));
     }
   };
 
@@ -64,12 +64,12 @@ export function OtherActivityDetail() {
 
   return (
     <div>
-      <button
-        onClick={() => navigate("/other-activities")}
+      <Link
+        to="/other-activities"
         className="mb-4 flex items-center gap-1.5 text-sm text-slate hover:text-ink"
       >
         <ArrowLeft size={15} /> Back to activities
-      </button>
+      </Link>
 
       <PageHeader
         eyebrow={activity.session_type ?? "Activity"}
@@ -83,11 +83,8 @@ export function OtherActivityDetail() {
             <Button variant="secondary" onClick={() => setMetricsTab(!metricsTab)}>
               <BarChart3 size={16} /> {metricsTab ? "Hide Metrics" : "Metrics"}
             </Button>
-            <Button onClick={() => setParticipantModal(true)}>
+            <Button variant="primary" onClick={() => setParticipantModal(true)}>
               <UserPlus size={16} /> Add participant
-            </Button>
-            <Button variant="ghost" onClick={handleDelete}>
-              <Trash2 size={16} className="text-rust" />
             </Button>
           </div>
         }
@@ -119,10 +116,10 @@ export function OtherActivityDetail() {
       {attendance.data && attendance.data.length === 0 && <EmptyState title="No attendees" description="Add a participant to begin tracking attendance." />}
 
       {attendance.data && attendance.data.length > 0 && (
-        <div className="rounded-xl border border-border bg-card overflow-hidden">
-          <div className="p-5 border-b border-border">
-            <h2 className="font-semibold text-lg">Attendees ({attendance.data.length})</h2>
-          </div>
+        <>
+          <h2 className="mb-3 font-display text-base font-semibold text-ink">
+            Attendees ({attendance.data.length})
+          </h2>
           <Table>
             <Thead>
               <Th>Participant</Th>
@@ -148,8 +145,23 @@ export function OtherActivityDetail() {
               ))}
             </tbody>
           </Table>
-        </div>
+        </>
       )}
+
+      <div className="mt-8 flex justify-end border-t border-border pt-4">
+        <Button variant="ghost" onClick={() => setConfirmDelete(true)}>
+          <Trash2 size={15} className="text-rust" /> Delete session
+        </Button>
+      </div>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={handleDelete}
+        title="Delete this activity session?"
+        message={`This permanently deletes "${activity.session_name}" and all of its attendees.`}
+        pending={deleteActivity.isPending}
+      />
 
       <ParticipantForm open={participantModal} onClose={() => setParticipantModal(false)} activityId={id} />
     </div>
@@ -158,26 +170,42 @@ export function OtherActivityDetail() {
 
 function RemoveParticipantButton({ attendanceId, activityId, participantName }: { attendanceId: number; activityId: number; participantName: string }) {
   const deleteAttendance = useDeleteOtherActivityAttendance(activityId);
+  const [confirming, setConfirming] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const handleDelete = async () => {
-    if (confirm(`Remove ${participantName} from this session?`)) {
-      try {
-        setIsDeleting(true);
-        await deleteAttendance.mutateAsync(attendanceId);
-        toast.success("Participant removed");
-      } catch (err) {
-        toast.error(extractErrorMessage(err));
-      } finally {
-        setIsDeleting(false);
-      }
+    try {
+      setIsDeleting(true);
+      await deleteAttendance.mutateAsync(attendanceId);
+      toast.success("Participant removed");
+    } catch (err) {
+      toast.error(extractErrorMessage(err));
+    } finally {
+      setIsDeleting(false);
+      setConfirming(false);
     }
   };
 
   return (
-    <Button size="sm" variant="ghost" onClick={handleDelete} disabled={isDeleting}>
-      <Trash2 size={14} className="text-rust" />
-    </Button>
+    <>
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-label={`Remove ${participantName} from this session`}
+        onClick={() => setConfirming(true)}
+        disabled={isDeleting}
+      >
+        <Trash2 size={14} className="text-rust" />
+      </Button>
+      <ConfirmDialog
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        onConfirm={handleDelete}
+        title="Remove participant"
+        message={`Remove ${participantName} from this session?`}
+        pending={isDeleting}
+      />
+    </>
   );
 }
 
