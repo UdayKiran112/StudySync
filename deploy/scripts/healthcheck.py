@@ -112,8 +112,35 @@ def check_adms_path(url: str, timeout: float = 5.0):
         return False
 
 
+def check_mdns_name(timeout: float = 3.0) -> str:
+    """Best-effort: does `studysync.local` resolve on this host right now?
+    Non-fatal — the name is a convenience (the ADMS device can also use the
+    LAN IP). Returns a short human-readable result."""
+    import threading
+
+    result: dict = {}
+
+    def probe():
+        try:
+            infos = socket.getaddrinfo("studysync.local", 80, socket.AF_INET)
+            result["addrs"] = sorted({i[4][0] for i in infos})
+        except Exception as exc:  # noqa: BLE001
+            result["err"] = str(exc)
+
+    t = threading.Thread(target=probe, daemon=True)
+    t.start()
+    t.join(timeout)
+    if "addrs" in result:
+        return "OK (" + ", ".join(result["addrs"]) + ")"
+    if "err" in result:
+        return "NOT RESOLVING (" + result["err"] + ")"
+    return "UNRESOLVED (timeout)"
+
+
 def main() -> int:
     problems = []
+
+    log(f"mDNS: studysync.local {check_mdns_name()}")
 
     api_state = service_state("StudySyncAPI")
     caddy_state = service_state("StudySyncCaddy")

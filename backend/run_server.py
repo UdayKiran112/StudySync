@@ -165,26 +165,88 @@ def _advertise_mdns() -> None:
     name (http://studysync.local) instead of a raw IP. Runs in a daemon thread:
     failures are logged and never crash the API service.
 
+    Two strategies, chosen at startup:
+      1. Bonjour responder (preferred): if Apple's Bonjour Service
+         (mDNSResponder) is installed, publish studysync.local *through* it via
+         the Bonjour client API (dnssd.dll, see bonjour_mdns.py). Bonjour keeps
+         owning UDP 5353 and simply answers for our A record, so the two
+         coexist instead of fighting.
+      2. Own zeroconf responder (fallback): no Bonjour present, so this process
+         binds UDP 5353 itself and answers queries directly (zeroconf).
+
     Self-healing: the machine's addresses are re-resolved every 60 s and the
     advertisement is re-registered when they change, so moving the laptop to
     another Wi-Fi (or a DHCP lease change) is picked up within a minute - no
     service restart needed.
-
-    Coexistence: if another mDNS responder (Apple Bonjour Service, or any
-    process bound to UDP 5353) is already running on this host, we skip the
-    advertisement and log the reason once instead of fighting for the name.
-    StudySync's own LAN advertising is a convenience; the app is still fully
-    reachable by http://<LAN-IP> in that case."""
+    """
     import logging
-    import socket
 
     logger = logging.getLogger("studysync.mdns")
 
+    client = None
     try:
-        from zeroconf import ServiceInfo, Zeroconf
-    except Exception as exc:  # pragma: no cover - missing dependency
-        logger.warning("mDNS advertisement disabled (zeroconf unavailable): %s", exc)
+        import bonjour_mdns
+        client = bonjour_mdns.load_bonjour_client()
+    except Exception as exc:  # pragma: no cover - missing/broken module
+        logger.debug("mDNS: Bonjour client unavailable (%s)", exc)
+
+    if client is not None:
+        _advertise_mdns_via_bonjour(logger, client)
         return
+
+    _advertise_mdns_via_zeroconf(logger)
+
+
+def _advertise_mdns_via_bonjour(logger, client) -> None:
+    """Publish studysync.local as an A record through the running Apple Bonjour
+    responder. Loops forever (like the zeroconf path below); returns only on a
+    fatal error. Re-registers within ~60 s if the machine's IP changes."""
+    import bonjour_mdns
+    import time
+
+    conn = None
+    registered: tuple[str, ...] | None = None
+    tick = 0
+    try:
+        while True:
+            if conn is not None:
+                bonjour_mdns.process_events(client, conn)
+            tick += 1
+            if tick % 60 == 0 or conn is None:
+                addrs = _get_lan_ipv4s()
+                current = tuple(sorted(addrs)) if addrs else None
+                if current and current != registered:
+                    if conn is not None:
+                        client.DNSServiceRefDeallocate(conn)
+                        conn = None
+                    conn = bonjour_mdns.register_hostname_records(client, addrs)
+                    if conn is not None:
+                        registered = current
+                        logger.info(
+                            "mDNS: advertising http://studysync.local -> %s "
+                            "(port 80) via Apple Bonjour Service",
+                            ", ".join(addrs),
+                        )
+                    else:
+                        registered = None
+                elif not current:
+                    logger.warning("mDNS: no LAN IPv4 found - nothing advertised")
+                    registered = None
+            time.sleep(1)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("mDNS advertisement (Bonjour) error: %s", exc)
+    finally:
+        if conn is not None:
+            try:
+                client.DNSServiceRefDeallocate(conn)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _advertise_mdns_via_zeroconf(logger) -> None:
+    """Advertise studysync.local with this process's own zeroconf responder.
+    Used only when no Apple Bonjour install is present (so UDP 5353 is free)."""
+    import socket
 
     conflict, reason = _other_mdns_responder_present()
     if conflict:
@@ -193,6 +255,12 @@ def _advertise_mdns() -> None:
             "http://<this-PC-IP> instead of http://studysync.local.",
             reason,
         )
+        return
+
+    try:
+        from zeroconf import ServiceInfo, Zeroconf
+    except Exception as exc:  # pragma: no cover - missing dependency
+        logger.warning("mDNS advertisement disabled (zeroconf unavailable): %s", exc)
         return
 
     zc = None

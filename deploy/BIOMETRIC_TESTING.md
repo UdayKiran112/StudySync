@@ -83,10 +83,11 @@ Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
 
 ### Method C — mDNS name (no IP needed)
 
-The app advertises itself as **`http://studysync.local`** over mDNS. Browsers
-on iPhones/Android/Macs (and Windows with Bonjour installed) can often just
-use that name. The ADMS device menus usually want an IP, though, so prefer
-Method A/B.
+The app advertises itself as **`http://studysync.local`** over mDNS (published
+through the server's Apple Bonjour Service when it is running). Browsers on
+iPhones/Android/Macs (and Windows with Bonjour installed) can just use that
+name. **For the ADMS device you can also enter `studysync.local`** if its Cloud
+Server Setting accepts a hostname — otherwise use the IP from Method A/B.
 
 > Write the IP down; you'll type it into the device's Cloud Server Setting in
 > Section 4.
@@ -101,11 +102,12 @@ the device's side by opening this URL in the device's web browser (most MB360
 firmwares have a small browser, or test from any phone/PC on the same Wi-Fi):
 
 ```
-http://192.168.1.100/iclock/cdata?SN=TEST
+http://studysync.local/iclock/cdata?SN=TEST
 ```
 
-You should see a text block starting with `GET OPTION FROM:TEST` (see
-Section 5 for what it means). If the page fails to load, the problem is
+(or `http://192.168.1.100/iclock/cdata?SN=TEST` if the firmware cannot resolve
+the mDNS name). You should see a text block starting with `GET OPTION FROM:TEST`
+(see Section 5 for what it means). If the page fails to load, the problem is
 network/firewall, not the app.
 
 **Firewall note (production):** the installer already opens **TCP port 80**
@@ -137,8 +139,8 @@ On the MB360:
 3. Open **Cloud Server Setting** (sometimes labelled "ADMS", "TCP/IP", or
    "Push" depending on firmware).
 4. Set:
-   - **IP / Server Address** = the server's LAN IP from Section 2
-     (e.g. `192.168.1.100`).
+   - **IP / Server Address** = `studysync.local` (if the firmware accepts a
+     hostname) or the server's LAN IP from Section 2 (e.g. `192.168.1.100`).
    - **Port** = `80`.
    - **Encrypt / UseSSL** = Off (StudySync answers with `Encrypt=0`).
 5. Save / Apply. The device immediately does a handshake to
@@ -396,10 +398,12 @@ Set these in the backend `.env` — dev: `backend\.env`; production:
 
 - [ ] `StudySyncAPI` and `StudySyncCaddy` services **Running**.
 - [ ] `http://localhost/` returns 200.
-- [ ] ADMS: Caddy proxies `/iclock/*` (open `http://<SERVER-IP>/iclock/cdata?SN=TEST`
-      in a browser → shows `GET OPTION FROM:TEST` block).
+- [ ] ADMS: Caddy proxies `/iclock/*` (open
+      `http://studysync.local/iclock/cdata?SN=TEST` — or the LAN IP if the
+      firmware lacks mDNS — in a browser → shows `GET OPTION FROM:TEST` block).
 - [ ] Device and server on the **same network**; firewall allows inbound TCP 80.
-- [ ] Device's **Cloud Server Setting**: server LAN IP, port **80**.
+- [ ] Device's **Cloud Server Setting**: server address `studysync.local` (if
+      the firmware accepts hostnames) or the LAN IP, port **80**.
 - [ ] Test student's device PIN == `students.student_id`.
 - [ ] (pyzk only) `Test-NetConnection <device-ip> -Port 4370` succeeds and
       `ZK_COMM_KEY` matches the device's Comm key.

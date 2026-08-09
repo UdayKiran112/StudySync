@@ -16,7 +16,8 @@ Caddy  (service: StudySyncCaddy)
    |  reverse-proxies /api/*  ->  127.0.0.1:8000
    v
 FastAPI / Uvicorn, PyInstaller-bundled  (service: StudySyncAPI)
-   |  also advertises "studysync.local" over mDNS (UDP 5353) via zeroconf
+   |  advertises "studysync.local" over mDNS (UDP 5353) — through Apple
+   |  Bonjour when it is running, or its own responder otherwise
    v
 SQLite database (WAL)   C:\ProgramData\StudySync\data\library.db
 ```
@@ -25,11 +26,11 @@ The API service advertises the LAN name **`http://studysync.local`** over mDNS
 (no PC rename needed). The advertisement self-heals: if the machine's IP changes
 (another Wi-Fi, DHCP), it re-registers within ~60 s. Apple/Android devices
 resolve it natively; Windows PCs need Apple Bonjour (kept at `tools\Bonjour64.msi`
-for staff PCs). Bonjour is **not installed on the server itself** — the server
-advertises the name through its own mDNS responder, and a second responder
-(Apple's) would fight it for UDP 5353 and break the name. If Bonjour is already
-present on a server for other reasons, the API detects it and skips its own
-advertisement instead of conflicting. See OPERATIONS.md.
+for staff PCs). On a server that already runs Apple's Bonjour Service, the API
+publishes the name *through* Bonjour using the Bonjour client API (dnssd.dll),
+so Bonjour keeps owning UDP 5353 and the two coexist instead of fighting. Only
+when no Bonjour is installed does the API run its own mDNS responder for the
+name. See OPERATIONS.md.
 
 No Python, Node, or npm is needed on the target machine. Everything ships inside
 the installer as compiled executables (PyInstaller bundle + Caddy binary).
@@ -131,9 +132,9 @@ The Inno script (`deploy\installer\studysync.iss`) is deliberately thin:
    - switches any Public network to Private (best-effort) to also enable
      Windows network discovery,
    - keeps Apple Bonjour (`tools\Bonjour64.msi`) on the server for Windows
-     staff PCs but does **not** install it there (the server advertises
-     `studysync.local` itself via its own mDNS responder; a second responder
-     would conflict over UDP 5353),
+     staff PCs. If that same PC also runs the server, install the MSI once and
+     the API publishes `studysync.local` *through* Bonjour rather than running
+     its own responder,
    - registers the two scheduled tasks,
    - writes the desktop shortcut.
 5. Uninstall: Control Panel → StudySync runs `uninstall.ps1 -Yes`, which makes a
