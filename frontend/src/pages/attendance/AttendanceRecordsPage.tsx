@@ -21,11 +21,33 @@ import {
   useDeleteAttendance,
 } from "../../api/attendance";
 import { extractErrorMessage } from "../../api/client";
-import { formatDate, formatDuration, formatClockTime } from "../../lib/format";
+import { formatDate, formatDuration, formatClockTime, todayIso } from "../../lib/format";
 import { LiveClock, OpenSessionTime, OpenSessionDuration } from "../../components/ui/LiveClock";
+import { ExportMenu } from "../../components/ui/ExportMenu";
+import type { ExportColumn, ExportRow } from "../../components/ui/ExportMenu";
 import type { Attendance } from "../../api/types";
 
 const LIMIT = 20;
+
+const EXPORT_COLUMNS: ExportColumn[] = [
+  { key: "student_id", label: "Student ID" },
+  { key: "date", label: "Date" },
+  { key: "session", label: "Session" },
+  { key: "check_in", label: "Check-in" },
+  { key: "check_out", label: "Check-out" },
+  { key: "duration_minutes", label: "Duration (min)" },
+];
+
+function toExportRow(record: Attendance): ExportRow {
+  return {
+    student_id: record.student_id,
+    date: record.date,
+    session: record.session,
+    check_in: record.check_in ?? "",
+    check_out: record.check_out ?? "",
+    duration_minutes: record.duration_minutes ?? "",
+  };
+}
 
 export function AttendanceRecordsPage() {
   const [dateFrom, setDateFrom] = useState("");
@@ -110,6 +132,12 @@ export function AttendanceRecordsPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <ExportMenu
+            title="Attendance records"
+            filename={`attendance-records-${todayIso()}`}
+            columns={EXPORT_COLUMNS}
+            getRows={() => (sortedData ?? []).map(toExportRow)}
+          />
           <Button variant="secondary" size="sm" onClick={resetFilters}>
             Clear filters
           </Button>

@@ -19,11 +19,52 @@ import {
   useDeleteOfflineUsage,
 } from "../../api/offlineLibrary";
 import { useBooks } from "../../api/books";
-import { extractErrorMessage } from "../../api/client";
+import { apiClient, extractErrorMessage } from "../../api/client";
 import { formatDate, todayIso } from "../../lib/format";
+import { ExportMenu } from "../../components/ui/ExportMenu";
 import type { Student, OfflineLibraryUsage } from "../../api/types";
+import type { ExportColumn, ExportRow } from "../../components/ui/ExportMenu";
 
 const LIMIT = 20;
+
+const EXPORT_COLUMNS: ExportColumn[] = [
+  { key: "student_id", label: "Student ID" },
+  { key: "date", label: "Date" },
+  { key: "book_id", label: "Book ID" },
+  { key: "book_title", label: "Book title" },
+];
+
+function toExportRow(
+  usage: OfflineLibraryUsage,
+  titleByBook: Map<string, string>,
+): ExportRow {
+  return {
+    student_id: usage.student_id,
+    date: usage.date,
+    book_id: usage.book_id ?? "",
+    book_title: usage.book_id
+      ? titleByBook.get(usage.book_id) ?? ""
+      : "Own material",
+  };
+}
+
+/** Fetches every matching offline library visit (paged 200 at a time). */
+async function fetchAllOfflineLibrary(
+  filterDate: string,
+): Promise<OfflineLibraryUsage[]> {
+  const all: OfflineLibraryUsage[] = [];
+  let offset = 0;
+  for (;;) {
+    const { data } = await apiClient.get<OfflineLibraryUsage[]>(
+      "/api/offline-library",
+      { params: { date_: filterDate || undefined, limit: 200, offset } },
+    );
+    all.push(...data);
+    if (data.length < 200) break;
+    offset += 200;
+  }
+  return all;
+}
 
 export function OfflineLibraryPage() {
   const [student, setStudent] = useState<Student | null>(null);
@@ -168,6 +209,16 @@ export function OfflineLibraryPage() {
             setOffset(0);
           }}
           className="w-44"
+        />
+        <ExportMenu
+          title="Offline library visits"
+          filename={`offline-library-records-${todayIso()}`}
+          columns={EXPORT_COLUMNS}
+          getRows={async () =>
+            (await fetchAllOfflineLibrary(filterDate)).map((u) =>
+              toExportRow(u, booksById),
+            )
+          }
         />
       </div>
 

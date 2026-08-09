@@ -20,20 +20,68 @@ import {
   useDeleteDigitalUsage,
 } from "../../api/digitalLibrary";
 import { useSubscriptions } from "../../api/subscriptions";
-import { extractErrorMessage } from "../../api/client";
+import { apiClient, extractErrorMessage } from "../../api/client";
 import {
   formatDate,
   formatDuration,
   todayIso,
   nowHHMM,
 } from "../../lib/format";
+import { ExportMenu } from "../../components/ui/ExportMenu";
 import type {
   Student,
   AccountType,
   DigitalLibraryUsage,
 } from "../../api/types";
+import type { ExportColumn, ExportRow } from "../../components/ui/ExportMenu";
 
 const LIMIT = 20;
+
+const EXPORT_COLUMNS: ExportColumn[] = [
+  { key: "student_id", label: "Student ID" },
+  { key: "date", label: "Date" },
+  { key: "platform_name", label: "Platform" },
+  { key: "account_type", label: "Account type" },
+  { key: "subscription_id", label: "Subscription ID" },
+  { key: "in_time", label: "In time" },
+  { key: "out_time", label: "Out time" },
+  { key: "duration_minutes", label: "Duration (min)" },
+  { key: "purpose", label: "Purpose" },
+  { key: "notes", label: "Notes" },
+];
+
+function toExportRow(usage: DigitalLibraryUsage): ExportRow {
+  return {
+    student_id: usage.student_id,
+    date: usage.date,
+    platform_name: usage.platform_name,
+    account_type: usage.account_type,
+    subscription_id: usage.subscription_id ?? "",
+    in_time: usage.in_time,
+    out_time: usage.out_time ?? "",
+    duration_minutes: usage.duration_minutes ?? "",
+    purpose: usage.purpose ?? "",
+    notes: usage.notes ?? "",
+  };
+}
+
+/** Fetches every matching digital library session (paged 200 at a time). */
+async function fetchAllDigitalLibrary(
+  filterDate: string,
+): Promise<DigitalLibraryUsage[]> {
+  const all: DigitalLibraryUsage[] = [];
+  let offset = 0;
+  for (;;) {
+    const { data } = await apiClient.get<DigitalLibraryUsage[]>(
+      "/api/digital-library",
+      { params: { date_: filterDate || undefined, limit: 200, offset } },
+    );
+    all.push(...data);
+    if (data.length < 200) break;
+    offset += 200;
+  }
+  return all;
+}
 
 export function DigitalLibraryPage() {
   const [mode, setMode] = useState<"check-in" | "check-out">("check-in");
@@ -344,6 +392,14 @@ export function DigitalLibraryPage() {
             setOffset(0);
           }}
           className="w-44"
+        />
+        <ExportMenu
+          title="Digital library sessions"
+          filename={`digital-library-records-${todayIso()}`}
+          columns={EXPORT_COLUMNS}
+          getRows={async () =>
+            (await fetchAllDigitalLibrary(filterDate)).map(toExportRow)
+          }
         />
       </div>
 
