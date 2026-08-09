@@ -18,11 +18,18 @@ class AdmsPushResult(BaseModel):
     pulled: int
     imported: int
     duplicates: int
+    duplicate_transport: int = 0
+    duplicate_debounced: int = 0
     unknown_students: int
     renewed: int
 
 
 class AdmsDeviceStatus(BaseModel):
+    device_serial: Optional[str] = None
+    last_seen_at: Optional[datetime] = None
+    last_reconcile_at: Optional[datetime] = None
+    last_buffer_count: Optional[int] = None
+    ledger_pending: int = 0
     last_handshake_at: Optional[datetime] = None
     last_heartbeat_at: Optional[datetime] = None
     last_push_at: Optional[datetime] = None

@@ -11,11 +11,35 @@ leaking pyzk tracebacks.
 """
 
 from contextlib import contextmanager
+from threading import Lock
 from typing import Iterator, List, Optional
 
 from zk import ZK
 
 from zkteco.config import ZkDeviceConfig
+
+# Device serial numbers are stable per device and only probed when a
+# fingerprint is needed; cache them keyed by device IP so a 3-second poll
+# loop isn't issuing an extra round trip every cycle.
+_serial_cache: dict = {}
+_serial_cache_lock = Lock()
+
+
+def device_serial(config: ZkDeviceConfig) -> str:
+    """The device's serial number (falls back to its IP if unreadable)."""
+    with _serial_cache_lock:
+        cached = _serial_cache.get(config.ip)
+    if cached:
+        return cached
+    serial = config.ip
+    try:
+        with zk_connection(config) as conn:
+            serial = _safe(conn.get_serialnumber, "Reading device serial") or config.ip
+    except ZkError:
+        serial = config.ip
+    with _serial_cache_lock:
+        _serial_cache[config.ip] = serial
+    return serial
 
 
 # The ZKTeco proprietary protocol speaks neither TLS nor SSH. The

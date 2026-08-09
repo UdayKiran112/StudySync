@@ -33,8 +33,13 @@ Environment variables:
     ZK_LIVE_RECONNECT_SECONDS
                         Default 5. Wait time before zkteco/live.py retries
                         after a dropped/failed connection.
+    ZK_RECONCILE_INTERVAL
+                        Default 60. Seconds between full-buffer reconciliation
+                        passes (zkteco/reconcile.py), the completeness
+                        backstop that re-reads the whole device buffer and
+                        captures anything ADMS/live missed.
     ZK_PUNCH_DEBOUNCE_MINUTES
-                        Default 5. A punch that lands this many minutes or
+                        Default 1. A punch that lands this many minutes or
                         fewer after a student's previous punch for the same
                         day is treated as an accidental double-tap and
                         ignored (set 0 to disable).
@@ -103,3 +108,11 @@ def live_reconnect_seconds() -> int:
         return max(1, int(os.getenv("ZK_LIVE_RECONNECT_SECONDS", "5")))
     except ValueError:
         return 5
+
+
+def reconcile_interval() -> int:
+    """Seconds between full-buffer reconciliation passes. Clamped to >= 5s."""
+    try:
+        return max(5, int(os.getenv("ZK_RECONCILE_INTERVAL", "60")))
+    except ValueError:
+        return 60

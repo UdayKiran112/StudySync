@@ -88,7 +88,12 @@ from adms.config import (
     adms_delay_seconds,
     adms_error_delay_seconds,
 )
-from adms.ingest import get_status, ingest_attlog, note_handshake, note_heartbeat
+from adms.ingest import (
+    get_sync_status,
+    ingest_attlog,
+    note_handshake,
+    note_heartbeat,
+)
 from models.adms import AdmsStatus
 from security import require_api_key
 
@@ -264,9 +269,11 @@ async def adms_test():
 def adms_status():
     """
     Staff-facing (API-key protected) view of every device SN this server
-    has heard from since it started: last handshake, last heartbeat, last
-    attendance push and its import tally. Useful for confirming a
-    physical MB360 punch actually reached this server without having to
-    read the raw application logs.
+    has seen: durable sync health from the device_state table (last
+    reconcile, buffer size, ledger pending -- survives restarts) merged
+    with the in-memory liveness view (handshake/heartbeat/push timestamps
+    since startup). Useful for confirming a physical MB360 punch actually
+    reached this server and that the ledger is keeping up, without having
+    to read the raw application logs.
     """
-    return AdmsStatus(devices=get_status())
+    return AdmsStatus(devices=get_sync_status())

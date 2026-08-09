@@ -48,12 +48,15 @@ HOW A PUNCH IS HANDLED
    adms/ingest.py calls for ADMS-pushed punches), so a live-captured
    swipe and a polled swipe produce identical attendance rows -- see
    attendance_punch.py at the project root.
-4. The device's user_id is matched against students.student_id
-   (attendance_punch.student_id_for_user_id). Unmatched IDs are logged and
-   dropped -- nothing is written for a punch from a device user with no
-   corresponding student.
-5. A lapsed membership is auto-renewed on the swipe, the same rule the
-   front-desk check-in uses (routers.students.auto_renew_if_expired).
+4. The event is handed to attendance_punch.capture_and_apply(), the same
+   exactly-once entry point the poller and ADMS use: it claims the punch in
+   the device_punches ledger by fingerprint (so a punch that ADMS or the
+   poller also delivered is applied only once), resolves the user_id
+   against students.student_id, auto-renews a lapsed membership, and
+   derives the session effect. Unmatched IDs are recorded as
+   unknown_student and never written to attendance.
+5. The raw event payload is preserved in the ledger (raw_record) for
+   audit even when the punch turns out to be a duplicate.
 
 RECONNECTION
 -------------
@@ -82,9 +85,8 @@ import threading
 from typing import Optional
 
 from database import get_connection
-from routers.students import auto_renew_if_expired
-from attendance_punch import apply_punch, student_id_for_user_id
-from zkteco.config import device_config, live_reconnect_seconds, punch_debounce_minutes
+from attendance_punch import capture_and_apply
+from zkteco.config import device_config, live_reconnect_seconds
 from zkteco.device import build_zk
 
 logger = logging.getLogger("zkteco.live")
@@ -129,10 +131,10 @@ def _payload_from_event(event) -> dict:
     }
 
 
-def _handle_event(event) -> None:
+def _handle_event(event, device_serial: str) -> None:
     """
-    Catch one live punch, analyse (log) its payload, resolve the student,
-    and write the attendance row.
+    Catch one live punch, analyse (log) its payload, and write the
+    attendance row.
 
     Each event gets its own short-lived DB connection (mirrors
     zkteco/poller.py's per-cycle connection) so a slow or failing write
@@ -145,37 +147,30 @@ def _handle_event(event) -> None:
         last_event_at=payload["timestamp"], last_payload=payload, last_error=None
     )
 
-    day = payload["timestamp"].strftime("%Y-%m-%d")
-    time_str = payload["timestamp"].strftime("%H:%M")
-
     db: sqlite3.Connection = get_connection()
     try:
-        student_id = student_id_for_user_id(db, payload["user_id"])
-        if student_id is None:
-            logger.warning(
-                "ZKTeco live punch from unknown device user_id=%s -- no matching "
-                "student, ignored.",
-                payload["user_id"],
-            )
-            _set_state(last_outcome="unknown_student")
-            return
-
-        # Same show-up-reactivates-membership rule as the front desk and
-        # the poller (routers.students.auto_renew_if_expired). Idempotent.
-        renewed = auto_renew_if_expired(db, student_id)
-
-        outcome = apply_punch(db, student_id, day, time_str, punch_debounce_minutes())
-        db.commit()
-
-        logger.info(
-            "ZKTeco live punch applied: student_id=%s day=%s time=%s outcome=%s renewed=%s",
-            student_id,
-            day,
-            time_str,
-            outcome,
-            renewed,
+        # capture_and_apply resolves the PIN, auto-renews a lapsed
+        # membership, dedups by fingerprint (against ADMS / poller /
+        # reconcile) and derives the session effect. The raw event is
+        # preserved in the device_punches ledger for audit either way.
+        result = capture_and_apply(
+            db,
+            device_serial,
+            payload["user_id"],
+            payload["timestamp"],
+            payload["status"],
+            payload["verify"],
+            None,
+            "pyzk_live",
         )
-        _set_state(last_outcome=outcome)
+        logger.info(
+            "ZKTeco live punch applied: student_id=%s day=%s time=%s outcome=%s",
+            payload["user_id"],
+            payload["timestamp"].strftime("%Y-%m-%d"),
+            payload["timestamp"].strftime("%H:%M"),
+            result["outcome"],
+        )
+        _set_state(last_outcome=result["outcome"])
     except Exception as e:
         db.rollback()
         logger.exception("Failed to apply live ZKTeco punch: %s", payload)
@@ -219,6 +214,12 @@ def _run_until_stopped(stop_event: threading.Event) -> None:
             config.port,
         )
         _set_state(connected=True, last_error=None)
+        # Stable identity for the punch ledger; falls back to the device IP
+        # if the serial can't be read from the open connection.
+        try:
+            device_serial = conn.get_serialnumber() or config.ip
+        except Exception:
+            device_serial = config.ip
         try:
             for event in conn.live_capture(new_timeout=LIVE_CAPTURE_TIMEOUT):
                 if stop_event.is_set():
@@ -228,7 +229,7 @@ def _run_until_stopped(stop_event: threading.Event) -> None:
                     # Just a socket-read timeout / keepalive tick, not a punch.
                     continue
                 try:
-                    _handle_event(event)
+                    _handle_event(event, device_serial)
                 except Exception:
                     # A single bad payload must never take the listener down.
                     logger.exception("Unhandled error processing a live punch event.")

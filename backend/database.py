@@ -97,6 +97,63 @@ def apply_runtime_schema_guards() -> None:
             ON digital_library_usage(student_id) WHERE out_time IS NULL
             """
         )
+        _ensure_device_ledger_tables(conn)
+
+
+def _ensure_device_ledger_tables(conn) -> None:
+    """
+    Create the raw-punch ledger and device-state tables on databases that
+    predate them (schema.sql now ships them for fresh installs). This is a
+    pure additive migration: it never touches existing rows, and it is
+    idempotent so it is safe to run on every startup.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_punches (
+            punch_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            fingerprint    TEXT NOT NULL UNIQUE,
+            device_serial  TEXT NOT NULL,
+            user_id        TEXT NOT NULL,
+            student_id     INTEGER,
+            punch_time     TEXT NOT NULL,
+            status_code    TEXT NOT NULL DEFAULT '',
+            verify_method  TEXT NOT NULL DEFAULT '',
+            source         TEXT NOT NULL,
+            state          TEXT NOT NULL DEFAULT 'pending'
+                           CHECK(state IN ('pending', 'applied', 'duplicate_transport',
+                                           'duplicate_debounced', 'duplicate_session',
+                                           'unknown_student')),
+            raw_record     TEXT,
+            captured_at    TEXT NOT NULL,
+            applied_at     TEXT,
+            FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE RESTRICT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_device_punches_punch_time "
+        "ON device_punches(punch_time)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_device_punches_student "
+        "ON device_punches(student_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_device_punches_state "
+        "ON device_punches(state)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_state (
+            device_serial     TEXT PRIMARY KEY,
+            last_seen_at      TEXT,
+            last_reconcile_at TEXT,
+            last_buffer_count INTEGER,
+            ledger_pending    INTEGER,
+            last_result       TEXT
+        )
+        """
+    )
 
 
 @contextmanager

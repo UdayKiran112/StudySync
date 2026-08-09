@@ -37,6 +37,7 @@ from security import require_api_key
 from zkteco import device
 from zkteco.config import attendance_mode, device_config
 from zkteco.live import get_live_status
+from zkteco.reconcile import current_sync_status
 from zkteco.sync import sync_attendance_from_device
 from models.zkteco import (
     ZkAttendanceLog,
@@ -44,6 +45,7 @@ from models.zkteco import (
     ZkDeviceStatus,
     ZkLiveStatus,
     ZkMemoryUsage,
+    ZkSyncReport,
     ZkSyncResult,
     ZkUser,
 )
@@ -172,3 +174,15 @@ def zk_live_status():
     for a connectivity probe in poll mode instead.
     """
     return ZkLiveStatus(mode=attendance_mode(), **get_live_status())
+
+
+@router.get("/sync-report", response_model=ZkSyncReport)
+def zk_sync_report():
+    """
+    Durable device sync health: how many raw punches are in the
+    device_punches ledger, broken down by verdict (applied / duplicate /
+    unknown), how many are still pending, when the device was last
+    reconciled, and whether the system is fully synchronized
+    (ledger_pending == 0).
+    """
+    return ZkSyncReport(**current_sync_status())

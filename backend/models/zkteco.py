@@ -56,9 +56,29 @@ class ZkSyncResult(BaseModel):
     pulled: int
     imported: int
     duplicates: int
+    duplicate_transport: int = 0
+    duplicate_debounced: int = 0
     unknown_students: int
     renewed: int = 0
     incomplete: int
+
+
+class ZkSyncReport(BaseModel):
+    """Durable device sync health: ledger pending count, per-state ledger
+    breakdown, last reconcile, and whether the device buffer is fully
+    consumed."""
+
+    device_serial: Optional[str] = None
+    last_reconcile_at: Optional[datetime] = None
+    last_buffer_count: Optional[int] = None
+    ledger_pending: int = 0
+    ledger_total: int = 0
+    ledger_applied: int = 0
+    ledger_duplicate_transport: int = 0
+    ledger_duplicate_debounced: int = 0
+    ledger_duplicate_session: int = 0
+    ledger_unknown_student: int = 0
+    fully_synced: bool = False
 
 
 class ZkLiveStatus(BaseModel):

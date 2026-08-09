@@ -104,6 +104,7 @@ if pyzk_enabled:
         from routers import zkteco as zkteco  # noqa: F811 (intentional re-import)
         from zkteco.poller import zkteco_poller_loop
         from zkteco.live import zkteco_live_loop
+        from zkteco.reconcile import zkteco_reconcile_loop
         from zkteco.config import attendance_mode
     except ImportError as e:
         logger.warning(
@@ -163,6 +164,14 @@ async def lifespan(_: FastAPI):
         mode = attendance_mode()
         zkteco_loop = zkteco_live_loop if mode == "live" else zkteco_poller_loop
         zkteco_task = asyncio.create_task(zkteco_loop(stop_event))
+    # The reconciliation backstop runs whenever pyzk is available (device
+    # configured), alongside whichever attendance transport is selected. It
+    # is the completeness guarantee behind ADMS's best-effort push: it
+    # re-reads the full device buffer, captures anything that slipped past
+    # ADMS/live, and persists device sync health.
+    reconcile_task = None
+    if pyzk_enabled:
+        reconcile_task = asyncio.create_task(zkteco_reconcile_loop(stop_event))
     try:
         yield
     finally:
@@ -171,6 +180,10 @@ async def lifespan(_: FastAPI):
             zkteco_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await zkteco_task
+        if reconcile_task is not None:
+            reconcile_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reconcile_task
 
 
 # Always allow the local dev servers on this machine.

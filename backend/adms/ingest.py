@@ -1,19 +1,28 @@
 """
 adms/ingest.py
-----------------
+---------------
 Turn a raw ZKTeco ADMS ATTLOG push into attendance rows.
 
 This is the ADMS equivalent of zkteco/sync.py, and it deliberately
 shares attendance_punch.py with it (and with the pyzk live-capture
-module, if you're still using it) -- apply_punch() is the single source
-of truth for "what does one punch do to the attendance table", so it
-doesn't matter whether the punch arrived via a poll, a pyzk
+module, if you're still using it) -- capture_and_apply() is the single
+source of truth for "what does one punch do to the attendance table",
+so it doesn't matter whether the punch arrived via a poll, a pyzk
 live_capture() event, or an ADMS HTTP push: the resulting row is
 identical. attendance_punch.py has no pyzk dependency, so pulling it in
 here does NOT pull pyzk into this module or its import graph.
 
+EXACTLY-ONCE
+------------
+Every punch is claimed in the device_punches ledger by fingerprint
+(device_serial|PIN|full-second timestamp|status) before it is applied.
+The device_serial here is the "SN" query parameter the device sends on
+every request. If the same physical punch also arrived via pyzk (poll,
+live or reconcile), its fingerprint is already in the ledger, so this
+ADMS delivery is counted as a duplicate_transport and applied nowhere.
+
 ATTLOG PAYLOAD FORMAT
------------------------
+----------------------
 The device POSTs a plain-text body to /iclock/cdata?...&table=ATTLOG,
 one record per line, tab-separated:
 
@@ -35,21 +44,21 @@ e.g. "1\t2024-07-28 10:41:21\t0\t1\t\t0\t0\r\n"
   WorkCode / Reserved  not used here.
 
 A single push can contain a backlog of many records (e.g. after the
-device reconnects following a network outage), so -- exactly like
-zkteco/sync.py -- records are grouped by (PIN, day) and replayed in
-chronological order within each group before being handed to
-apply_punch(), rather than applied in raw arrival order.
+device reconnects following a network outage). Each record is captured
+independently -- one malformed or failing line never costs the rest of
+the batch -- and replay order is safe because the session state lives in
+the database, not in the arrival order.
 """
 
+import json
 import logging
 import sqlite3
 import threading
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 from database import get_connection
-from routers.students import auto_renew_if_expired
-from attendance_punch import apply_punch, punch_debounce_minutes, student_id_for_user_id
+from attendance_punch import capture_and_apply, new_punch_tally, record_punch_tally
 
 logger = logging.getLogger("adms.ingest")
 
@@ -126,8 +135,15 @@ def ingest_attlog(sn: str, body: str) -> dict:
     """
     Parse and apply one ADMS ATTLOG push. Returns the same tally shape as
     zkteco.sync.sync_attendance_from_device (pulled/imported/duplicates/
-    unknown_students/renewed) so the two are directly comparable, and
-    records the result against the device's status entry.
+    duplicate_transport/duplicate_debounced/unknown_students/renewed) so
+    the two are directly comparable, and records the result against the
+    device's status entry.
+
+    Each record is captured independently through the device_punches
+    ledger, so a punch that failed to parse or apply cannot drag the rest
+    of the batch down with it. Any punch that ADMS cannot deliver is still
+    sitting in the device's buffer, so the pyzk poller / reconciliation
+    loop picks it up -- ADMS is the fast path, never the only path.
     """
     records = _parse_attlog_body(body)
     for rec in records:
@@ -137,50 +153,37 @@ def ingest_attlog(sn: str, body: str) -> dict:
         # the payload" step.
         logger.info("ADMS ATTLOG payload from SN=%s: %s", sn, rec["raw"])
 
-    by_day: dict = {}
-    for rec in records:
-        day = rec["timestamp"].strftime("%Y-%m-%d")
-        time_str = rec["timestamp"].strftime("%H:%M")
-        by_day.setdefault((rec["pin"], day), []).append(time_str)
-
-    pulled = len(records)
-    imported = 0
-    duplicates = 0
-    unknown_students = 0
-    renewed = 0
-    debounce_minutes = punch_debounce_minutes()
+    tally = new_punch_tally()
+    tally["pulled"] = len(records)
 
     db: sqlite3.Connection = get_connection()
     try:
-        for (pin, day), punches in by_day.items():
-            student_id = student_id_for_user_id(db, pin)
-            if student_id is None:
-                unknown_students += len(punches)
-                logger.warning(
-                    "ADMS punch(es) from unknown device PIN=%s (SN=%s) -- no "
-                    "matching student, ignored.",
-                    pin,
+        for rec in records:
+            try:
+                result = capture_and_apply(
+                    db,
                     sn,
+                    rec["pin"],
+                    rec["timestamp"],
+                    rec["status"],
+                    rec["verify"],
+                    rec["raw"],
+                    "adms",
                 )
-                continue
-
-            # Same show-up-reactivates-membership rule as the front desk
-            # and the pyzk paths (routers.students.auto_renew_if_expired).
-            if auto_renew_if_expired(db, student_id):
-                renewed += 1
-
-            for punch in sorted(punches):
-                outcome = apply_punch(db, student_id, day, punch, debounce_minutes)
-                if outcome == "duplicate":
-                    duplicates += 1
-                else:
-                    imported += 1
+                record_punch_tally(tally, result)
                 logger.info(
-                    "ADMS punch applied: student_id=%s day=%s time=%s outcome=%s",
-                    student_id,
-                    day,
-                    punch,
-                    outcome,
+                    "ADMS punch applied: pin=%s day=%s time=%s outcome=%s",
+                    rec["pin"],
+                    rec["timestamp"].strftime("%Y-%m-%d"),
+                    rec["timestamp"].strftime("%H:%M"),
+                    result["outcome"],
+                )
+            except Exception:
+                # One bad record must not abort the whole batch. The raw
+                # record is still in the device buffer, so the pyzk
+                # poller / reconciliation loop will capture it.
+                logger.exception(
+                    "ADMS ATTLOG record failed for SN=%s: %r", sn, rec["raw"]
                 )
         db.commit()
     except Exception:
@@ -190,12 +193,39 @@ def ingest_attlog(sn: str, body: str) -> dict:
     finally:
         db.close()
 
-    result = {
-        "pulled": pulled,
-        "imported": imported,
-        "duplicates": duplicates,
-        "unknown_students": unknown_students,
-        "renewed": renewed,
-    }
-    _touch(sn, last_push_at=datetime.utcnow(), last_result=result)
-    return result
+    _touch(sn, last_push_at=datetime.utcnow(), last_result=tally)
+    return tally
+
+
+def get_sync_status() -> dict:
+    """
+    Durable per-device sync state from the device_state table (survives
+    restarts), combined with the in-memory liveness view.
+    """
+    db: sqlite3.Connection = get_connection()
+    try:
+        rows = db.execute(
+            "SELECT * FROM device_state ORDER BY device_serial"
+        ).fetchall()
+        status = {}
+        for row in rows:
+            entry = {
+                "device_serial": row["device_serial"],
+                "last_seen_at": row["last_seen_at"],
+                "last_reconcile_at": row["last_reconcile_at"],
+                "last_buffer_count": row["last_buffer_count"],
+                "ledger_pending": row["ledger_pending"],
+            }
+            if row["last_result"]:
+                try:
+                    entry["last_result"] = json.loads(row["last_result"])
+                except ValueError:
+                    entry["last_result"] = None
+            status[row["device_serial"]] = entry
+        with _state_lock:
+            for sn, live in _devices.items():
+                entry = status.setdefault(sn, {"device_serial": sn})
+                entry.update(live)
+        return status
+    finally:
+        db.close()
