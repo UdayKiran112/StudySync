@@ -24,7 +24,10 @@ Steps, in order:
    7. backfill_renewals.py                     -> students.renewal_count / status
       (replays the attendance auto-renewal math once attendance is loaded,
       so current members are never left marked 'Inactive' at rest);
-   8. consolidate the manual-review ledger into one report and print final
+   8. validate_database.py                     -> final gate: abort if any
+      invariant is broken (marks must never exceed an exam's max, no orphan
+      rows, no impossible averages, no duplicates);
+   9. consolidate the manual-review ledger into one report and print final
       row counts.
 
 Everything a loader cannot safely auto-correct is written to the shared
@@ -243,6 +246,10 @@ def main():
         BASE / "members" / "backfill_renewals.py",
         ["--db", DB],
     )
+
+    # Final gate: every loader has run and the database is at rest. Aborts
+    # the run (non-zero exit) if any FATAL invariant is broken.
+    run_step(args.python, BASE / "validate_database.py", ["--db", DB])
 
     totals = count_rows()
     print("\n=== Final row counts ===")

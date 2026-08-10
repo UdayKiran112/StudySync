@@ -1,4 +1,7 @@
 import csv, re, os
+from collections import defaultdict
+
+import common
 
 SRC = "internal_marks.csv"
 OUT = "./marks/internal_marks_organized.csv"
@@ -199,6 +202,103 @@ for r in rows_out:
         )
         r["marks"] = corrected
 
+# ---------------------------------------------------------------------------
+# Marks validation pass (post-organization, before the CSV is written).
+#
+# Every row is now one resolved (student, exam, marks, max_marks) fact, so
+# this is the right place to enforce the pipeline's hard invariant: a mark
+# must never exceed its exam's max marks. Rows that violate it are handled
+# in increasing order of confidence:
+#
+#   1. COLON-FOR-DECIMAL TYPOS -- the same ':' instead of '.' slip that the
+#      date/time columns contain ("18:50" meant 18.5). Only applied to a
+#      value that is exactly `digits:1-2 digits` and whose corrected numeric
+#      value is still a plausible, in-range score.
+#   2. BLOCK-LEVEL MAX-MARKS TYPOS -- when 2+ students in one exam block
+#      exceed the recorded max, the max itself is a data-entry error, not
+#      the students' marks (e.g. a "Constable" block recorded as 100 max
+#      where every other Constable block in the register is 200). The max is
+#      corrected to the topic's dominant max only when that dominant max is
+#      >= the block's highest mark (i.e. it actually fits the block).
+#   3. UNRESOLVABLE OVER-MAX ROWS -- a single mark above the max (a
+#      misplaced pasted value, a mis-typed score, or a max that can't be
+#      cross-checked) has NO confident correction. It is left untouched in
+#      the CSV so load_exam_marks.py can flag it for manual review and
+#      deliberately NOT insert it -- a fabricated value is worse than a gap.
+# ---------------------------------------------------------------------------
+
+# A marks cell that is really a time (the ':' key used instead of '.'),
+# e.g. '18:50' -> 18.5. Everything else non-numeric is left alone and is
+# skipped+flagged by the loader.
+TIME_LIKE_MARKS_RE = re.compile(r"^\d+:\d{1,2}$")
+
+colon_decimal_corrections = []
+for r in rows_out:
+    m = r["marks"].strip()
+    if TIME_LIKE_MARKS_RE.match(m):
+        recovered = m.replace(":", ".")
+        try:
+            value = float(recovered)
+        except ValueError:
+            continue
+        if value >= 0 and (not r["max_marks"] or value <= float(r["max_marks"])):
+            colon_decimal_corrections.append(
+                f"{r['name']!r} {r['date']} {r['exam']!r}: marks {m!r} read "
+                f"as decimal {recovered!r} (colon-for-dot typo)"
+            )
+            r["marks"] = recovered
+
+# Group rows into exam blocks by (canonical exam identity, date). Identity
+# comes from common.exam_identity_key so 'Constable' / 'Constable G T' /
+# 'Constable Grand Test' collapse onto one real exam for cross-exam checks.
+blocks = defaultdict(list)
+for r in rows_out:
+    blocks[(common.exam_identity_key(r["exam"]), r["date"])].append(r)
+
+# Most-common max marks for a canonical topic across ALL its blocks -- the
+# scale the exam is normally run on (used to repair a mis-recorded block max).
+topic_max_marks = defaultdict(list)
+for (ident, _date), block in blocks.items():
+    for r in block:
+        if r["max_marks"]:
+            topic_max_marks[ident].append(r["max_marks"])
+
+def dominant_max(ident):
+    if not topic_max_marks[ident]:
+        return None
+    counts = defaultdict(int)
+    for m in topic_max_marks[ident]:
+        counts[m] += 1
+    best = max(counts.items(), key=lambda kv: kv[1])
+    return best[0] if best[1] >= 2 else None
+
+block_max_corrections = []
+over_max_flagged = []
+for (ident, date), block in blocks.items():
+    maxes = {r["max_marks"] for r in block if r["max_marks"]}
+    if not maxes:
+        continue
+    over = [r for r in block if r["marks"] and r["max_marks"] and float(r["marks"]) > float(r["max_marks"])]
+    if len(over) >= 2:
+        dom = dominant_max(ident)
+        block_high = max(float(r["marks"]) for r in over)
+        if dom is not None and float(dom) >= block_high and float(dom) not in {float(m) for m in maxes}:
+            block_max_corrections.append(
+                f"{date} {over[0]['exam']!r}: {len(over)} students exceed the "
+                f"recorded max {sorted(maxes)} -- other {ident!r} blocks in this "
+                f"register use {dom}; block max corrected to {dom} (fits the "
+                f"block's highest mark {block_high:g})"
+            )
+            for r in block:
+                if r["max_marks"]:
+                    r["max_marks"] = dom
+    elif len(over) == 1:
+        over_max_flagged.append(
+            f"{over[0]['name']!r} {date} {over[0]['exam']!r}: marks "
+            f"{over[0]['marks']} > max {over[0]['max_marks']} -- no confident "
+            f"correction; flagged for manual review and NOT loaded"
+        )
+
 os.makedirs("outputs", exist_ok=True)
 with open(OUT, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
@@ -222,6 +322,18 @@ print("Total student rows written:", len(rows_out))
 print()
 print("Marks corrections applied:", len(marks_corrections_applied))
 for note in marks_corrections_applied:
+    print(" ", note)
+print()
+print("Colon-for-decimal marks corrections:", len(colon_decimal_corrections))
+for note in colon_decimal_corrections:
+    print(" ", note)
+print()
+print("Block max-marks corrections:", len(block_max_corrections))
+for note in block_max_corrections:
+    print(" ", note)
+print()
+print("Unresolvable over-max rows (flagged, NOT loaded):", len(over_max_flagged))
+for note in over_max_flagged:
     print(" ", note)
 print()
 print("Topic/date swap corrections:", len(swap_corrections))

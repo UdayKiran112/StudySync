@@ -28,9 +28,13 @@ exam_marks.marks_obtained is NOT NULL in schema.sql, and every row this
 script writes carries a real score from the register -- so no exam_marks
 row is ever inserted without marks. exams.max_marks stays nullable (a
 register row may leave Max Marks blank); it is set here whenever the
-register supplies one. An offline-exam sitting the register never scored
-is not this script's concern -- load_offline_exam.py (which runs after
-this one) flags those for manual review.
+register supplies one. A marks_obtained above the exam's max_marks is a
+hard invariant violation (it would inflate batch averages computed as a
+percentage of max) -- such a row is SKIPPED and flagged for manual review,
+never inserted: a fabricated or misfiled value is worse than a gap.
+An offline-exam sitting the register never scored is not this script's
+concern -- load_offline_exam.py (which runs after this one) flags those
+for manual review.
 
 TOPIC MATCHING (Canonicalizer)
 -------------------------------
@@ -718,18 +722,20 @@ def load_marks_csv(path: Path, loader: "ExamLoader", existing_student_ids: set):
                 loader.log(
                     f"line {line_no} ({name!r}): marks_obtained {marks_obtained} "
                     f"exceeds max_marks {max_marks} for {topic_raw!r} on {date} "
-                    f"-> KEPT, flagged for manual review",
+                    f"-> row SKIPPED (a mark can never exceed its exam's max), "
+                    f"flagged for manual review",
                     ERR_MARKS,
                 )
                 loader._review(
                     "marks_above_max",
                     f"marks_obtained {marks_obtained} > max_marks {max_marks} "
-                    f"(exam {topic_raw!r}); kept as-is -- verify the score "
-                    f"and/or the exam's max marks",
+                    f"(exam {topic_raw!r}); NOT loaded -- resolve the score "
+                    f"and/or the exam's max marks before this row can be added",
                     line_no,
                     name,
                     date,
                 )
+                continue
             loader.apply_exam_mark(
                 student_id, exam_id, marks_obtained, max_marks, line_no, date
             )

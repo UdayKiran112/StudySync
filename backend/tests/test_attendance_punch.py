@@ -209,6 +209,165 @@ class AttendancePunchTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "checked_in")
         self.assertEqual(self._ledger()[0]["raw_record"], raw)
 
+    # --- session conflict reconciliation (pre-existing/preloaded data) -------
+
+    def test_15_dayend_promotion_conflict_is_reconciled_not_a_crash(self):
+        # Pre-existing/preloaded data: student already has a "Full Day" row.
+        # The device re-reads the day with punches OUTSIDE that span (09:00
+        # opens a Morning session, 17:00 closes it into "Full Day") -- the
+        # 5729-style pattern that crashed the old poll.
+        self.db.execute(
+            "INSERT INTO attendance (student_id, date, session, check_in, check_out, duration_minutes) "
+            "VALUES (1001, '2026-06-10', 'Full Day', '09:40', '18:00', 440)"
+        )
+        self.db.commit()
+
+        with self.assertLogs("studysync.attendance_punch", level="WARNING") as logs:
+            self.assertEqual(
+                self._punch(1001, "2026-06-10 09:00:00")["outcome"], "checked_in"
+            )
+            self.assertEqual(
+                self._punch(1001, "2026-06-10 17:00:00")["outcome"], "checked_out"
+            )
+
+        self.assertTrue(
+            any("Session conflict reconciled" in line for line in logs.output),
+            "expected a 'session conflict reconciled' warning",
+        )
+
+        rows = self._attendance()
+        self.assertEqual(len(rows), 1)  # obsolete preloaded row replaced
+        self.assertEqual(rows[0]["session"], "Full Day")
+        self.assertEqual(rows[0]["check_in"], "09:00")
+        self.assertEqual(rows[0]["check_out"], "17:00")
+        self.assertEqual(rows[0]["duration_minutes"], 420)  # lunch 13:00-14:00 excluded
+
+        ledger = self._ledger()
+        self.assertEqual([r["state"] for r in ledger], ["applied", "applied"])
+
+    def test_16_stale_open_promotion_conflict_keeps_closed_row(self):
+        # Pre-existing: a closed Full Day row on 2026-06-09. The device
+        # re-opens a Morning session for that day with an 08:30 punch that
+        # falls OUTSIDE the preloaded span (so it is genuine new presence).
+        self.db.execute(
+            "INSERT INTO attendance (student_id, date, session, check_in, check_out, duration_minutes) "
+            "VALUES (1001, '2026-06-09', 'Full Day', '09:00', '17:00', 420)"
+        )
+        self.db.commit()
+
+        self.assertEqual(
+            self._punch(1001, "2026-06-09 08:30:00")["outcome"], "checked_in"
+        )
+        # Next day's punch auto-closes the stale open; the 23:59 auto-close
+        # would promote it to "Full Day" and collide with the pre-existing row.
+        self.assertEqual(
+            self._punch(1001, "2026-06-10 09:00:00")["outcome"], "checked_in"
+        )
+
+        prev = self._attendance(day="2026-06-09")
+        self.assertEqual(len(prev), 1)  # closed row kept, stale open removed
+        self.assertEqual(prev[0]["session"], "Full Day")
+        self.assertEqual(prev[0]["check_out"], "17:00")
+
+        cur = self._attendance(day="2026-06-10")
+        self.assertEqual(len(cur), 1)
+        self.assertEqual(cur[0]["check_in"], "09:00")
+        self.assertIsNone(cur[0]["check_out"])
+
+    def test_17_insert_collision_is_a_duplicate_not_a_crash(self):
+        # Pre-existing: a closed Morning row already claims the session.
+        self.db.execute(
+            "INSERT INTO attendance (student_id, date, session, check_in, check_out, duration_minutes) "
+            "VALUES (1001, '2026-06-10', 'Morning', '09:00', '12:00', 180)"
+        )
+        self.db.commit()
+
+        result = self._punch(1001, "2026-06-10 09:30:00")
+        self.assertEqual(result["outcome"], "duplicate")
+
+        rows = self._attendance()
+        self.assertEqual(len(rows), 1)  # no second Morning row
+        self.assertEqual(rows[0]["check_in"], "09:00")
+        self.assertEqual(rows[0]["check_out"], "12:00")
+
+        ledger = self._ledger()
+        self.assertEqual(len(ledger), 1)
+        self.assertEqual(ledger[0]["state"], "duplicate_session")
+
+    def test_18_reconcile_is_idempotent_on_reread(self):
+        # Same pre-existing Full Day row as test_15 (punches outside the span).
+        self.db.execute(
+            "INSERT INTO attendance (student_id, date, session, check_in, check_out, duration_minutes) "
+            "VALUES (1001, '2026-06-10', 'Full Day', '09:40', '18:00', 440)"
+        )
+        self.db.commit()
+
+        self._punch(1001, "2026-06-10 09:00:00")
+        self._punch(1001, "2026-06-10 17:00:00")
+        before = self._attendance()
+
+        # A second transport re-reads the same day: the 09:00 punch is earlier
+        # than the recorded 17:00 check-out, so it hits the re-read guard and
+        # classifies as a duplicate; the 17:00 punch lands exactly on the last
+        # recorded punch, so the debounce guard (diff = 0) catches it first.
+        # Neither path re-runs the resolution and nothing changes.
+        for dt, expected in [
+            ("2026-06-10 09:00:00", "duplicate"),
+            ("2026-06-10 17:00:00", "duplicate_debounced"),
+        ]:
+            result = attendance_punch.capture_and_apply(
+                self.db, "SN-TEST-02", 1001, _dt(dt), "0", "0", None, "pyzk_poll"
+            )
+            self.assertEqual(result["outcome"], expected)
+
+        self.assertEqual(self._attendance(), before)
+
+    def test_19_punch_inside_preexisting_span_is_covered_not_a_new_session(self):
+        # The 5729 single-punch pattern: the device re-reads a 09:41 punch on
+        # a day whose preloaded "Full Day" row already spans 09:40 - 18:00.
+        # The punch is already accounted for, so it must NOT open a second
+        # (unclosable) Morning session.
+        self.db.execute(
+            "INSERT INTO attendance (student_id, date, session, check_in, check_out, duration_minutes) "
+            "VALUES (1001, '2026-06-10', 'Full Day', '09:40', '18:00', 440)"
+        )
+        self.db.commit()
+
+        result = self._punch(1001, "2026-06-10 09:41:00")
+        self.assertEqual(result["outcome"], "duplicate")
+
+        rows = self._attendance()
+        self.assertEqual(len(rows), 1)  # only the preloaded Full Day row
+        self.assertEqual(rows[0]["session"], "Full Day")
+        self.assertEqual(rows[0]["check_in"], "09:40")
+        self.assertEqual(rows[0]["check_out"], "18:00")
+
+        ledger = self._ledger()
+        self.assertEqual(len(ledger), 1)
+        self.assertEqual(ledger[0]["state"], "duplicate_session")
+
+    def test_20_punch_outside_preexisting_span_opens_a_real_session(self):
+        # A punch that falls OUTSIDE every existing row's span is genuine new
+        # presence and must still open a session (normal behavior preserved).
+        self.db.execute(
+            "INSERT INTO attendance (student_id, date, session, check_in, check_out, duration_minutes) "
+            "VALUES (1001, '2026-06-10', 'Morning', '09:00', '12:00', 180)"
+        )
+        self.db.commit()
+
+        self.assertEqual(
+            self._punch(1001, "2026-06-10 15:00:00")["outcome"], "checked_in"
+        )
+        self.assertEqual(
+            self._punch(1001, "2026-06-10 17:00:00")["outcome"], "checked_out"
+        )
+
+        rows = self._attendance()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([r["session"] for r in rows], ["Morning", "Afternoon"])
+        self.assertEqual(rows[1]["check_in"], "15:00")
+        self.assertEqual(rows[1]["check_out"], "17:00")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

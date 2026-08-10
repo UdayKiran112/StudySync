@@ -44,13 +44,32 @@ double-tap: it is recorded in the ledger as "duplicate_debounced" (so the
 raw record survives for audit) but is NOT a check-out and does NOT open a
 new session. The original raw device record is always preserved in the
 ledger's raw_record column regardless of how the punch is classified.
+
+SESSION CONFLICT RECONCILIATION
+-------------------------------
+The attendance schema enforces UNIQUE(student_id, date, session). When the
+device re-reads days that ALSO have pre-existing/preloaded attendance
+(e.g. the full re-import after a database restore), a device-derived
+session promotion (Morning -> Full Day at day-end) can collide with a
+pre-existing row for that student-date. That collision is detected and
+reconciled BEFORE the write (see _resolve_session_conflict) instead of
+raising through the poll: the pre-existing row is treated as the stale one,
+PyZK device data is authoritative, and a "session conflict reconciled"
+warning is logged with both rows plus every device punch recorded for the
+day. Conflicts that only surface as an INSERT collision (a device punch
+whose provisional session is already claimed by a closed pre-existing row)
+are preserved in the ledger as duplicate_session -- never a crash and never
+a second attendance row.
 """
 
+import logging
 import os
 import sqlite3
 import threading
 from datetime import datetime
 from typing import Optional
+
+logger = logging.getLogger("studysync.attendance_punch")
 
 from routers.attendance import (
     _auto_fill_offline_if_needed,
@@ -200,7 +219,9 @@ def capture_and_apply(
             # A show-up reactivates a lapsed membership. Idempotent.
             renewed = auto_renew_if_expired(db, student_id)
 
-            outcome = apply_punch(db, student_id, day, time_str, punch_debounce_minutes())
+            outcome = apply_punch(
+                db, student_id, day, time_str, punch_debounce_minutes()
+            )
 
             if outcome in ("checked_in", "checked_out"):
                 state = "applied"
@@ -269,9 +290,100 @@ def latest_punch_time(
     return row["latest"] if row and row["latest"] else None
 
 
-def close_stale_open_session(
-    db: sqlite3.Connection, student_id: int, day: str
+def _find_conflicting_session(
+    db: sqlite3.Connection,
+    student_id: int,
+    day: str,
+    session: str,
+    exclude_attendance_id: int,
+):
+    """
+    Look for a DIFFERENT attendance row that already occupies the given
+    (student_id, day, session) slot. Used before any write that would move
+    another row into that slot (the session-promotion UPDATE at day-end,
+    the stale-open auto-close) so a UNIQUE(student_id, date, session)
+    collision is detected and reconciled instead of crashing the device
+    poll.
+    """
+    return db.execute(
+        """SELECT attendance_id, session, check_in, check_out
+           FROM attendance
+           WHERE student_id = ? AND date = ? AND session = ?
+             AND attendance_id != ?""",
+        (student_id, day, session, exclude_attendance_id),
+    ).fetchone()
+
+
+def _resolve_session_conflict(
+    db: sqlite3.Connection,
+    student_id: int,
+    day: str,
+    final_session: str,
+    keep_attendance_id: int,
+    keep_check_in: str,
+    keep_check_out: str,
 ) -> None:
+    """
+    Resolve a session collision between device-derived data and a
+    pre-existing/preloaded attendance row.
+
+    Example: student 5729 already has a preloaded "Full Day" row
+    (09:40 - 18:00) for a date. The device punch stream re-reads the same
+    day: 09:41 opens a provisional "Morning" row, the day-end punch closes
+    it, and _compute_session_and_duration() reclassifies it to "Full Day" --
+    which collides with the preloaded row. Without this step the closing
+    UPDATE would raise UNIQUE(student_id, date, session) and abort the whole
+    poll.
+
+    PyZK device data is authoritative on conflict: the obsolete pre-existing
+    row is removed and the device-derived row (keep_attendance_id) survives
+    with the device's check_in/check_out. The full picture -- both rows plus
+    every device punch recorded for the student-day -- is logged as a
+    "session conflict reconciled" warning. This runs inside
+    capture_and_apply()'s lock + transaction, so a failure rolls back and the
+    conflicting punch stays in the device_punches ledger, keeping the whole
+    resolution idempotent on re-read. The normal (non-conflicting) attendance
+    logic is untouched.
+    """
+    conflicting = _find_conflicting_session(
+        db, student_id, day, final_session, keep_attendance_id
+    )
+    if conflicting is None:
+        return
+
+    punches = db.execute(
+        """SELECT punch_time, state FROM device_punches
+           WHERE student_id = ? AND punch_time LIKE ? AND punch_time != ''
+           ORDER BY punch_time""",
+        (student_id, day + "%"),
+    ).fetchall()
+
+    logger.warning(
+        "Session conflict reconciled: student %s on %s -- the device punch "
+        "stream derives session=%s (check_in=%s, check_out=%s) but an existing "
+        "row already claims that session (attendance_id=%s, session=%s, "
+        "check_in=%s, check_out=%s). PyZK device data is authoritative, so the "
+        "obsolete pre-existing row is removed and the device-derived row is "
+        "kept. Device punches recorded for the day: %s",
+        student_id,
+        day,
+        final_session,
+        keep_check_in,
+        keep_check_out,
+        conflicting["attendance_id"],
+        conflicting["session"],
+        conflicting["check_in"],
+        conflicting["check_out"],
+        [(p["punch_time"], p["state"]) for p in punches],
+    )
+
+    db.execute(
+        "DELETE FROM attendance WHERE attendance_id = ?",
+        (conflicting["attendance_id"],),
+    )
+
+
+def close_stale_open_session(db: sqlite3.Connection, student_id: int, day: str) -> None:
     """
     If the student still has an open session from a PREVIOUS day (punched
     in and never out), close it at 23:59 of its own day. Runs just before
@@ -285,6 +397,35 @@ def close_stale_open_session(
     if stale is None:
         return
     final_session, duration = _compute_session_and_duration(stale["check_in"], "23:59")
+    conflicting = _find_conflicting_session(
+        db, stale["student_id"], stale["date"], final_session, stale["attendance_id"]
+    )
+    if conflicting is not None:
+        # The stale day already has a closed row covering this session and
+        # that row carries a REAL check-out, so it is more truthful than the
+        # artificial 23:59 auto-close. Drop the stale open row instead of
+        # crashing on UNIQUE(student_id, date, session).
+        logger.warning(
+            "Session conflict reconciled (stale open): student %s on %s -- the "
+            "open session (attendance_id=%s, check_in=%s) auto-closes at 23:59 "
+            "into session=%s, which an existing row already claims "
+            "(attendance_id=%s, session=%s, check_in=%s, check_out=%s). The "
+            "closed row keeps its real check-out; the stale open row is removed.",
+            stale["student_id"],
+            stale["date"],
+            stale["attendance_id"],
+            stale["check_in"],
+            final_session,
+            conflicting["attendance_id"],
+            conflicting["session"],
+            conflicting["check_in"],
+            conflicting["check_out"],
+        )
+        db.execute(
+            "DELETE FROM attendance WHERE attendance_id = ?",
+            (stale["attendance_id"],),
+        )
+        return
     db.execute(
         "UPDATE attendance SET check_out = ?, session = ?, duration_minutes = ? WHERE attendance_id = ?",
         ("23:59", final_session, duration, stale["attendance_id"]),
@@ -345,6 +486,20 @@ def apply_punch(
         ).fetchone()
         if already:
             return "duplicate"
+        # Covered-by-span guard: if a pre-existing/preloaded row for this day
+        # ALREADY spans the punch time (e.g. a preloaded "Full Day" row
+        # 09:40 - 18:00 and the device re-reads a 09:41 punch), the punch adds
+        # no new presence -- opening a second session for it would both double
+        # the day and (once a closing punch promotes it to "Full Day") collide
+        # with the preloaded row. Treat it as a duplicate instead.
+        spanned = db.execute(
+            """SELECT 1 FROM attendance
+               WHERE student_id = ? AND date = ?
+                 AND check_in <= ? AND check_out >= ? LIMIT 1""",
+            (student_id, day, punch, punch),
+        ).fetchone()
+        if spanned:
+            return "duplicate"
         close_stale_open_session(db, student_id, day)
         try:
             session = _determine_provisional_session(punch)
@@ -366,11 +521,30 @@ def apply_punch(
             )
             return "checked_in"
         except sqlite3.IntegrityError:
+            logger.warning(
+                "Session conflict: student %s on %s -- the device punch %s maps "
+                "to provisional session %s, which an existing row already "
+                "claims. No duplicate row is created; the punch is preserved in "
+                "the device_punches ledger as duplicate_session for audit.",
+                student_id,
+                day,
+                punch,
+                session,
+            )
             return "duplicate"
 
     if punch > open_session["check_in"]:
         final_session, duration = _compute_session_and_duration(
             open_session["check_in"], punch
+        )
+        _resolve_session_conflict(
+            db,
+            student_id,
+            day,
+            final_session,
+            open_session["attendance_id"],
+            open_session["check_in"],
+            punch,
         )
         db.execute(
             """
