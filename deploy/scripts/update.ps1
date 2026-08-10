@@ -37,12 +37,46 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     exit 1
 }
 if (-not (Test-Path $PackageDir)) { Write-Host "ERROR: package not found: $PackageDir" -ForegroundColor Red; exit 1 }
+if (-not (Test-Path "$APP_DIR\app\api\.env")) {
+    Write-Host "ERROR: $APP_DIR\app\api\.env not found. Aborting before stopping anything; no changes made." -ForegroundColor Red
+    exit 1
+}
 
-# 1. Stop services so files are not locked.
+# Capture the API key, DB path and any device-integration / operator settings
+# from the live .env BEFORE stopping anything, so a config problem aborts the
+# update while the install is still fully untouched. The package ships no .env,
+# so these values are written back after the swap (never rotate the key).
+$apiKey = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_API_KEY=(.+)$').Matches[0].Groups[1].Value
+$dbEnv = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_DB_PATH=(.+)$').Matches[0].Groups[1].Value
+$extraLines = Get-Content -Path "$APP_DIR\app\api\.env" | Where-Object {
+    $_ -match '^\s*(ZK_|ADMS_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
+}
+Write-Log "Preserving API key (kept from current install)."
+
+# 1. Stop services so files are not locked. Use the Service Control Manager
+#    (sc.exe) rather than WinSW's `stop` subcommand, which on some installs
+#    fails with "Cannot stop '<name>' service on computer '.'" and leaves the
+#    old processes running - a locked config\winsw\*.exe then aborts the copy
+#    midway, leaving the install half-updated.
 Write-Log "Stopping services..."
-& "$APP_DIR\config\winsw\studysync-api.exe" stop | Out-Null
-& "$APP_DIR\config\winsw\studysync-caddy.exe" stop | Out-Null
-Start-Sleep -Seconds 3
+foreach ($svc in @("StudySyncAPI", "StudySyncCaddy")) {
+    sc.exe stop $svc | Out-Null
+}
+# Poll until both are actually stopped (sc.exe returns before the stop
+# completes); force the service and kill any leftover wrapped processes so the
+# file copy below can never hit a locked exe.
+$deadline = (Get-Date).AddSeconds(60)
+while ((Get-Date) -lt $deadline) {
+    $stillUp = @("StudySyncAPI", "StudySyncCaddy") |
+        Where-Object { (Get-Service $_ -ErrorAction SilentlyContinue).Status -ne 'Stopped' }
+    if (-not $stillUp) { break }
+    Start-Sleep -Milliseconds 500
+}
+Stop-Service -Name StudySyncAPI, StudySyncCaddy -Force -ErrorAction SilentlyContinue
+foreach ($proc in @("studysync-api", "studysync-caddy", "caddy")) {
+    Get-Process -Name $proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+Start-Sleep -Seconds 2
 
 # 2. Snapshot of the current data (cheap safety).
 Write-Host "Creating a safety backup before update..." -ForegroundColor Yellow
@@ -61,19 +95,6 @@ Start-Sleep -Seconds 1
 
 # 3. Replace application code. The venv ships inside the package, so the
 #    whole app/api and app/frontend and app/caddy trees are swapped.
-$apiKey = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_API_KEY=(.+)$').Matches[0].Groups[1].Value
-$dbEnv = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_DB_PATH=(.+)$').Matches[0].Groups[1].Value
-# Capture any device-integration / operator settings BEFORE the app swap
-# deletes app\api (the package ships no .env), so a configured ZKTeco device
-# keeps working across updates.
-$extraLines = @()
-if (Test-Path "$APP_DIR\app\api\.env") {
-    $extraLines = Get-Content -Path "$APP_DIR\app\api\.env" | Where-Object {
-        $_ -match '^\s*(ZK_|ADMS_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
-    }
-}
-Write-Log "Preserving API key (kept from current install)."
-
 foreach ($rel in @("app\api", "app\frontend", "app\caddy", "config\winsw", "scripts", "tools")) {
     $src = Join-Path $PackageDir $rel
     if (-not (Test-Path $src)) { Write-Log "WARN: missing $rel in package"; continue }
@@ -93,12 +114,16 @@ Write-Log "New application files copied."
 ) + $extraLines | Set-Content -Path "$APP_DIR\app\api\.env" -Encoding ASCII
 Write-Log ".env preserved."
 
-# 5. Restart services. Do NOT re-run `install`: the registrations already
-#    exist and WinSW re-reads its XML on every start, so an install here would
-#    fail with "service already exists" and, worse, an uninstall -> install
-#    cycle can leave the service stuck "marked for deletion".
-& "$APP_DIR\config\winsw\studysync-api.exe" start | Out-Null
-& "$APP_DIR\config\winsw\studysync-caddy.exe" start | Out-Null
+# 5. Restart services via the Service Control Manager (sc.exe) rather than
+#    WinSW's `start` subcommand, which is unreliable on some installs (same
+#    class of bug as the `stop` failure above). Do NOT re-run `install`: the
+#    registrations already exist and WinSW re-reads its XML on every start, so
+#    an install here would fail with "service already exists" and, worse, an
+#    uninstall -> install cycle can leave the service stuck "marked for
+#    deletion".
+sc.exe start StudySyncAPI | Out-Null
+Start-Sleep -Seconds 4
+sc.exe start StudySyncCaddy | Out-Null
 
 # Restart the tray monitor if installed (task re-registers it at next logon;
 # starting it now picks up the new exe immediately).
