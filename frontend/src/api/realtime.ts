@@ -6,6 +6,8 @@ const STORAGE_KEY = "studysync.settings";
 export interface RenewalEvent {
   student_id: number;
   name: string | null;
+  /** New membership expiry (YYYY-MM-DD) after the auto-renewal. */
+  valid_until: string | null;
 }
 
 /**
@@ -15,7 +17,8 @@ export interface RenewalEvent {
  *   - "attendance"  -> invalidates every attendance query so the page
  *                      refetches the instant a punch is written (no more
  *                      waiting for the 5s poll).
- *   - "renewal"     -> calls opts.onRenewal so the desk can be prompted.
+ *   - "renewal"     -> calls opts.onRenewal so the desk sees the renewal
+ *                      notification.
  *
  * The API key is sent as a normal header, so this uses fetch + a streaming
  * reader instead of EventSource (which can't set custom headers). Reconnects

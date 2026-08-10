@@ -93,8 +93,12 @@ export function StudentsList() {
 
   async function handleRenew(student: Student) {
     try {
-      await renewMutation.mutateAsync(student.student_id);
-      toast.success(`${student.name}'s membership is renewed for one year`);
+      const updated = await renewMutation.mutateAsync(student.student_id);
+      toast.success(
+        updated.valid_until
+          ? `${student.name}'s membership renewed until ${formatDate(updated.valid_until)}`
+          : `${student.name}'s membership renewed`,
+      );
       setRenewing(null);
       setRenewOpen(false);
     } catch (err) {

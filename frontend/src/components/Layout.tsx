@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import toast from "react-hot-toast";
 import {
   LayoutDashboard,
   Users,
@@ -22,9 +23,12 @@ import {
 } from "lucide-react";
 import { useSettings } from "../context/SettingsContext";
 import { useRealtimeEvents, type RenewalEvent } from "../api/realtime";
-import { RenewalDialog } from "./RenewalDialog";
+import { formatDate } from "../lib/format";
 import { CommandPalette } from "./ui/CommandPalette";
 import clsx from "clsx";
+
+/** Renewal notifications outlive normal toasts so the desk can't miss them. */
+const RENEWAL_TOAST_MS = 10000;
 
 const NAV_SECTIONS = [
   {
@@ -89,7 +93,6 @@ export function Layout() {
   const { isConfigured } = useSettings();
   const location = useLocation();
   const [open, setOpen] = useState(getInitialOpen);
-  const [renewals, setRenewals] = useState<RenewalEvent[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // Ctrl/Cmd+K and "/" open the quick-find palette from anywhere. "/" is
@@ -126,12 +129,33 @@ export function Layout() {
 
   // Live stream: punches written by the ZKTeco poller/live transport
   // instantly invalidate the attendance queries (so rows appear with no
-  // polling delay), and auto-renewals queue a prompt for the desk below.
+  // polling delay), and auto-renewals surface as a notification instead of
+  // a modal prompt. A burst of renewals (e.g. a full device re-import)
+  // coalesces onto one toast so the desk isn't spammed -- subsequent
+  // renewals within the window fold into the same toast.
+  const renewalToastRef = useRef<{ id: string; count: number } | null>(null);
   useRealtimeEvents({
-    onRenewal: (event) => setRenewals((pending) => [...pending, event]),
+    onRenewal: (event: RenewalEvent) => {
+      const name = event.name ?? `Student #${event.student_id}`;
+      const message = event.valid_until
+        ? `${name} — membership renewed, valid until ${formatDate(event.valid_until)}`
+        : `${name} — membership renewed`;
+      const active = renewalToastRef.current;
+      if (active) {
+        active.count += 1;
+        toast.success(`${message} · ${active.count} more`, {
+          id: active.id,
+          duration: RENEWAL_TOAST_MS,
+        });
+        return;
+      }
+      const id = toast.success(message, { duration: RENEWAL_TOAST_MS });
+      renewalToastRef.current = { id, count: 0 };
+      window.setTimeout(() => {
+        if (renewalToastRef.current?.id === id) renewalToastRef.current = null;
+      }, RENEWAL_TOAST_MS);
+    },
   });
-
-  const activeRenewal = renewals[0];
 
   // Remember the toggle choice, but only for desktop — mobile always starts closed.
   useEffect(() => {
@@ -332,13 +356,6 @@ export function Layout() {
           <Outlet />
         </div>
       </main>
-
-      {activeRenewal && (
-        <RenewalDialog
-          renewal={activeRenewal}
-          onClose={() => setRenewals((pending) => pending.slice(1))}
-        />
-      )}
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>

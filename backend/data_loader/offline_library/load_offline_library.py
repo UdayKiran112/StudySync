@@ -201,6 +201,20 @@ class OfflineLibraryLoader:
         name = collapse_ws(book_name_raw) or None
 
         if not bid and not name:
+            self.skips.append(
+                f"line {line_no}: row has neither a Book ID nor a Book Name -> "
+                f"SKIPPED (nothing to record)"
+            )
+            log_review_item(
+                {
+                    "table": "offline_library_usage",
+                    "row": line_no,
+                    "student_id": student_id,
+                    "date": date,
+                    "problem": "empty_usage_row",
+                    "detail": f"offline library row {line_no} has no book id and no book name",
+                }
+            )
             return
 
         if bid and not name:

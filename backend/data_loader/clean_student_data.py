@@ -1293,13 +1293,19 @@ def normalize_offline_book_ids(records, log):
         # Title or junk typed into the id column -> blank the id. A purely
         # numeric cell is never a title (numeric 'book names' like '1638'
         # are themselves ID-typed-into-name errors), so only non-numeric
-        # cells are matched against the known titles.
+        # cells are matched against the known titles. When a real title sat
+        # in the id column and the name column is empty, move the title over
+        # instead of leaving an all-empty row the loader would silently drop.
         is_numeric_cell = bool(re.match(r"^\d+$", cell))
         if (not is_numeric_cell and cell in known_titles) or cell in OFFLINE_ID_JUNK:
+            moved = ""
+            if cell in known_titles and not rec["Book Name"]:
+                rec["Book Name"] = cell
+                moved = " - moved to Book Name so the visit is not lost"
             report(
                 "corrected",
                 f"Book ID cell holds the book title {cell!r} (no catalog id) - "
-                f"id blanked",
+                f"id blanked{moved}",
             )
             rec["Book ID"] = ""
             normalized.append(rec)

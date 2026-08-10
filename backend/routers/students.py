@@ -106,16 +106,22 @@ def auto_renew_if_expired(
         WHERE student_id = ?""",
         (today_iso, student_id),
     )
-    # Tell any connected frontend so it can prompt the desk to log the
-    # visit in the offline library (the data renewal itself is already
-    # done above). Fired from every caller: front-desk check-in, pyzk
-    # poll/live alike.
+    # Tell any connected frontend so it can show the renewal notification
+    # (the data renewal itself is already done above). Fired from every
+    # caller: front-desk check-in, pyzk poll/live alike. Carries the new
+    # valid_until so the notification can say "renewed until <date>".
     row = db.execute(
-        "SELECT name FROM students WHERE student_id = ?", (student_id,)
+        f"SELECT name, {VALID_UNTIL_EXPR} AS valid_until FROM students "
+        "WHERE student_id = ?",
+        (student_id,),
     ).fetchone()
     publish(
         "renewal",
-        {"student_id": student_id, "name": row["name"] if row else None},
+        {
+            "student_id": student_id,
+            "name": row["name"] if row else None,
+            "valid_until": row["valid_until"] if row else None,
+        },
     )
     return True
 
