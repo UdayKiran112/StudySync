@@ -62,6 +62,15 @@ def get_connection() -> sqlite3.Connection:
           AND status != CASE WHEN date(start_date, '+' || validity_days || ' days') < ? THEN 'Expired' ELSE 'Active' END""",
         (date.today().isoformat(), date.today().isoformat()),
     )
+    # Commit the status refresh immediately so the connection does NOT start
+    # inside a write transaction. Otherwise any caller that performs slow I/O
+    # while holding this connection (e.g. a pyzk device read that can block
+    # for ZK_DEVICE_TIMEOUT seconds) keeps the WAL writer lock for the whole
+    # call, and every other connection fails with "database is locked" after
+    # the 5s busy_timeout. Committing here just persists the same bookkeeping
+    # the caller's final commit would have, so behaviour is unchanged for
+    # everyone else.
+    conn.commit()
     return conn
 
 
