@@ -4,7 +4,7 @@ routers/realtime.py
 Server-Sent Events endpoint that keeps the frontend in lockstep with
 background attendance writes.
 
-The pyzk poller, the pyzk live transport and the ADMS push handler all
+The pyzk poller, the pyzk live transport and the manual front-desk flow all
 import apply_punch() (attendance_punch.py), which publishes an "attendance"
 event every time it opens or closes a session. The membership gateway
 auto_renew_if_expired() (routers/students.py) publishes a "renewal" event

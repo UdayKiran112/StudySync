@@ -39,7 +39,7 @@ class AttendancePunchTests(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
-    def _punch(self, uid, dt, serial="SN-TEST-01", status="0", source="adms"):
+    def _punch(self, uid, dt, serial="SN-TEST-01", status="0", source="pyzk_poll"):
         return attendance_punch.capture_and_apply(
             self.db, serial, uid, _dt(dt), status, "0", None, source
         )
@@ -169,17 +169,17 @@ class AttendancePunchTests(unittest.TestCase):
 
     def test_11_same_punch_via_two_transports_claimed_once(self):
         first = attendance_punch.capture_and_apply(
-            self.db, "SN-ADMS-1", 1001, _dt("2026-06-10 09:00:00"), "0", "0", None, "adms"
+            self.db, "SN-TEST-01", 1001, _dt("2026-06-10 09:00:00"), "0", "0", None, "pyzk_poll"
         )
         second = attendance_punch.capture_and_apply(
-            self.db, "SN-ADMS-1", 1001, _dt("2026-06-10 09:00:00"), "0", "0", None, "pyzk_live"
+            self.db, "SN-TEST-01", 1001, _dt("2026-06-10 09:00:00"), "0", "0", None, "pyzk_live"
         )
         self.assertEqual(first["outcome"], "checked_in")
         self.assertEqual(second["outcome"], "duplicate_transport")
         ledger = self._ledger()
         self.assertEqual(len(ledger), 1)  # one ledger row, two sightings
         self.assertEqual(ledger[0]["state"], "applied")
-        self.assertEqual(ledger[0]["source"], "adms, pyzk_live")
+        self.assertEqual(ledger[0]["source"], "pyzk_poll, pyzk_live")
         rows = self._attendance()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["check_in"], "09:00")
@@ -203,8 +203,8 @@ class AttendancePunchTests(unittest.TestCase):
     def test_14_raw_record_is_preserved_in_ledger(self):
         raw = "4351\t2026-06-10 09:00:00\t0\t1\t\t0\t0\r\n"
         result = attendance_punch.capture_and_apply(
-            self.db, "SN-ADMS-1", 1001, _dt("2026-06-10 09:00:00"),
-            "0", "1", raw, "adms",
+            self.db, "SN-TEST-01", 1001, _dt("2026-06-10 09:00:00"),
+            "0", "1", raw, "pyzk_poll",
         )
         self.assertEqual(result["outcome"], "checked_in")
         self.assertEqual(self._ledger()[0]["raw_record"], raw)

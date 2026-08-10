@@ -33,12 +33,6 @@ C:\ProgramData\StudySync\scripts\healthcheck.exe
 - Exit 0 = `HEALTHY`, logged to `logs\health\health.log`.
 - Non-zero = something was down; it logs `UNHEALTHY: ...` and attempts to
   restart the offending service itself.
-- Every run also probes the **ADMS device-push path**: a GET to
-  `/iclock/cdata` directly (127.0.0.1:8000) and through Caddy (port 80) using
-  the synthetic serial `STUDYSYNC-HEALTHCHECK-PROBE`. The backend acknowledges
-  the handshake but records nothing — the probe never creates a punch or a
-  device-status entry. A failing probe means Caddy's `/iclock/*` proxying or the
-  backend's ADMS handler broke, even though the web page still loads.
 - If the health log shows repeated `UNHEALTHY` lines, run diagnostics and check
   `logs\api\api.log` and `config\winsw\*.err.log`.
 

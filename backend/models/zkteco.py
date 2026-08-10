@@ -7,7 +7,7 @@ Pydantic response models for the ZKTeco device integration endpoints.
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class ZkDeviceStatus(BaseModel):
@@ -24,6 +24,13 @@ class ZkDeviceInfo(BaseModel):
     face_version: Optional[str] = None
     fp_version: Optional[str] = None
     device_time: Optional[datetime] = None
+
+    @field_validator("face_version", "fp_version", mode="before")
+    @classmethod
+    def _version_to_str(cls, v):
+        # pyzk returns these as ints on some firmware (e.g. 7 on MB360);
+        # the API contract is a string version, so coerce instead of 500.
+        return None if v is None else str(v)
 
 
 class ZkUser(BaseModel):

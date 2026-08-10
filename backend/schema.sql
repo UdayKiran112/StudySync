@@ -348,11 +348,11 @@ CREATE INDEX idx_other_activities_attendance_external ON other_activities_attend
 -- DEVICE PUNCH LEDGER (raw audit trail)
 -- ===================================
 -- One row per PHYSICAL punch from the ZKTeco device, captured exactly once
--- no matter how many times it is delivered (ADMS push, pyzk poll, pyzk
--- live_capture, or the reconciliation loop). `fingerprint` uniquely
--- identifies a physical punch across ALL transports, so a punch that both
--- ADMS and pyzk deliver is claimed once here and applied to `attendance`
--- exactly once.
+-- no matter how many times it is delivered (pyzk poll, pyzk live_capture,
+-- or the reconciliation loop). `fingerprint` uniquely identifies a physical
+-- punch across ALL transports, so a punch that both the poll and the live
+-- stream deliver is claimed once here and applied to `attendance` exactly
+-- once.
 --
 -- `state` records what the punch turned into:
 --   pending              - captured but not yet applied (recovery point)
@@ -376,7 +376,7 @@ CREATE TABLE device_punches (
     punch_time     TEXT NOT NULL,          -- device clock, full seconds
     status_code    TEXT NOT NULL DEFAULT '',
     verify_method  TEXT NOT NULL DEFAULT '',
-    source         TEXT NOT NULL,          -- adms | pyzk_poll | pyzk_live | reconcile
+    source         TEXT NOT NULL,          -- pyzk_poll | pyzk_live | reconcile
     state          TEXT NOT NULL DEFAULT 'pending'
                    CHECK(state IN ('pending', 'applied', 'duplicate_transport',
                                    'duplicate_debounced', 'duplicate_session',
@@ -396,7 +396,7 @@ CREATE INDEX idx_device_punches_state ON device_punches(state);
 -- ===================================
 -- Survives restarts so operators can see when a device was last reconciled,
 -- how big its buffer was, and how much of the ledger is still pending --
--- the ADMS/zkteco in-memory status (which resets on restart) is only a
+-- the in-memory zkteco live status (which resets on restart) is only a
 -- liveness view; this is the durable record.
 CREATE TABLE device_state (
     device_serial     TEXT PRIMARY KEY,

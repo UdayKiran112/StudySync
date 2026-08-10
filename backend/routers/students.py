@@ -109,7 +109,7 @@ def auto_renew_if_expired(
     # Tell any connected frontend so it can prompt the desk to log the
     # visit in the offline library (the data renewal itself is already
     # done above). Fired from every caller: front-desk check-in, pyzk
-    # poll/live and the ADMS push path alike.
+    # poll/live alike.
     row = db.execute(
         "SELECT name FROM students WHERE student_id = ?", (student_id,)
     ).fetchone()
@@ -267,7 +267,7 @@ def student_summary(
         clauses.append("status = ?")
         params.append(status)
     if search:
-        clauses.append("(name LIKE ? OR CAST(student_id AS TEXT) LIKE ?)")
+        clauses.append("(name LIKE ? OR CAST(students.student_id AS TEXT) LIKE ?)")
         params.extend([f"%{search}%", f"%{search}%"])
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 

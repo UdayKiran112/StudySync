@@ -67,6 +67,19 @@ class ApiModuleTests(unittest.TestCase):
         self.assertEqual(self.request("PATCH", "/api/students/9001", json={"status": "Inactive"}).status_code, 200)
         self.assertEqual(self.request("PATCH", "/api/students/9001", json={"status": "Active"}).status_code, 200)
 
+    def test_02b_student_summary_search_with_attendance(self):
+        # Regression: /api/students/summary?search=... JOINs attendance and
+        # used to crash with "ambiguous column name: student_id".
+        self.assertEqual(self.request("GET", "/api/students/summary?search=Test").status_code, 200)
+
+    def test_02c_zkteco_info_accepts_int_versions(self):
+        from models.zkteco import ZkDeviceInfo
+
+        info = ZkDeviceInfo(face_version=7, fp_version=7)
+        self.assertEqual(info.face_version, "7")
+        self.assertEqual(info.fp_version, "7")
+        self.assertIsNone(ZkDeviceInfo().face_version)
+
     def test_03_books_and_subscriptions_modules(self):
         book = {"book_id": "TEST-BOOK", "title": "Testing Fundamentals", "category": "Science", "author": "A. Author", "added_date": "2026-06-01"}
         subscription = {"subscription_id": "TEST-SUB", "name": "Test Research", "type": "Research", "cost": 499, "validity_days": 30}
@@ -188,64 +201,15 @@ class ApiModuleTests(unittest.TestCase):
         self.assertEqual(roster.status_code, 200)
         self.assertEqual({item["participant_type"] for item in roster.json()}, {"Library Student", "External Student"})
 
-    # --- ZKTeco ADMS device-push integration -------------------------------
+    # --- ZKTeco sync-report (PyZK) ----------------------------------------
     #
-    # The device POSTs ATTLOG lines to /iclock/cdata (no API key -- the
-    # protocol has none, see routers/adms.py). These tests push the same
-    # physical punches a real MB360 would and assert the exactly-once
-    # ledger + attendance behaviour, including the double-tap debounce.
+    # The old ADMS HTTP push transport was removed, so there is no
+    # device-facing HTTP punch endpoint anymore; punch application is
+    # covered directly in test_attendance_punch.py. The sync-report
+    # endpoint is device-independent (it reads the ledger), so it is
+    # exercised through the API here.
 
-    def _push_attlog(self, sn, body):
-        return self.client.post(
-            f"/iclock/cdata?SN={sn}&table=ATTLOG&Stamp=0", content=body
-        )
-
-    def _db_rows(self, sql, params):
-        with sqlite3.connect(database.DB_PATH) as connection:
-            connection.row_factory = sqlite3.Row
-            return [dict(r) for r in connection.execute(sql, params).fetchall()]
-
-    def test_11_adms_push_is_exactly_once(self):
-        line = "9001\t2026-06-10 09:00:00\t0\t1\t\t0\t0\r\n"
-        for _ in range(2):  # identical push twice, as a real device retry would
-            response = self._push_attlog("SN-TEST-01", line)
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.text, "OK")
-        attendance = self._db_rows(
-            "SELECT * FROM attendance WHERE student_id = ? AND date = ?",
-            (9001, "2026-06-10"),
-        )
-        self.assertEqual(len(attendance), 1)
-        self.assertEqual(attendance[0]["check_in"], "09:00")
-        self.assertIsNone(attendance[0]["check_out"])
-        ledger = self._db_rows(
-            "SELECT * FROM device_punches WHERE fingerprint LIKE 'SN-TEST-01|%'",
-            (),
-        )
-        self.assertEqual(len(ledger), 1)  # one ledger row, two sightings
-        self.assertEqual(ledger[0]["state"], "applied")
-        self.assertIn("adms, adms", ledger[0]["source"])
-
-    def test_12_adms_double_tap_is_debounced_not_a_checkout(self):
-        first = "9002\t2026-06-11 09:00:00\t0\t1\t\t0\t0\r\n"
-        second = "9002\t2026-06-11 09:00:30\t0\t1\t\t0\t0\r\n"
-        self.assertEqual(self._push_attlog("SN-TEST-02", first).status_code, 200)
-        self.assertEqual(self._push_attlog("SN-TEST-02", second).status_code, 200)
-        attendance = self._db_rows(
-            "SELECT * FROM attendance WHERE student_id = ? AND date = ?",
-            (9002, "2026-06-11"),
-        )
-        self.assertEqual(len(attendance), 1)
-        self.assertEqual(attendance[0]["check_in"], "09:00")
-        self.assertIsNone(attendance[0]["check_out"])
-        ledger = self._db_rows(
-            "SELECT * FROM device_punches WHERE fingerprint LIKE 'SN-TEST-02|%' "
-            "ORDER BY punch_id",
-            (),
-        )
-        self.assertEqual([r["state"] for r in ledger], ["applied", "duplicate_debounced"])
-
-    def test_13_sync_report_and_adms_status_endpoints(self):
+    def test_11_sync_report_endpoint(self):
         report = self.request("GET", "/api/zkteco/sync-report")
         self.assertEqual(report.status_code, 200)
         body = report.json()
@@ -254,12 +218,8 @@ class ApiModuleTests(unittest.TestCase):
                     "ledger_duplicate_session", "ledger_unknown_student",
                     "fully_synced"):
             self.assertIn(key, body)
-        self.assertGreaterEqual(body["ledger_total"], 3)  # rows from tests 11 & 12
+        self.assertEqual(body["ledger_total"], 0)
         self.assertTrue(body["fully_synced"])
-        status = self.request("GET", "/api/adms/status")
-        self.assertEqual(status.status_code, 200)
-        self.assertIn("devices", status.json())
-        self.assertIn("SN-TEST-01", status.json()["devices"])
 
 
 if __name__ == "__main__":

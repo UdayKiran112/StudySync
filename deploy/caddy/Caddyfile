@@ -6,34 +6,15 @@
 # http://<this-machine-IP>. Port 80 means no port numbers to remember.
 
 :80 {
-	# ---- ZKTeco device push traffic (see below) ----
-	# The ADMS device speaks a plain-text protocol. Response compression
-	# (zstd/gzip) or caching headers would confuse older firmware and break
-	# the handshake, so /iclock/* is explicitly EXCLUDED from compression
-	# and told never to cache. See the /iclock/* handler below.
-	@biometric path /iclock/*
-	@not-biometric not path /iclock/*
-	encode @not-biometric zstd gzip
+	# Response compression (zstd/gzip) for everything; there is no
+	# plain-text device-push protocol left to protect from it.
+	encode zstd gzip
 
 	# ---- Static frontend root ----
 	root * C:\ProgramData\StudySync\app\frontend
 
 	# ---- API traffic goes to FastAPI (matched first, never hit the SPA) ----
 	handle /api/* {
-		reverse_proxy 127.0.0.1:8000
-	}
-
-	# ---- ZKTeco ADMS device push protocol (device -> server) ----
-	# The MB360 connects OUT to this machine and POSTs attendance to
-	# /iclock/* (no auth, plain-text protocol). Without this block the
-	# device's handshake/push would fall through to the SPA below and it
-	# would never register. Port 80 is already firewalled open for the LAN,
-	# so point the device's Comm > Cloud Server Setting at this machine's
-	# LAN IP on port 80.
-	handle @biometric {
-		# No compression (see matcher above) and never cached, so a stale
-		# copy can never be served back to the device on the next push.
-		header Cache-Control "no-store"
 		reverse_proxy 127.0.0.1:8000
 	}
 

@@ -124,14 +124,13 @@ if (-not $apiKey) {
     Write-Log "Reusing existing API key (reinstall preserves staff Settings)."
 }
 # Preserve any device-integration / operator settings from a previous .env
-# (ZK_DEVICE_IP, ZK_COMM_KEY, ZK_ADMS_ALLOWED_SERIALS, ZK_INTEGRATION,
-# STUDYSYNC_ALLOWED_ORIGINS, STUDYSYNC_HOST/PORT, ...) so a ZKTeco device
-# configured once keeps working after an install/update instead of silently
-# losing its connection settings.
+# (ZK_DEVICE_IP, ZK_COMM_KEY, ZK_INTEGRATION, STUDYSYNC_ALLOWED_ORIGINS,
+# STUDYSYNC_HOST/PORT, ...) so a ZKTeco device configured once keeps working
+# after an install/update instead of silently losing its connection settings.
 $extraLines = @()
 if (Test-Path $envFile) {
     $extraLines = Get-Content -Path $envFile | Where-Object {
-        $_ -match '^\s*(ZK_|ADMS_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
+        $_ -match '^\s*(ZK_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
     }
 }
 @(

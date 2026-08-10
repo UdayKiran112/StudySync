@@ -3,27 +3,28 @@ zkteco/reconcile.py
 --------------------
 Periodic full-buffer reconciliation -- the completeness backstop.
 
-ADMS is a best-effort realtime transport: once it returns "OK" the device
-considers a push delivered, so a punch that fails server-side (crash,
-ingest bug, server down) is gone from the ADMS path. Every punch is still
-sitting in the device's ATTLOG buffer, though, and this loop is what
-guarantees it eventually lands in the database regardless:
+A realtime transport is best-effort: a punch can be missed server-side
+(crash, ingest bug, server down). Every punch is still sitting in the
+device's ATTLOG buffer, though, and this loop is what guarantees it
+eventually lands in the database regardless:
 
   * It reads the ENTIRE device buffer on a slow cadence
     (ZK_RECONCILE_INTERVAL, default 60s) and routes every record through
-    the exact same capture_and_apply() ledger the poller/live/ADMS use, so
-    records that ADMS or the live transport already handled become
-    duplicate_transport no-ops and anything they MISSED gets applied.
+    the exact same capture_and_apply() ledger the poller/live use, so
+    records that the live transport already handled become
+    duplicate_transport no-ops and anything it MISSED gets applied.
   * It is what keeps the buffer safe to clear: sync_attendance_from_device
     re-reads the buffer after applying and only then clears it, so no log
-    is destroyed before its ledger row is durable.
+    is destroyed before its ledger row is durable. On a device another
+    system drains, set ZK_CLEAR_BUFFER=0 and the pass becomes read-only --
+    a pure completeness check that never wipes the ring.
   * It persists per-device health into the device_state table
     (last_reconcile_at, buffer size, ledger pending counts) so operators
     can see, after a restart, that the system is fully caught up.
 
 It runs alongside the pyzk poller (where it's a redundant safety net and
 the status keeper) or the pyzk live listener (where it is the only buffer
-reader). It is independent of ADMS and needs no pyzk attendance-mode flag.
+reader).
 """
 
 import asyncio
@@ -32,7 +33,7 @@ import logging
 from datetime import datetime
 
 from database import get_connection
-from zkteco.config import device_config, reconcile_interval
+from zkteco.config import device_config, reconcile_interval, zk_clear_buffer
 from zkteco.device import ZkError, device_serial
 from zkteco.sync import sync_attendance_from_device
 
@@ -94,15 +95,18 @@ def _update_device_state(db, config, tally: dict) -> None:
 def reconcile_once() -> dict:
     """
     One reconciliation pass over the full device buffer: read everything,
-    apply anything not yet in the ledger/database, re-read + clear the
-    buffer safely, then persist device health. Returns the run tally.
+    apply anything not yet in the ledger/database, then (unless
+    ZK_CLEAR_BUFFER=0) re-read + clear the buffer safely, and persist
+    device health. Returns the run tally.
     """
     config = device_config()
     if config is None:
         return {}
     db = get_connection()
     try:
-        tally = sync_attendance_from_device(db, config, source="reconcile")
+        tally = sync_attendance_from_device(
+            db, config, source="reconcile", clear=zk_clear_buffer()
+        )
         _update_device_state(db, config, tally)
         logger.info(
             "ZKTeco reconcile: pulled=%s imported=%s dup_transport=%s "

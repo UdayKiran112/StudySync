@@ -124,9 +124,9 @@ export function Layout() {
     window.scrollTo(0, 0);
   }, [pathname]);
 
-  // Live stream: punches written by the ZKTeco poller/ADMS push instantly
-  // invalidate the attendance queries (so rows appear with no polling
-  // delay), and auto-renewals queue a prompt for the desk below.
+  // Live stream: punches written by the ZKTeco poller/live transport
+  // instantly invalidate the attendance queries (so rows appear with no
+  // polling delay), and auto-renewals queue a prompt for the desk below.
   useRealtimeEvents({
     onRenewal: (event) => setRenewals((pending) => [...pending, event]),
   });

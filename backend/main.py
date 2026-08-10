@@ -55,45 +55,30 @@ from routers import (
     realtime,
 )
 
-# --- ZKTeco attendance integration: pick ONE transport, or run both ---
+# --- ZKTeco attendance integration (PyZK only) ---
 #
-# Two independent, self-contained integrations live in this project and
-# neither imports the other:
+# zkteco/ (package) + routers/zkteco.py -- OUR server connects OUT to the
+# device over pyzk's TCP client and either polls its buffer
+# (zkteco/poller.py), holds a live_capture() connection open
+# (zkteco/live.py), or runs the periodic full-buffer reconciliation
+# backstop (zkteco/reconcile.py). Needs ZK_DEVICE_IP set and the `pyzk`
+# package installed.
 #
-#   pyzk  (zkteco/ package, routers/zkteco.py) -- OUR server connects OUT
-#         to the device over pyzk's TCP client and either polls its
-#         buffer (zkteco/poller.py) or holds a live_capture() connection
-#         open (zkteco/live.py). Needs ZK_DEVICE_IP set and the `pyzk`
-#         package installed.
-#
-#   adms  (adms/ package, routers/adms.py) -- the DEVICE connects IN to
-#         US over its own ADMS push protocol. No pyzk dependency at all
-#         -- plain HTTP endpoints. Needs the device's Comm > Cloud Server
-#         Setting pointed at this server; nothing to set here besides the
-#         optional serial allowlist (see adms/config.py).
-#
-# ZK_INTEGRATION selects which one(s) this process wires up:
-#   "both" (default) -- mount both; harmless to leave both active, since
-#           they're different transports and don't contend for the same
-#           connection the way two pyzk connections would.
-#   "pyzk"  -- only the pyzk poll/live path.
-#   "adms"  -- only the ADMS push path.
-#   "none"  -- neither (e.g. testing the rest of the app with no device
-#           integration at all).
-#
-# Each side is ALSO wrapped in try/except ImportError, so if you delete
-# the zkteco/ or adms/ folder outright while testing the other one, the
-# app still boots -- you don't have to keep both present just to satisfy
-# an import.
-ZK_INTEGRATION = os.environ.get("ZK_INTEGRATION", "both").strip().lower()
+# ZK_INTEGRATION selects how much this process wires up:
+#   "pyzk" (default) -- mount the PyZK poll/live/reconcile path.
+#   "none" -- no device integration at all (e.g. testing the rest of the
+#             app with no device configured).
+# The legacy values "both" and "adms" are accepted for backward
+# compatibility and both mean PyZK, since the old ADMS push transport has
+# been removed.
+ZK_INTEGRATION = os.environ.get("ZK_INTEGRATION", "pyzk").strip().lower()
 if ZK_INTEGRATION not in ("pyzk", "adms", "both", "none"):
     logger.warning(
-        "Unrecognised ZK_INTEGRATION=%r, falling back to 'both'.", ZK_INTEGRATION
+        "Unrecognised ZK_INTEGRATION=%r, falling back to 'pyzk'.", ZK_INTEGRATION
     )
-    ZK_INTEGRATION = "both"
+    ZK_INTEGRATION = "pyzk"
 
-pyzk_enabled = ZK_INTEGRATION in ("pyzk", "both")
-adms_enabled = ZK_INTEGRATION in ("adms", "both")
+pyzk_enabled = ZK_INTEGRATION != "none"
 
 zkteco = None
 zkteco_poller_loop = None
@@ -108,23 +93,11 @@ if pyzk_enabled:
         from zkteco.config import attendance_mode
     except ImportError as e:
         logger.warning(
-            "pyzk ZKTeco integration unavailable (%s) -- skipping it. "
-            "Set ZK_INTEGRATION=adms to silence this if that's intentional.",
+            "PyZK ZKTeco integration unavailable (%s) -- skipping it. "
+            "Set ZK_INTEGRATION=none to silence this if that's intentional.",
             e,
         )
         pyzk_enabled = False
-
-adms = None
-if adms_enabled:
-    try:
-        from routers import adms as adms  # noqa: F811 (intentional re-import)
-    except ImportError as e:
-        logger.warning(
-            "ADMS integration unavailable (%s) -- skipping it. "
-            "Set ZK_INTEGRATION=pyzk to silence this if that's intentional.",
-            e,
-        )
-        adms_enabled = False
 
 
 def _detect_lan_ip() -> Optional[str]:
@@ -153,22 +126,30 @@ async def lifespan(_: FastAPI):
 
     # Only the pyzk path needs a background task -- it's the one that
     # connects OUT to the device (either polling or holding a live
-    # connection open). ADMS is a pure inbound HTTP listener; there's
-    # nothing to run in the background for it, the mounted router IS the
-    # integration. zkteco_poller_loop/zkteco_live_loop also self-disable
-    # if ZK_DEVICE_IP isn't set, so this is a second layer of "off by
-    # default until configured", not the only one.
+    # connection open). zkteco_poller_loop/zkteco_live_loop also
+    # self-disable if ZK_DEVICE_IP isn't set, so this is a second layer of
+    # "off by default until configured", not the only one.
     stop_event = asyncio.Event()
-    zkteco_task = None
+    zkteco_tasks = []
     if pyzk_enabled:
         mode = attendance_mode()
-        zkteco_loop = zkteco_live_loop if mode == "live" else zkteco_poller_loop
-        zkteco_task = asyncio.create_task(zkteco_loop(stop_event))
+        # mode "poll" (default): periodic buffer pulls. mode "live":
+        # realtime punch stream. mode "both": the live stream PLUS a
+        # periodic pull as a safety net. On a shared device set
+        # ZK_CLEAR_BUFFER=0 so neither the poll nor the reconcile ever
+        # wipes the ring another system drains. If the device refuses the
+        # poll's second concurrent session, drop back to
+        # ZK_ATTENDANCE_MODE=live -- the reconcile loop below stays
+        # active as the completeness backstop either way.
+        if mode in ("live", "both"):
+            zkteco_tasks.append(asyncio.create_task(zkteco_live_loop(stop_event)))
+        if mode in ("poll", "both"):
+            zkteco_tasks.append(asyncio.create_task(zkteco_poller_loop(stop_event)))
     # The reconciliation backstop runs whenever pyzk is available (device
     # configured), alongside whichever attendance transport is selected. It
-    # is the completeness guarantee behind ADMS's best-effort push: it
-    # re-reads the full device buffer, captures anything that slipped past
-    # ADMS/live, and persists device sync health.
+    # is the completeness guarantee: it re-reads the full device buffer and
+    # captures anything that slipped past poll/live, and persists device
+    # sync health.
     reconcile_task = None
     if pyzk_enabled:
         reconcile_task = asyncio.create_task(zkteco_reconcile_loop(stop_event))
@@ -176,10 +157,10 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         stop_event.set()
-        if zkteco_task is not None:
-            zkteco_task.cancel()
+        for task in zkteco_tasks:
+            task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await zkteco_task
+                await task
         if reconcile_task is not None:
             reconcile_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -275,9 +256,6 @@ app.include_router(other_activities.router)
 app.include_router(realtime.router)
 if pyzk_enabled and zkteco is not None:
     app.include_router(zkteco.router)
-if adms_enabled and adms is not None:
-    app.include_router(adms.router)
-    app.include_router(adms.status_router)
 
 
 @app.get("/", tags=["Health"])

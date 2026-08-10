@@ -5,41 +5,38 @@ Single source of truth for turning ONE device punch (a device user_id, a
 calendar day, and an HH:MM time) into an attendance table write.
 
 This file deliberately lives at the TOP LEVEL of the project, as a
-sibling to database.py and security.py, rather than inside zkteco/ or
-adms/. It belongs to neither integration:
+sibling to database.py and security.py, rather than inside zkteco/. It
+belongs to no single integration:
 
   * zkteco/sync.py   - pyzk periodic poll (pull model)
   * zkteco/live.py   - pyzk live_capture() (push model, real-time)
-  * adms/ingest.py   - ZKTeco ADMS HTTP push (push model, real-time)
 
-...all three import capture_and_apply()/apply_punch()/student_id_for_user_id()
+...both import capture_and_apply()/apply_punch()/student_id_for_user_id()
 from HERE, so a swipe produces an identical attendance row no matter which
-transport caught it. If it lived inside zkteco/ (as it briefly did), deleting
-that package to run ADMS alone would have taken this logic down with it even
-though ADMS has nothing to do with pyzk -- that's exactly the situation this
-file's placement is designed to avoid. You can delete zkteco/ OR adms/
-independently and whichever one you kept will still import fine.
+transport caught it. If it lived inside zkteco/ (as it briefly did), a
+change to the connection layer would have taken this logic down with it
+even though punch application has nothing to do with pyzk -- that's the
+situation this file's placement is designed to avoid. This module
+DOES depend on routers/attendance.py (for those helpers) and on
+database.py's schema, but not on zkteco, so it's safe either way.
 
 The rules mirror the front-desk flow in routers/attendance.py exactly:
 first punch of a day opens a session (check_in set), the next punch
 closes it (check_out set, session/duration recomputed with the 1-2 PM
 lunch-break rule). See routers/attendance.py's module docstring for the
-session/duration logic itself -- it is not duplicated here. This module
-DOES depend on routers/attendance.py (for those helpers) and on
-database.py's schema, but not on either zkteco or adms, so it's safe
-either way.
+session/duration logic itself -- it is not duplicated here.
 
 EXACTLY-ONCE LEDGER
 -------------------
 Every physical punch is first captured into the device_punches ledger via
 capture_and_apply(). The ledger's UNIQUE(fingerprint) -- where fingerprint
 = device_serial|user_id|full-second timestamp|status -- is identical no
-matter which transport delivers the punch, so a punch that both ADMS and
-pyzk see is claimed ONCE and applied to attendance exactly once. The
-second delivery becomes a "duplicate_transport" that never touches the
-attendance table. A process-wide lock (capture_and_apply commits while
-holding it) makes the claim + apply atomic, so two transports racing the
-same punch cannot both apply it.
+matter which transport delivers the punch, so a punch that both the poll
+and the live stream see is claimed ONCE and applied to attendance exactly
+once. The second delivery becomes a "duplicate_transport" that never
+touches the attendance table. A process-wide lock (capture_and_apply
+commits while holding it) makes the claim + apply atomic, so two
+transports racing the same punch cannot both apply it.
 
 A re-tap of the fingerprint within ZK_PUNCH_DEBOUNCE_MINUTES (default 1)
 of the student's previous successful punch is judged an accidental
@@ -66,8 +63,8 @@ from realtime import publish
 
 # ---------------------------------------------------------------------
 # Exactly-once capture: one writer at a time across every transport
-# (ADMS handler threads, pyzk poll worker, pyzk live worker, reconcile
-# worker). capture_and_apply() commits WHILE holding this lock, so by the
+# (pyzk poll worker, pyzk live worker, reconcile worker).
+# capture_and_apply() commits WHILE holding this lock, so by the
 # time a competing transport acquires it the ledger row it wanted to claim
 # is already visible -- the UNIQUE(fingerprint) index then makes the loser
 # a no-op duplicate_transport instead of a second apply.
@@ -79,9 +76,9 @@ def build_fingerprint(device_serial: str, user_id, punch_dt, status) -> str:
     """
     Stable identity of one PHYSICAL punch, identical across transports.
     (device_serial, user_id, full-second timestamp, status) is the same
-    tuple whether the punch arrived as an ADMS ATTLOG line or a pyzk
-    Attendance object, so a punch delivered by both can only be claimed
-    once in the device_punches ledger.
+    tuple whether the punch arrived from the pyzk poll or the pyzk live
+    stream, so a punch delivered by both can only be claimed once in the
+    device_punches ledger.
     """
     ts = punch_dt.strftime("%Y-%m-%d %H:%M:%S")
     return f"{device_serial}|{user_id}|{ts}|{status if status is not None else ''}"
@@ -231,10 +228,10 @@ def punch_debounce_minutes() -> int:
     treated as an accidental re-tap: it is recorded in the device_punches
     ledger as a duplicate but never becomes a check-out and never opens a
     new session. Lives here rather than in zkteco/config.py because it
-    parameterizes apply_punch() below directly and is read by all three
-    transports (poll, pyzk live, ADMS) -- it isn't a pyzk- or ADMS-specific
-    setting, it's a punch-application setting. Same env var name either
-    way, so nothing changes for anyone already using it.
+    parameterizes apply_punch() below directly and is read by all the
+    transports (poll, pyzk live) -- it isn't a pyzk-specific setting, it's
+    a punch-application setting. Same env var name either way, so nothing
+    changes for anyone already using it.
     """
     try:
         return max(0, int(os.getenv("ZK_PUNCH_DEBOUNCE_MINUTES", "1")))
@@ -260,9 +257,9 @@ def latest_punch_time(
     """
     Latest punch already recorded for this student on this day (the later
     of any row's check_in/check_out, HH:MM strings compare chronologically).
-    Used by the double-tap debounce below, and works across polls, pyzk
-    live events, and ADMS pushes alike since it always reads from the
-    database, not from any transport's in-memory state.
+    Used by the double-tap debounce below, and works across polls and pyzk
+    live events alike since it always reads from the database, not from any
+    transport's in-memory state.
     """
     row = db.execute(
         """SELECT MAX(CASE WHEN check_out IS NOT NULL THEN check_out ELSE check_in END) AS latest
@@ -338,7 +335,7 @@ def apply_punch(
     if open_session is None:
         # Re-read guard: a log that was already applied (e.g. a poll's
         # device-buffer clear failed after a committed import, or the
-        # same live/ADMS event got delivered twice) would otherwise be
+        # same live event got delivered twice) would otherwise be
         # mistaken for a fresh check-in. Skip it.
         already = db.execute(
             """SELECT 1 FROM attendance

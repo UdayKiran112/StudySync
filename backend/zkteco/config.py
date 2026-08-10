@@ -18,18 +18,27 @@ Environment variables:
     ZK_DEVICE_TIMEOUT   Seconds to wait for a device reply. Default 30.
     ZK_POLL_INTERVAL    Seconds between automatic background syncs. Default 3.
                         Only read while ZK_ATTENDANCE_MODE=poll.
-    ZK_ATTENDANCE_MODE  "poll" (default) or "live". Selects which ONE
-                        background task main.py starts:
+    ZK_ATTENDANCE_MODE  "poll" (default), "live" or "both". Selects which
+                        background tasks main.py starts:
                           poll -> zkteco/poller.py  (pulls the device's
                                   buffer every ZK_POLL_INTERVAL seconds)
                           live -> zkteco/live.py    (holds one persistent
                                   connection open and reacts the instant
                                   the device reports a punch, via pyzk's
                                   live_capture())
-                        Run only one against a given device at a time --
-                        pyzk devices generally accept a single open
-                        session, and both paths read/clear the same
-                        physical buffer.
+                          both -> the live stream PLUS the poll as a
+                                  safety net (shared-device deployments:
+                                  with ZK_CLEAR_BUFFER=0 the poll only
+                                  re-checks the buffer, never clears it)
+                        Only one CLEARING reader should run against a
+                        given device at a time -- two readers both wiping
+                        the same physical buffer is how records get lost.
+    ZK_CLEAR_BUFFER     "1" (default) or "0". Whether the poller and the
+                        reconcile loop may clear the device's attendance
+                        buffer after a successful full read. Set "0" when
+                        another system also drains the device: StudySync
+                        then reads read-only, and a re-read is a no-op
+                        thanks to the exactly-once ledger.
     ZK_LIVE_RECONNECT_SECONDS
                         Default 5. Wait time before zkteco/live.py retries
                         after a dropped/failed connection.
@@ -37,7 +46,7 @@ Environment variables:
                         Default 60. Seconds between full-buffer reconciliation
                         passes (zkteco/reconcile.py), the completeness
                         backstop that re-reads the whole device buffer and
-                        captures anything ADMS/live missed.
+                        captures anything poll/live missed.
     ZK_PUNCH_DEBOUNCE_MINUTES
                         Default 1. A punch that lands this many minutes or
                         fewer after a student's previous punch for the same
@@ -56,10 +65,8 @@ from typing import Optional
 # Re-exported for backward compatibility: `from zkteco.config import
 # punch_debounce_minutes` still works, but the actual definition lives in
 # attendance_punch.py (project root) since it's a punch-application
-# setting shared by poll/live/ADMS alike, not a pyzk-specific one -- see
-# that module's docstring. Importing it here does NOT create a
-# zkteco-depends-on-adms or adms-depends-on-zkteco edge; both simply
-# depend on the neutral attendance_punch module.
+# setting shared by poll/live alike, not a pyzk-specific one -- see that
+# module's docstring.
 from attendance_punch import punch_debounce_minutes  # noqa: F401
 
 
@@ -94,12 +101,25 @@ def poll_interval() -> int:
 
 def attendance_mode() -> str:
     """
-    Which background task main.py should start: "poll" (default,
-    zkteco/poller.py) or "live" (zkteco/live.py). Any other value falls
-    back to "poll".
+    Which background task(s) main.py should start: "poll" (default,
+    zkteco/poller.py), "live" (zkteco/live.py), or "both". Any other
+    value falls back to "poll".
     """
     mode = os.getenv("ZK_ATTENDANCE_MODE", "poll").strip().lower()
-    return mode if mode in ("poll", "live") else "poll"
+    return mode if mode in ("poll", "live", "both") else "poll"
+
+
+def zk_clear_buffer() -> bool:
+    """
+    Whether the poller/reconcile may clear the device buffer after a
+    successful full read (env ZK_CLEAR_BUFFER, default "1").
+
+    Set ZK_CLEAR_BUFFER=0 on a device that another system also drains:
+    StudySync then reads read-only and never wipes the ring, and the
+    exactly-once ledger turns any re-read into a no-op.
+    """
+    value = os.getenv("ZK_CLEAR_BUFFER", "1").strip().lower()
+    return value not in ("0", "false", "no", "off", "")
 
 
 def live_reconnect_seconds() -> int:

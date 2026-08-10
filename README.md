@@ -168,33 +168,33 @@ Device `user_id`s are matched to `students.student_id` numerically, so
 enroll students on the scanner with the same numeric ID they have in
 StudySync.
 
-### ADMS push (device → server)
+### Automatic sync (device → StudySync)
 
-The backend is also a ZKTeco **ADMS** server: point the machine's Comm >
-Cloud Server Setting at this PC (port 80) and it *pushes* punches over HTTP
-to `/iclock/*` in real time — no polling, no `ZK_DEVICE_IP`. Handshake and
-ATTLOG pushes are verified against the ZKTeco HTTP Push SDK spec. Because
-the protocol has no authentication, gate which devices may push with
-`ZK_ADMS_ALLOWED_SERIALS` and keep `/iclock/*` on your LAN segment:
+Once `ZK_DEVICE_IP` is set, StudySync pulls swipes from the device over
+pyzk and applies them automatically, so no manual "Sync" click is needed:
+a first swipe opens an attendance row and the next closes it. Three
+background transports are available (see `ZK_ATTENDANCE_MODE` in
+`deploy/config/app.env.example`):
 
-```powershell
-$env:ZK_ADMS_ALLOWED_SERIALS = ""        # empty = accept any SN (default)
-$env:ZK_ADMS_DELAY_SECONDS = "10"        # handshake "Delay" (heartbeat cadence)
-$env:ZK_ADMS_ERROR_DELAY_SECONDS = "30"  # device retry wait after a failed push
-```
+- **poll** (default) — periodically reads the device's buffer
+  (`zkteco/poller.py`).
+- **live** — holds one persistent pyzk `live_capture()` connection open and
+  reacts the instant the device reports a punch (`zkteco/live.py`).
+- **reconcile** — a periodic full-buffer re-read (`zkteco/reconcile.py`)
+  that is the completeness backstop for the other two.
 
-`ZK_INTEGRATION` (default `both`) selects which integration(s) the process
-wires up: `both` / `pyzk` / `adms` / `none`. Live push diagnostics (per-SN
-last handshake / push / import tally) are at `GET /api/adms/status`
-(API-key protected).
+`ZK_INTEGRATION` (default `pyzk`) selects whether the integration is wired
+up at all: `pyzk` / `none`. The legacy values `both` and `adms` are
+accepted and mean `pyzk` now that the ADMS push transport is removed.
+Device sync health is at `GET /api/zkteco/sync-report` (API-key protected).
 
 ### Step-by-step testing guide
 
-`deploy/BIOMETRIC_TESTING.md` is a complete walkthrough for testing **both**
-integrations on a deployed system (Windows service + Caddy on port 80): how
-to find the machine's IP, configure the MB360's Cloud Server Setting for
-ADMS, configure pyzk in `.env`, verify with `Test-NetConnection ... -Port
-4370`, simulate the device with PowerShell/curl, and clean up test data.
+`deploy/BIOMETRIC_TESTING.md` is a complete walkthrough for testing the
+integration on a deployed system (Windows service + Caddy on port 80): how
+to find the machine's IP, configure pyzk in `.env`, verify with
+`Test-NetConnection ... -Port 4370`, simulate the device with
+PowerShell/curl, and clean up test data.
 
 ## API tests
 

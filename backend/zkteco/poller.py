@@ -12,9 +12,12 @@ closes it.
 
 Design notes:
 
-  * The sync captures each log the moment it is read and clears the device
-    buffer itself once the writes are committed, so the buffer never
-    accumulates and no operator cleanup is needed.
+  * The sync captures each log the moment it is read and (unless
+    ZK_CLEAR_BUFFER=0, for devices another system also drains) clears the
+    device buffer itself once the writes are committed, so the buffer
+    never accumulates and no operator cleanup is needed. In read-only
+    mode the poll is just a re-check; re-reads are no-ops thanks to the
+    exactly-once ledger.
   * Inserts are idempotent and a re-read can only close an open session
     with a strictly later punch time, so a crash mid-poll never corrupts
     data or duplicates rows.
@@ -29,7 +32,7 @@ import asyncio
 import logging
 
 from database import get_connection
-from zkteco.config import device_config, poll_interval
+from zkteco.config import device_config, poll_interval, zk_clear_buffer
 from zkteco.device import ZkError
 from zkteco.sync import sync_attendance_from_device
 
@@ -43,7 +46,7 @@ def _poll_once() -> None:
         return
     db = get_connection()
     try:
-        result = sync_attendance_from_device(db, config)
+        result = sync_attendance_from_device(db, config, clear=zk_clear_buffer())
         db.commit()
         if result["imported"]:
             logger.info(

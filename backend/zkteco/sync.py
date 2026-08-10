@@ -24,9 +24,9 @@ check-in or a check-out exactly like the front-desk flow
     and committed to the attendance table.
 
 Exactly-once: every physical punch is claimed in the device_punches ledger
-by fingerprint, so a swipe that ADMS already pushed (or that the live
-transport already captured) is counted as a duplicate_transport and never
-touches the attendance table again.
+by fingerprint, so a swipe that the live transport already captured is
+counted as a duplicate_transport and never touches the attendance table
+again.
 
 Edge cases:
   * Accidental double-tap: a punch that lands within
@@ -71,8 +71,8 @@ def drain_and_clear(db: sqlite3.Connection, config: ZkDeviceConfig, source: str)
     ever reaching the database. We re-read the buffer, apply anything new
     through the same ledger + apply path (silently -- it is not re-counted
     in the surfaced tally), commit, and only then clear. The residual
-    sub-second window is covered by ADMS realtime push, which captures each
-    punch the instant it happens.
+    sub-second window is covered by a fast poll or the live transport,
+    which captures each punch the instant it happens.
     """
     extra = list_attendance(config)
     if extra:
@@ -97,11 +97,12 @@ def sync_attendance_from_device(
     config: ZkDeviceConfig,
     since: Optional[date] = None,
     source: str = "pyzk_poll",
+    clear: bool = True,
 ) -> dict:
     """
     Pull the device buffer, capture each swipe in the device_punches ledger
-    and apply it as a check-in or check-out, then clear the buffer once the
-    writes are committed.
+    and apply it as a check-in or check-out, then (optionally) clear the
+    buffer once the writes are committed.
 
     Returns a tally: pulled / imported / duplicates / duplicate_transport /
     duplicate_debounced / unknown_students / renewed / incomplete.
@@ -113,6 +114,13 @@ def sync_attendance_from_device(
     When ``since`` is given, the buffer is read and applied but NOT
     cleared -- older (unfiltered) logs must stay on the device so they can
     be captured by a later full sync.
+
+    When ``clear`` is False the run is read-only even in full-buffer mode:
+    the device is shared with another reader that owns the drain, so
+    StudySync must never wipe the ring. A punch that lands while we read
+    is picked up by the next cycle instead of the mid-sync re-read, which
+    is why this mode is only used alongside the realtime live transport or
+    a fast poll.
     """
     logs = list_attendance(config)
 
@@ -137,8 +145,9 @@ def sync_attendance_from_device(
     db.commit()
 
     # In full-buffer mode (no `since`), re-read to catch anything that
-    # landed mid-sync, then clear the buffer safely.
-    if since is None:
+    # landed mid-sync, then clear the buffer safely -- unless this device
+    # is shared and clearing is disabled (clear=False).
+    if since is None and clear:
         drain_and_clear(db, config, source)
 
     return tally

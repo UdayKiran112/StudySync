@@ -49,7 +49,7 @@ if (-not (Test-Path "$APP_DIR\app\api\.env")) {
 $apiKey = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_API_KEY=(.+)$').Matches[0].Groups[1].Value
 $dbEnv = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_DB_PATH=(.+)$').Matches[0].Groups[1].Value
 $extraLines = Get-Content -Path "$APP_DIR\app\api\.env" | Where-Object {
-    $_ -match '^\s*(ZK_|ADMS_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
+    $_ -match '^\s*(ZK_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
 }
 Write-Log "Preserving API key (kept from current install)."
 

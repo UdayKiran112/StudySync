@@ -4,19 +4,20 @@ realtime.py
 Tiny in-process event bus that pushes live events (attendance punches,
 membership renewals) to connected web clients over Server-Sent Events.
 
-Why this exists: the attendance poller, the ADMS push handler and the pyzk
-live transport all write punches in the background, and the frontend could
-previously only learn about them by re-querying every few seconds. Here every
-write publishes a broadcast and GET /api/realtime/stream (routers/realtime.py)
-fans it out to open browser connections the instant it happens -- so a swipe
-appears on screen with no polling delay. The 5-second react-query refetch
-stays in place as a fallback if the stream ever drops.
+Why this exists: the attendance poller, the pyzk live transport and the
+manual front-desk flow all write punches in the background, and the
+frontend could previously only learn about them by re-querying every few
+seconds. Here every write publishes a broadcast and
+GET /api/realtime/stream (routers/realtime.py) fans it out to open browser
+connections the instant it happens -- so a swipe appears on screen with no
+polling delay. The 5-second react-query refetch stays in place as a
+fallback if the stream ever drops.
 
 Thread-safety: publish() is safe to call from any thread. Writers run in
-different places (the asyncio event loop for the pyzk poller/live coroutines
-and the ADMS handlers; FastAPI's worker threads for sync endpoints like the
-manual check-in), so events funnel through loop.call_soon_threadsafe whenever
-the caller is not on the loop.
+different places (the asyncio event loop for the pyzk poller/live
+coroutines; FastAPI's worker threads for sync endpoints like the manual
+check-in), so events funnel through loop.call_soon_threadsafe whenever the
+caller is not on the loop.
 """
 
 import asyncio

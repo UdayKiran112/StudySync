@@ -13,11 +13,10 @@ attendance buffer, applies it, and clears the buffer -- a "pull" model.
 This module instead opens ONE persistent connection and registers for the
 device's attendance-log event (pyzk's live_capture()), so the device
 notifies us the instant a punch happens -- a "push" model, functionally
-similar to what ZKTeco's own ADMS push server gives you, but reached
-through pyzk's proprietary-protocol client instead of ADMS's HTTP push
-protocol. This is why it's kept as its own module rather than folded into
-the poller or an ADMS implementation: it's a third, independent transport
-for the same downstream write path.
+similar to a realtime device-push server, but reached through pyzk's
+proprietary-protocol client. This is why it's kept as its own module rather
+than folded into the poller: it's a second, independent transport for the
+same downstream write path.
 
 Both pull the SAME physical device buffer and (on most firmwares) a
 ZKTeco device only tolerates one open session at a time, so run only ONE
@@ -44,14 +43,13 @@ HOW A PUNCH IS HANDLED
    about how they set them. Instead we derive it exactly the way the
    front desk and the poller do: first punch of the day opens a session,
    the next closes it. That derivation is attendance_punch.apply_punch(),
-   the exact same function zkteco/sync.py calls for polled punches (and
-   adms/ingest.py calls for ADMS-pushed punches), so a live-captured
-   swipe and a polled swipe produce identical attendance rows -- see
-   attendance_punch.py at the project root.
+   the exact same function zkteco/sync.py calls for polled punches, so a
+   live-captured swipe and a polled swipe produce identical attendance
+   rows -- see attendance_punch.py at the project root.
 4. The event is handed to attendance_punch.capture_and_apply(), the same
-   exactly-once entry point the poller and ADMS use: it claims the punch in
-   the device_punches ledger by fingerprint (so a punch that ADMS or the
-   poller also delivered is applied only once), resolves the user_id
+   exactly-once entry point the poller uses: it claims the punch in
+   the device_punches ledger by fingerprint (so a punch that the poller
+   also delivered is applied only once), resolves the user_id
    against students.student_id, auto-renews a lapsed membership, and
    derives the session effect. Unmatched IDs are recorded as
    unknown_student and never written to attendance.
@@ -150,9 +148,9 @@ def _handle_event(event, device_serial: str) -> None:
     db: sqlite3.Connection = get_connection()
     try:
         # capture_and_apply resolves the PIN, auto-renews a lapsed
-        # membership, dedups by fingerprint (against ADMS / poller /
-        # reconcile) and derives the session effect. The raw event is
-        # preserved in the device_punches ledger for audit either way.
+        # membership, dedups by fingerprint (against poller / reconcile)
+        # and derives the session effect. The raw event is preserved in the
+        # device_punches ledger for audit either way.
         result = capture_and_apply(
             db,
             device_serial,
