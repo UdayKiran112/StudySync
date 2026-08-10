@@ -532,17 +532,25 @@ def fix_operating_hours(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
     """Corrects 12-hour-clock slips and out-of-operating-hours times on the
     shared IN/OUT columns, after fix_times has normalized the formatting:
 
-      - A check-in before 09:00 (the library's opening time) is almost always
+      - A check-in before 09:00 (the library's opening time) is treated as
         an afternoon time recorded on a 12-hour clock without the PM offset
-        ('02:00' really meant 14:00) -> +12h. This dataset contains a whole
-        block of them (40+ rows on one day). After the fix, any row whose
-        pair is still inconsistent (fixed-in not before its out) fails the
-        downstream check_out > check_in constraint and is skipped with a log
-        rather than loaded with nonsense times.
+        ('02:00' really meant 14:00) ONLY when its hour is < 8 -- this
+        dataset contains a whole block of them (40+ rows on one day).
+        Hour-8 check-ins (08:00-08:59) are kept as-is: the two such rows in
+        the source (08:18, 08:46) have OUT/DURATION values that prove the
+        literal morning reading, i.e. students arriving before opening.
+        After the fix, any row whose pair is still inconsistent (fixed-in
+        not before its out) fails the downstream check_out > check_in
+        constraint and is skipped with a log rather than loaded with
+        nonsense times.
       - A check-out before its check-in that a 12-hour clock explains
-        ('01:00' meant 13:00) -> +12h.
-      - A check-out past 19:00 (the library's latest closing) is a
-        data-entry overrun -> clamped to 19:00.
+        ('01:00' meant 13:00) -> +12h, only when the resulting session is
+        at most 10 hours (see fix_checkout_pm_offset).
+      - A check-in at/after 18:00 that is still not before its check-out is
+        a swapped entry -> the two fields are swapped back (e.g. the two
+        rows where In 18:19/19:32 were recorded against Out 17:31/17:01).
+      - Late check-outs (past 19:00) are NOT clamped: every such row in the
+        source is a genuine late stay confirmed by its DURATION column.
 
     Runs once, before the per-section builders, so attendance and digital
     library both see the corrected times and each correction is logged only
@@ -617,6 +625,31 @@ def fix_operating_hours(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
                     raw_out,
                 )
                 new_out = clamped
+
+        if (
+            TIME_RE.match(new_in)
+            and TIME_RE.match(new_out)
+            and new_out < new_in
+            and new_in >= "18:00"
+        ):
+            # A check-in at or after 18:00 with an earlier check-out cannot
+            # be a 12-hour-clock slip (the checkout helper already rejected
+            # it), so the two fields were entered swapped. Swapping them
+            # yields the only plausible same-day session (e.g. 17:31 ->
+            # 18:19, 17:01 -> 19:32) and preserves both recorded values.
+            new_in, new_out = new_out, new_in
+            log.add(
+                "general",
+                "corrected",
+                excel_row,
+                sl_no,
+                sid,
+                sname,
+                f"In Time ({raw_in}) is not before Out Time ({raw_out}) and "
+                f"both suggest a swapped entry - swapped to In={new_in} "
+                f"Out={new_out}",
+                f"IN={raw_in} OUT={raw_out}",
+            )
 
         if (new_in, new_out) != (raw_in, raw_out):
             df.at[idx, "IN"] = new_in
@@ -887,6 +920,28 @@ def build_digital_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
         )
         pairs = list(zip(platforms_padded, purposes_padded))
 
+        # A platform repeated verbatim within one cell ('IACE , IACE' with
+        # 'History , History') is a data-entry duplication of the same
+        # session, not two uses -- collapse exact duplicate pairs so one
+        # platform use is recorded once. Pairs that differ (e.g. the same
+        # platform against two distinct purposes) are kept as-is.
+        dedup_pairs = list(dict.fromkeys(pairs))
+        if len(dedup_pairs) < len(pairs):
+            log.add(
+                "digital_library",
+                "corrected",
+                row["Excel Row"],
+                row["Sl.No"],
+                row["ID NO"],
+                row["Name of the Student"],
+                f"Account Name/Purpose cell repeats the same pair {len(pairs) - len(dedup_pairs)} "
+                f"time(s) - kept one row for it instead of loading a duplicated session",
+                f"Digital Library='{row['Digital Library']}' | Purpose='{row['Purpose']}'",
+            )
+            pairs = dedup_pairs
+            n = len(pairs)
+
+
         # Attendance covers the student's whole visit, but a digital
         # library session is only part of that. Cases 1/2 (a single
         # morning-only or afternoon-only visit) already work as one
@@ -1149,13 +1204,26 @@ def normalize_offline_book_ids(records, log):
     known_titles = {
         collapse_ws(r["Book Name"]) for r in records if r["Book Name"]
     }
+    # The single most common title for each Book ID, used to resolve the
+    # few rows where a Book Name cell holds junk (see numeric-name fix).
+    title_counts = {}
+    for r in records:
+        if r["Book ID"] and r["Book Name"]:
+            key = _canonical_offline_id(r["Book ID"])
+            title_counts.setdefault(key, {}).setdefault(r["Book Name"], 0)
+            title_counts[key][r["Book Name"]] += 1
+    id_to_title = {
+        bid: max(counts, key=counts.get) for bid, counts in title_counts.items()
+    }
+
+    # A copy/part marker appended to a real catalog id ('1565/1', '1565/2',
+    # 'P-247/1') - the base id is the catalog item, the suffix just records
+    # which physical copy was handed out.
+    BOOK_ID_COPY_SUFFIX = re.compile(r"^((?:\d+|P-\d+))/\d+$")
 
     normalized = []
     for rec in records:
         raw = rec["Book ID"]
-        if not raw:
-            normalized.append(rec)
-            continue
 
         def report(status, issue):
             log.add(
@@ -1169,7 +1237,58 @@ def normalize_offline_book_ids(records, log):
                 raw,
             )
 
+        # A numeric Book Name with no Book ID is an id typed into the name
+        # column. Resolve the id and backfill the catalog title before the
+        # empty-id shortcut below drops the row as-is.
+        if (
+            not raw
+            and rec["Book Name"]
+            and rec["Book Name"].strip().isdigit()
+        ):
+            name = rec["Book Name"].strip()
+            if name in valid_ids:
+                rec["Book ID"] = name
+                rec["Book Name"] = id_to_title.get(name, name)
+                report(
+                    "corrected",
+                    f"Book Name holds a Book ID ({name!r}) with no id "
+                    f"column value - moved to Book ID and title "
+                    f"{rec['Book Name']!r} backfilled",
+                )
+                raw = rec["Book ID"]
+            else:
+                normalized.append(rec)
+                continue
+
+        if not raw:
+            normalized.append(rec)
+            continue
+
         cell = _canonical_offline_id(collapse_ws(raw))
+
+        copy_match = BOOK_ID_COPY_SUFFIX.match(cell)
+        if copy_match and copy_match.group(1) in valid_ids:
+            report(
+                "corrected",
+                f"Book ID cell is a copy of catalog id {copy_match.group(1)!r} "
+                f"({cell!r}) - normalized to the base id",
+            )
+            cell = copy_match.group(1)
+
+        # A numeric Book Name sitting next to a real id is junk ('36' next to
+        # id 1577). Resolve the id's catalog title instead of keeping a bogus
+        # numeric 'name'.
+        if rec["Book Name"] and rec["Book Name"].strip().isdigit():
+            resolved = cell if cell in id_to_title else None
+            if resolved:
+                rec["Book Name"] = id_to_title[cell]
+                report(
+                    "corrected",
+                    f"Book Name is numeric junk ({rec['Book Name']!r}) for catalog "
+                    f"id {cell!r} - replaced with the book's title "
+                    f"{id_to_title[cell]!r}",
+                )
+
 
         # Title or junk typed into the id column -> blank the id. A purely
         # numeric cell is never a title (numeric 'book names' like '1638'

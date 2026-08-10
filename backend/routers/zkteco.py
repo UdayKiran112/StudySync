@@ -35,9 +35,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from database import get_db_dependency
 from security import require_api_key
 from zkteco import device
+from attendance_punch import backfill_empty_sessions
 from zkteco.config import attendance_mode, device_config
 from zkteco.live import get_live_status
-from zkteco.reconcile import current_sync_status
+from zkteco.reconcile import current_sync_status, verify_pyzk_vs_db
 from zkteco.sync import sync_attendance_from_device
 from models.zkteco import (
     ZkAttendanceLog,
@@ -148,7 +149,23 @@ def zk_sync_attendance(
     """
     config = _config_or_503()
     try:
-        return ZkSyncResult(**sync_attendance_from_device(db, config))
+        tally, logs = sync_attendance_from_device(
+            db, config, return_logs=True
+        )
+        tally["backfilled"] = backfill_empty_sessions(db)
+        serial = device.device_serial(config)
+        verify = verify_pyzk_vs_db(db, logs, serial)
+        tally["verify_verified"] = verify["verified"]
+        tally["verify_issue_count"] = verify["issue_count"]
+        if verify["issue_count"]:
+            logger.warning(
+                "Sync verify mismatch: %s of %s pyzk records have no matching "
+                "DB write. First issues: %s",
+                verify["issue_count"],
+                tally["pulled"],
+                verify["issues"],
+            )
+        return ZkSyncResult(**tally)
     except device.ZkError as e:
         _device_error(e)
 

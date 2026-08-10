@@ -98,7 +98,8 @@ def sync_attendance_from_device(
     since: Optional[date] = None,
     source: str = "pyzk_poll",
     clear: bool = True,
-) -> dict:
+    return_logs: bool = False,
+):
     """
     Pull the device buffer, capture each swipe in the device_punches ledger
     and apply it as a check-in or check-out, then (optionally) clear the
@@ -110,6 +111,11 @@ def sync_attendance_from_device(
     a dropped punch. ``renewed`` counts students whose lapsed memberships
     were auto-renewed by this run. Raises zkteco.device.ZkError if the
     device can't be reached (nothing is written in that case).
+
+    When ``return_logs`` is True, returns ``(tally, logs)`` where ``logs``
+    is the exact list of pyzk records this run pulled -- the caller (the
+    reconcile pass) uses it to verify that every record from the device has
+    a corresponding durable write in the database.
 
     When ``since`` is given, the buffer is read and applied but NOT
     cleared -- older (unfiltered) logs must stay on the device so they can
@@ -150,4 +156,6 @@ def sync_attendance_from_device(
     if since is None and clear:
         drain_and_clear(db, config, source)
 
+    if return_logs:
+        return tally, logs
     return tally

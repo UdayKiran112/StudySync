@@ -368,6 +368,127 @@ class AttendancePunchTests(unittest.TestCase):
         self.assertEqual(rows[1]["check_in"], "15:00")
         self.assertEqual(rows[1]["check_out"], "17:00")
 
+    # --- empty-entry backfill (last punch of the day as check-out) ----------
+
+    def test_21_backfill_closes_row_whose_checkout_was_debounced(self):
+        # The 6434-on-2024-09-03 pattern: 09:45 in / 12:40 out (Morning), then
+        # 14:04 opens an Afternoon session and the 14:05 punch is swallowed by
+        # the 1-minute debounce, leaving the Afternoon row empty forever.
+        for dt in ["2026-06-10 09:45:00", "2026-06-10 12:40:00",
+                   "2026-06-10 14:04:00", "2026-06-10 14:05:00"]:
+            self._punch(1001, dt)
+        rows = self._attendance()
+        self.assertEqual(len(rows), 2)
+        self.assertIsNone(rows[1]["check_out"])
+
+        closed = attendance_punch.backfill_empty_sessions(self.db)
+        self.assertEqual(closed, 1)
+
+        rows = self._attendance()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1]["session"], "Afternoon")
+        self.assertEqual(rows[1]["check_in"], "14:04")
+        self.assertEqual(rows[1]["check_out"], "14:05")
+        self.assertEqual(rows[1]["duration_minutes"], 1)
+
+    def test_22_backfill_single_punch_day_stays_open(self):
+        # The 6020-on-2024-02-19 pattern: one 10:06 punch opens a Morning row
+        # with no closing punch. The day's last punch IS the check-in, so there
+        # is nothing truthful to backfill -- the row must stay open (the next
+        # visit's 23:59 stale-close handles it), and the pass must not invent a
+        # zero-length session.
+        self.assertEqual(self._punch(1001, "2026-06-10 10:06:00")["outcome"], "checked_in")
+
+        self.assertIsNone(
+            attendance_punch.close_open_with_last_punch(self.db, 1001, "2026-06-10")
+        )
+        self.assertEqual(attendance_punch.backfill_empty_sessions(self.db), 0)
+
+        rows = self._attendance()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["session"], "Morning")
+        self.assertEqual(rows[0]["check_in"], "10:06")
+        self.assertIsNone(rows[0]["check_out"])
+
+    def test_23_backfill_uses_any_later_punch_even_when_not_applied(self):
+        # Open Morning at 12:54 (single punch). The day's closing punch (16:20)
+        # exists in the ledger as duplicate_session (a conflict swallowed it)
+        # but was never applied. The backfill must still close the row with it
+        # -- ledger state does not matter, only that a punch strictly later
+        # than the check-in was recorded.
+        self._punch(1001, "2026-06-10 12:54:00")
+        rows = self._attendance()
+        self.assertIsNone(rows[0]["check_out"])
+
+        self.db.execute(
+            """
+            INSERT INTO device_punches
+                (fingerprint, device_serial, user_id, student_id, punch_time,
+                 status_code, source, state, captured_at)
+            VALUES (?, ?, ?, ?, ?, '', 'reconcile', ?, ?)
+            """,
+            (
+                "SN-TEST-01|1001|2026-06-10 16:20:00|0",
+                "SN-TEST-01", "1001", 1001,
+                "2026-06-10 16:20:00", "duplicate_session",
+                "2026-06-10 08:00:00",
+            ),
+        )
+        self.db.commit()
+
+        self.assertEqual(attendance_punch.backfill_empty_sessions(self.db), 1)
+
+        rows = self._attendance()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["session"], "Full Day")
+        self.assertEqual(rows[0]["check_in"], "12:54")
+        self.assertEqual(rows[0]["check_out"], "16:20")
+        self.assertEqual(rows[0]["duration_minutes"], 146)  # 12:54-13:00 + 14:00-16:20
+
+    def test_24_backfill_recomputes_session_and_resolves_conflict(self):
+        # An open Morning row whose closing punch (17:00) was never applied
+        # backfills into "Full Day" -- which collides with a pre-existing
+        # Full Day row. The backfill must run the same conflict resolution as
+        # apply_punch (keep the device-derived row, drop the preloaded one)
+        # instead of crashing on UNIQUE(student_id, date, session).
+        self.db.execute(
+            "INSERT INTO attendance (student_id, date, session, check_in, check_out, duration_minutes) "
+            "VALUES (1001, '2026-06-10', 'Full Day', '09:40', '18:00', 440)"
+        )
+        self.db.execute(
+            "INSERT INTO attendance (student_id, date, session, check_in) "
+            "VALUES (1001, '2026-06-10', 'Morning', '08:30')"
+        )
+        for hm, state in [("08:30:00", "applied"), ("17:00:00", "duplicate_session")]:
+            self.db.execute(
+                """
+                INSERT INTO device_punches
+                    (fingerprint, device_serial, user_id, student_id, punch_time,
+                     status_code, source, state, captured_at)
+                VALUES (?, ?, ?, ?, ?, '', 'reconcile', ?, ?)
+                """,
+                (
+                    f"SN-TEST-01|1001|2026-06-10 {hm}|0",
+                    "SN-TEST-01", "1001", 1001,
+                    f"2026-06-10 {hm}", state, "2026-06-10 08:00:00",
+                ),
+            )
+        self.db.commit()
+
+        with self.assertLogs("studysync.attendance_punch", level="WARNING") as logs:
+            self.assertEqual(attendance_punch.backfill_empty_sessions(self.db), 1)
+        self.assertTrue(
+            any("Session conflict reconciled" in line for line in logs.output),
+            "expected a 'session conflict reconciled' warning from the backfill",
+        )
+
+        rows = self._attendance()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["session"], "Full Day")
+        self.assertEqual(rows[0]["check_in"], "08:30")
+        self.assertEqual(rows[0]["check_out"], "17:00")
+        self.assertEqual(rows[0]["duration_minutes"], 450)  # 08:30-13:00 + 14:00-17:00
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -158,20 +158,24 @@ def fix_checkin_pm_offset(check_in: str, check_out: str) -> str | None:
     A check-in before the library's 09:00 opening is almost always the
     swipe device recording an afternoon time on a 12-hour clock without
     adding 12 hours (e.g. '02:00' really meant 14:00). This dataset has a
-    whole block of them (42 rows on one day, all '02:00'..'02:45').
+    whole block of them (42 rows on one day, all '02:00'..'02:45', plus a
+    '4:30' that meant 16:30).
 
-    Reads the raw time as a PM time (+12h) whenever it is before opening
-    and its hour is < 12. The caller decides what to do with the result --
-    a fixed time that is still not before check_out makes the row invalid
-    (check_out > check_in fails), which is the correct outcome for a pair
-    that was broken no matter how it is read.
+    Reads the raw time as a PM time (+12h) only when its hour is < 8.
+    Hour 8 (08:00-08:59) entries are genuinely kept: the source contains
+    two such rows (08:18, 08:46) whose OUT/DURATION columns prove the
+    literal AM reading, i.e. students arriving before opening. The caller
+    decides what to do with the result -- a fixed time that is still not
+    before check_out makes the row invalid (check_out > check_in fails),
+    which is the correct outcome for a pair that was broken no matter how
+    it is read.
 
     Returns the corrected 'HH:MM', or None if there is nothing to fix.
     """
     if not check_in:
         return None
     h = int(check_in[:2])
-    if h >= 12 or check_in >= OPEN_TIME:
+    if h >= 8 or check_in >= OPEN_TIME:
         return None
     fixed = _time_to_min(check_in) + 12 * 60
     if fixed >= 24 * 60:
@@ -188,9 +192,13 @@ def fix_checkout_pm_offset(check_in: str, check_out: str) -> str | None:
 
     Try adding 12 hours to check_out and accept the fix only if it (a)
     lands after check_in and (b) produces a plausible same-day session of
-    at most 13 hours, so an actually-swapped or badly mistyped pair of
+    at most 10 hours, so an actually-swapped or badly mistyped pair of
     times (which a 12-hour-clock slip can't explain) is left alone for the
-    caller to skip/log instead of being papered over.
+    caller to skip/log instead of being papered over. The 10-hour cap
+    reflects the longest real session seen in this dataset (full-day stays
+    run ~9 hours after the lunch break); a +12h wrap implying more (e.g.
+    '10:11' read as 22:11 from a 10:25 check-in, which would be a
+    11h46m session) is rejected as a mistyped out time, not a clock slip.
 
     Returns the corrected 'HH:MM' check_out, or None if no safe fix applies.
     """
@@ -203,19 +211,19 @@ def fix_checkout_pm_offset(check_in: str, check_out: str) -> str | None:
     if int(check_out[:2]) >= 12:
         return None  # already PM/noon-or-later; a +12 wrap isn't a clock slip
     fixed_end = end + 12 * 60
-    if fixed_end <= start or fixed_end - start > 13 * 60:
+    if fixed_end <= start or fixed_end - start > 10 * 60:
         return None
     fh, fm = divmod(fixed_end, 60)
     return f"{fh:02d}:{fm:02d}"
 
 
 def clamp_out_time(check_out: str) -> str | None:
-    """Clamp a check-out past the library's closing time to the closing
-    time itself (e.g. '19:03' -> '19:00'). The library is never open past
-    19:00, so an out time beyond it is a data-entry overrun, not a real
-    stay. Returns the corrected 'HH:MM', or None if nothing to clamp."""
-    if check_out and check_out > CLOSE_TIME:
-        return CLOSE_TIME
+    """No longer clamps. An earlier rule read any check-out past the 19:00
+    closing as a data-entry overrun and clamped it to 19:00, but every
+    such row in the source is a genuine late stay -- their DURATION
+    columns match the raw out time exactly (19:50, 20:30, 22:34) -- so
+    clamping was corrupting real attendance. Kept as a no-op for API
+    compatibility with clean_student_data. Returns None (never clamps)."""
     return None
 
 

@@ -432,6 +432,96 @@ def close_stale_open_session(db: sqlite3.Connection, student_id: int, day: str) 
     )
 
 
+def close_open_with_last_punch(
+    db: sqlite3.Connection, student_id: int, day: str
+) -> Optional[str]:
+    """
+    Backfill the check-out of an "empty" attendance row (check_out NULL) from
+    the day's last device punch, when that punch is strictly LATER than the
+    row's check-in.
+
+    An empty row normally means the student's final punch of the day was
+    itself the check-in (odd punch count) -- there is no out-punch to backfill
+    with, so the row is left open for the 23:59 stale-close on their next
+    visit. But when a later punch exists and simply never became a check-out
+    (e.g. it was debounced as a double-tap, or a session conflict kept the row
+    open), that punch is the truthful closing time and this is where the row
+    gets it, instead of waiting for the artificial 23:59 auto-close.
+
+    Recomputes session and duration through _compute_session_and_duration()
+    (same 1-2 PM lunch-break rule as every other write) and runs the
+    _resolve_session_conflict() guard first, so promoting e.g. Morning ->
+    Full Day can never collide with a UNIQUE(student_id, date, session) slot.
+
+    Returns the new check_out (HH:MM) that was written, or None when there is
+    no open row, no device punch for the day, or no punch strictly after the
+    check-in (nothing truthful to close with).
+    """
+    open_session = db.execute(
+        "SELECT * FROM attendance WHERE student_id = ? AND date = ? AND check_out IS NULL",
+        (student_id, day),
+    ).fetchone()
+    if open_session is None:
+        return None
+
+    last = db.execute(
+        """SELECT MAX(punch_time) AS last
+           FROM device_punches
+           WHERE student_id = ? AND punch_time LIKE ?""",
+        (student_id, day + "%"),
+    ).fetchone()["last"]
+    if not last:
+        return None
+
+    last_hm = last[11:16]
+    if last_hm <= open_session["check_in"]:
+        return None
+
+    final_session, duration = _compute_session_and_duration(
+        open_session["check_in"], last_hm
+    )
+    _resolve_session_conflict(
+        db,
+        student_id,
+        day,
+        final_session,
+        open_session["attendance_id"],
+        open_session["check_in"],
+        last_hm,
+    )
+    db.execute(
+        """
+        UPDATE attendance
+        SET check_out = ?, session = ?, duration_minutes = ?
+        WHERE attendance_id = ?
+        """,
+        (last_hm, final_session, duration, open_session["attendance_id"]),
+    )
+    return last_hm
+
+
+def backfill_empty_sessions(db: sqlite3.Connection) -> int:
+    """
+    Close every "empty" attendance row that has a later device punch to
+    backfill with. Runs at the end of a reconcile pass so no open row is
+    left behind when the data to close it exists. Runs under the punch
+    lock so it can't race a live transport, and commits its own
+    transaction. Returns how many rows were closed.
+    """
+    open_rows = db.execute(
+        "SELECT DISTINCT student_id, date FROM attendance WHERE check_out IS NULL"
+    ).fetchall()
+    closed = 0
+    if not open_rows:
+        return 0
+    with _punch_lock:
+        for row in open_rows:
+            if close_open_with_last_punch(db, row["student_id"], row["date"]) is not None:
+                closed += 1
+        db.commit()
+    return closed
+
+
 def apply_punch(
     db: sqlite3.Connection,
     student_id: int,
