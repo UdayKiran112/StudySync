@@ -43,9 +43,11 @@ ATTENDANCE SESSION RULE
   - check_out <= 13:00                              -> 'Morning'
   - check_in  >= 13:00                               -> 'Afternoon'
   - check_in  < 13:00 and check_out > 13:00 (spans)   -> 'Full Day'
-  - check_in present but check_out missing/unknown    -> based on check_in
-    alone: check_in >= 13:00 -> 'Afternoon', else 'Morning' (best guess for
-    an open/incomplete session)
+
+  A row whose check-out is missing/unparseable is only ever placed in a
+  session bucket (via check_in alone) so it can be merged with other swipe
+  pairs of the same day -- it is NEVER inserted on its own: a session that
+  ends without a check-out is skipped and flagged for manual review.
 
 WHAT GETS SKIPPED (and logged to the report)
 ---------------------------------------------
@@ -56,6 +58,11 @@ WHAT GETS SKIPPED (and logged to the report)
   - Rows with no parseable check-in time (can't derive a session) -- the
     small remainder clean_student_data.py couldn't safely recover is
     already itemized in error_log_attendance.log.
+  - Sessions that never received a check-out (open/incomplete): the row is
+    NOT inserted -- attendance always requires a real check-out -- and is
+    written to the shared manual-review ledger instead, so a human can
+    supply the missing time. A check-in alone no longer creates an
+    attendance row.
   - Any insert that still trips a UNIQUE constraint (e.g. a student would
     end up with two "open" sessions -- no check-out -- on record at once,
     which the schema only allows once per student).
@@ -156,7 +163,6 @@ def main():
     counts = {"attendance": 0}
     autocorrection_counts = {
         "lunch_break_excluded": 0,
-        "duration_left_null_no_checkout": 0,
         "checkout_pm_offset_corrected": 0,
         "multiple_swipes_merged": 0,
     }
@@ -169,6 +175,7 @@ def main():
         "student_id_not_found": [],
         "unparseable_date": [],
         "no_checkin_time": [],
+        "missing_checkout": [],  # session never got a check-out -> review
         "duplicate_session": [],  # UNIQUE constraint insert failures
         "checkout_not_after_checkin": [],  # CHECK constraint insert failures
         "insert_failed_other": [],  # any other insert failure
@@ -179,6 +186,7 @@ def main():
     skipped_id = 0
     skipped_bad_id = 0
     skipped_date = 0
+    skipped_no_checkout = 0
     total_rows = 0
 
     # Rows are grouped by (student_id, date, session) before being written to
@@ -295,11 +303,33 @@ def main():
                 f"({check_in}-{check_out})"
             )
 
+        if check_out is None:
+            # No check-out ever landed on this (student, date, session):
+            # the session is incomplete, so it must NOT appear in the
+            # attendance table (attendance requires a real check-out).
+            # Flag it for a human to supply the missing time instead.
+            skipped_no_checkout += 1
+            detail_logs["missing_checkout"].append(
+                f"lines {lines} (student {student_id}, {date}, {session}): "
+                f"no check-out time on record -> attendance NOT inserted, "
+                f"flagged for manual review"
+            )
+            log_review_item(
+                {
+                    "table": "attendance",
+                    "row": lines,
+                    "student_id": student_id,
+                    "date": date,
+                    "problem": "missing_check_out",
+                    "detail": f"attendance session '{session}' has no check_out; "
+                              f"only a check-in ({check_in}) was recorded",
+                }
+            )
+            continue
+
         duration, lunch_overlap = compute_duration_minutes(check_in, check_out)
         if lunch_overlap > 0:
             autocorrection_counts["lunch_break_excluded"] += 1
-        if check_out is None:
-            autocorrection_counts["duration_left_null_no_checkout"] += 1
         # NOTE: if check_out is present but not after check_in, duration is
         # None here and the INSERT below is guaranteed to trip the table's
         # CHECK constraint -- so that case is logged once, in the except
@@ -362,7 +392,10 @@ def main():
         f.write(f"CSV data rows processed: {total_rows}\n")
         f.write(f"Rows skipped (unparseable Student ID): {skipped_bad_id}\n")
         f.write(f"Rows skipped (student_id not found): {skipped_id}\n")
-        f.write(f"Rows skipped (unparseable date): {skipped_date}\n\n")
+        f.write(f"Rows skipped (unparseable date): {skipped_date}\n")
+        f.write(
+            f"Rows skipped (no check-out time, flagged for review): {skipped_no_checkout}\n\n"
+        )
         f.write("Rows inserted this run, by table:\n")
         for k, v in counts.items():
             f.write(f"  {k}: {v}\n")
@@ -382,7 +415,8 @@ def main():
     print(f"Processed {total_rows} CSV rows.")
     print(
         f"Skipped: {skipped_bad_id} (unparseable student_id), {skipped_id} (unknown student_id), "
-        f"{skipped_date} (unparseable date)"
+        f"{skipped_date} (unparseable date), "
+        f"{skipped_no_checkout} (no check-out time, flagged for review)"
     )
     print("Inserted this run:", counts)
     print("Auto-corrected this run:", autocorrection_counts)

@@ -62,6 +62,9 @@ WHAT GETS SKIPPED (and logged to the report)
     the small remainder clean_student_data.py couldn't safely recover
     (e.g. a 5-digit typo like '17520', or a value missing its hour
     entirely) is already itemized in error_log_digital_library.log.
+  - Rows with no parseable Out Time: a digital session that never received
+    a check-out is NOT inserted -- it is flagged for manual review instead,
+    so no digital_library_usage row is stored with an open (NULL) out_time.
   - Any insert that trips a UNIQUE constraint (e.g. two rows would both
     leave a student's digital session "open" with no check-out, which the
     schema only allows once per student) -- caught per-row and logged.
@@ -220,6 +223,28 @@ class DigitalLibraryLoader:
                     "date": date,
                     "problem": "outside_operating_hours",
                     "detail": f"in_time {check_in}, out_time {check_out}",
+                }
+            )
+            return
+
+        if check_out is None:
+            # A digital session that never got a check-out is incomplete:
+            # it must NOT be stored (that would leave a row with an open
+            # NULL out_time). Flag it for a human to supply the time.
+            self.skips.append(
+                f"line {line_no}: digital library usage with no usable Out Time -> "
+                f"SKIPPED, flagged for manual review"
+            )
+            log_review_item(
+                {
+                    "table": "digital_library_usage",
+                    "row": line_no,
+                    "student_id": student_id,
+                    "date": date,
+                    "problem": "missing_out_time",
+                    "detail": f"digital library session on platform "
+                              f"{platform_val!r} has no out_time; only an "
+                              f"in_time ({check_in}) was recorded",
                 }
             )
             return

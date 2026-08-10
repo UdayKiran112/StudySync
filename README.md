@@ -82,6 +82,11 @@ a loader never references a student/exam that doesn't exist yet.
 - **Attendance sessions** — Morning if check-in is before 13:00, Afternoon
   otherwise, Full Day when the session spans lunch; the 13:00–14:00 lunch
   hour is excluded from the duration.
+- **No out-time records are never loaded** — an attendance or digital
+  library session that never recorded a check-out / out time is skipped by
+  its loader (so no open `check_out`/`out_time` rows appear in the
+  database) and written to the manual-review ledger instead for a human to
+  complete.
 - **Topic canonicalization** — the same real exam/quiz from different
   sources is matched by `(canonical topic, date)`, folding abbreviations
   and typos (`"Ari & Rea"` → `Arithmetic & Reasoning`) without guessing on
