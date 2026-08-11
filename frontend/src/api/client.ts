@@ -58,6 +58,7 @@ export function extractErrorMessage(error: unknown): string {
           .join("; ");
       }
       if (err.response.status === 401) return "Invalid or missing API key.";
+      if (err.response.status === 429) return "Too many requests — wait a moment and try again.";
       if (err.response.status === 503) return "Server API key is not configured.";
       return `Request failed (${err.response.status})`;
     }

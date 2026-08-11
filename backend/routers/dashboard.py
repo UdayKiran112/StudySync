@@ -13,7 +13,7 @@ matplotlib.use("Agg")  # headless -- no display available on the server
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -30,6 +30,7 @@ from reportlab.platypus import (
 
 from database import get_db_dependency
 from models.dashboard import PresentItem, StudentDashboardResponse
+from rate_limit import limiter
 from security import require_api_key
 
 logger = logging.getLogger("studysync.dashboard")
@@ -1078,7 +1079,9 @@ def get_student_dashboard(
 
 
 @router.get("/students/{student_id}/report")
+@limiter.limit("10/minute")
 def get_student_report_pdf(
+    request: Request,
     student_id: int,
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
@@ -1086,6 +1089,7 @@ def get_student_report_pdf(
     Generate and download a PDF performance report for a student --
     same underlying data and numbers as the JSON dashboard, rendered as
     a printable document staff can save or hand to a student/parent.
+    Rate-limited: PDF rendering (matplotlib + reportlab) is expensive.
     """
     data = _build_dashboard_data(db, student_id)
     pdf_bytes = _render_report_pdf(data)

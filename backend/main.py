@@ -32,11 +32,12 @@ from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
+from slowapi.middleware import SlowAPIMiddleware
 
 from database import apply_runtime_schema_guards
+from rate_limit import limiter
 
 logger = logging.getLogger("studysync")
 
@@ -207,11 +208,14 @@ app = FastAPI(
 )
 
 # --- Rate limiting ---
-# Global limiter keyed by client IP. 60 req/min for general endpoints,
-# tighter limits applied per-endpoint where needed (login, sync, PDF gen).
-limiter = Limiter(key_func=get_remote_address)
+# Global limiter keyed by real client IP (first X-Forwarded-For hop from
+# Caddy; see rate_limit.py). 120 req/min default for general endpoints,
+# tighter limits applied per-endpoint where needed (sync, PDF gen).
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# The middleware is what applies the default limit to every route; routes
+# decorated with @limiter.limit(...) override the default for that route.
+app.add_middleware(SlowAPIMiddleware)
 
 # CORS: explicit origins above (localhost + anything from
 # STUDYSYNC_ALLOWED_ORIGINS) plus the private-LAN regex for local network

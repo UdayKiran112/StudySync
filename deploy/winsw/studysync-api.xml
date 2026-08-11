@@ -14,6 +14,19 @@
   <executable>C:\ProgramData\StudySync\app\api\studysync-api.exe</executable>
   <workingdirectory>C:\ProgramData\StudySync\app\api</workingdirectory>
 
+  <!-- Run as a dedicated low-privilege local account, NOT LocalSystem: an
+       RCE in the backend must not equal full machine compromise. install.ps1
+       creates StudySyncSvc with a random password and replaces the
+       __STUDYSYNC_SVC_PASSWORD__ placeholder below before the service is
+       registered; update.ps1 keeps the same password so the Service Control
+       Manager credentials stay valid. If you edit this file by hand, replace
+       the placeholder too. -->
+  <serviceaccount>
+    <user>StudySyncSvc</user>
+    <password>__STUDYSYNC_SVC_PASSWORD__</password>
+    <allowservicelogon>true</allowservicelogon>
+  </serviceaccount>
+
   <!-- Matplotlib font-cache dir: a writable path outside the app folder.
        Without a valid cache dir, a frozen PyInstaller app can crash with
        KeyboardInterrupt while rebuilding the font cache on every start. -->

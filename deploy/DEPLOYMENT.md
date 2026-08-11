@@ -44,13 +44,13 @@ Everything lives under `C:\ProgramData\StudySync`:
 | `app\api\` | Backend exe + PyInstaller `_internal`, `.env` (API key, DB path) |
 | `app\frontend\` | Built React SPA |
 | `app\caddy\` | Caddy binary + `Caddyfile` |
-| `config\winsw\` | WinSW service wrappers (`studysync-api.exe`, `studysync-caddy.exe` + XML) |
+| `config\winsw\` | WinSW service wrappers (`studysync-api.exe`, `studysync-caddy.exe` + XML). The XMLs carry the service-account password |
 | `data\library.db` | The database (NEVER edited by an update/install) |
 | `data\mplcache\` | Matplotlib font cache (must be writable; frozen exe crashes without it) |
 | `backups\` | Nightly `studysync_<timestamp>.zip` backups |
-| `scripts\` | `backup.exe`, `restore.exe`, `healthcheck.exe`, `install.ps1`, `update.ps1`, `uninstall.ps1` |
+| `scripts\` | `backup.exe`, `restore.exe`, `healthcheck.exe`, `install.ps1`, `update.ps1`, `uninstall.ps1`, `rotate-key.ps1` |
 | `tools\` | `Bonjour64.msi` (Apple Bonjour for Windows - mDNS name resolution) |
-| `logs\` | `api\`, `caddy\`, `winsw\`, `backup\`, `health\`, `installer\` |
+| `logs\` | `api\`, `caddy\`, `winsw\`, `backup\`, `health\`, `installer\`. Caddy's access log strips API keys/authorization headers |
 
 ## Windows services
 
@@ -61,6 +61,28 @@ Everything lives under `C:\ProgramData\StudySync`:
 
 Both are `Automatic` + `delayedAutoStart`. If they fail they auto-restart up to
 3 times (10/20/30 s backoff). Both log through WinSW to `config\winsw\*.log`.
+
+### Service account
+
+Both services run as the dedicated **low-privilege local account `StudySyncSvc`**
+— never `LocalSystem`. A compromise of the API or Caddy process is therefore
+contained to the StudySync tree (`C:\ProgramData\StudySync`) and cannot read
+other users' files, secrets, or the OS. The account is created by
+`install.ps1` with a random password, which is stored in the WinSW XMLs
+(`config\winsw\*.xml`) and in the Service Control Manager's credential store.
+
+- The password is **stable across installs/updates** (`install.ps1` /
+  `update.ps1` re-read it from the existing XML and re-inject it after any file
+  swap, then re-assert it via `sc.exe config ... obj= .\StudySyncSvc`). This is
+  what keeps the SCM registration working without uninstalling/reinstalling
+  services (which risks the "marked for deletion" race below).
+- `install.ps1` strips the inherited `BUILTIN\Users` read ACL from the whole
+  tree and grants access only to SYSTEM, Administrators, the installing user,
+  and `StudySyncSvc` (read-only on the app, write on `data\` / `logs\` /
+  `backups\`). This is what keeps logs and the WinSW XMLs (which hold the
+  service password) out of every local user's reach.
+- `uninstall.ps1` removes the account (only if no other StudySync service still
+  references it).
 
 ## Scheduled tasks
 
@@ -82,6 +104,11 @@ are chosen to survive that filtering.
 - Every `/api/*` route requires the header `X-API-Key: <value>`; a missing or
   wrong key returns 401 (constant-time comparison via `secrets.compare_digest`).
 - Staff enter the key ONCE per browser in the app's Settings screen.
+- **Rotation** (after any suspicion of exposure): run `rotate-key.ps1` elevated
+  on the server (or re-run `install.ps1 -RotateKey`). The old key stops working
+  immediately; the new key is printed to the console and must be re-entered in
+  every browser's Settings. The key is never written to any log file — including
+  the installer logs and the diagnostics bundle (which redacts it).
 
 ## Build pipeline (on the dev machine)
 
@@ -123,14 +150,21 @@ The Inno script (`deploy\installer\studysync.iss`) is deliberately thin:
      build machine's database as seed data, so a fresh venue install starts
      with the current students; existing data is never overwritten),
    - preserves/generates `.env`,
+   - creates the `StudySyncSvc` low-privilege service account, injects its
+     password into the WinSW XMLs, and hardens the ACLs on
+     `C:\ProgramData\StudySync` (inherited `BUILTIN\Users` read access
+     removed),
    - registers services if missing (existing registrations are only stopped,
-     never uninstalled — see the warning below),
+     never uninstalled — see the warning below), and asserts the service
+     account via `sc.exe config` on both registrations,
    - starts both services,
    - creates the inbound firewall rules `StudySync HTTP (port 80)` (TCP) and
-     `StudySync mDNS (UDP 5353)` for **all network profiles**, so LAN access
-     works even on a network Windows marks Public,
-   - switches any Public network to Private (best-effort) to also enable
-     Windows network discovery,
+     `StudySync mDNS (UDP 5353)` **for Private/Domain profiles only**, with
+     port 80 additionally restricted to RFC1918 LAN addresses (`10/8`,
+     `172.16/12`, `192.168/16`) + loopback. Public/cafe networks get no
+     inbound access, and a machine behind a public IP cannot expose port 80
+     to the internet. Windows is no longer asked to reclassify Public
+     networks (the old "switch to Private" step is removed),
    - keeps Apple Bonjour (`tools\Bonjour64.msi`) on the server for Windows
      staff PCs. If that same PC also runs the server, install the MSI once and
      the API publishes `studysync.local` *through* Bonjour rather than running
@@ -138,9 +172,13 @@ The Inno script (`deploy\installer\studysync.iss`) is deliberately thin:
    - registers the two scheduled tasks,
    - writes the desktop shortcut.
 5. Uninstall: Control Panel → StudySync runs `uninstall.ps1 -Yes`, which makes a
-   final backup, removes services/tasks/firewall/shortcut, then deletes
-   `C:\ProgramData\StudySync`. Bonjour is a shared Windows component (also used
-   by iTunes etc.) and is intentionally left installed on any PC that has it.
+   final backup (the newest `backups\*.zip` is copied to the operator's
+   `Documents\` folder FIRST, before the tree is deleted — the backup must
+   never live only inside the folder being removed), removes
+   services/tasks/firewall/shortcut, deletes the `StudySyncSvc` account, then
+   deletes `C:\ProgramData\StudySync`. Bonjour is a shared Windows component
+   (also used by iTunes etc.) and is intentionally left installed on any PC
+   that has it.
 
 ## Critical operational warnings
 
@@ -154,3 +192,12 @@ The Inno script (`deploy\installer\studysync.iss`) is deliberately thin:
 - **MPLCONFIGDIR must stay writable.** The frozen backend crashes with a
   matplotlib `KeyboardInterrupt` if the font cache directory
   (`data\mplcache`) is invalid; the service XML sets it via `<env>`.
+- **A venue network Windows marks Public gets no LAN access.** The firewall
+  rules are Private/Domain only by design; if devices cannot reach
+  `studysync.local` on a venue Wi-Fi, change the network to a private profile
+  (Settings → Network → that network → Private) or set a
+  `New-NetFirewallRule -Profile Private,Domain` rule manually. Do NOT
+  re-widen the shipped rules to `Any`.
+- **After a key leak, rotate — never reuse.** `rotate-key.ps1` (or
+  `install.ps1 -RotateKey`) generates a fresh key and restarts the API. The
+  leaked value is dead the moment the service is back up.

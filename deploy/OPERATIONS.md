@@ -13,6 +13,10 @@ Produces `%TEMP%\studysync-diagnostics_<stamp>.zip` with service state, log
 tails, firewall rule, scheduled tasks, network info, and a health-check result.
 Hand this zip to whoever is diagnosing.
 
+> The bundle is safe to share: API keys, the `X-API-Key`/`Authorization`
+> headers, and the service-account password are redacted before anything is
+> written into the zip.
+
 One-liner checks:
 
 ```powershell
@@ -51,12 +55,17 @@ reboot — both are `Automatic`.)
 | Log | Path |
 | --- | --- |
 | Backend | `logs\api\api.log` (rotating) |
-| Caddy access | `logs\caddy\access.log` |
+| Caddy access | `logs\caddy\access.log` — API keys / authorization headers are stripped by the Caddyfile log filter |
 | WinSW wrapper | `config\winsw\*.out.log` / `*.err.log` / `*.wrapper.log` |
 | Backups | `logs\backup\backup.log` |
 | Health watch | `logs\health\health.log` |
 | System tray | `logs\tray\tray.log` |
-| Installer | `logs\installer\install.log`, `inno-install.log`, `inno-uninstall.log`, `update.log` |
+| Installer | `logs\installer\install.log`, `inno-install.log`, `inno-uninstall.log`, `update.log`, `rotate-key.log` |
+
+Logs are ACL-restricted: the inherited `BUILTIN\Users` read ACE on
+`C:\ProgramData\StudySync` was removed by the installer, so a non-admin local
+user cannot read these (nor the WinSW XMLs, which hold the service-account
+password).
 
 ## System-tray monitor
 
@@ -75,6 +84,21 @@ Stopped**. The icon refreshes every 5 seconds; `logs\tray\tray.log` records
 start/stop and any errors. If the icon is missing, run
 `C:\ProgramData\StudySync\scripts\studysync-tray.exe` (or re-run the installer,
 which recreates the task and starts it).
+
+## Rotating the API key (after a leak / suspicion)
+
+1. On the server (elevated):
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File C:\ProgramData\StudySync\scripts\rotate-key.ps1
+   ```
+2. The script generates a fresh key, writes it to `app\api\.env`, restarts the
+   API, and prints the new key to the console. The old key is dead the moment
+   the API is back up.
+3. Re-enter the new key ONCE per staff browser in Settings. Until then those
+   browsers get 401s (that is expected).
+4. The key is never written to any log; `diagnostics.ps1` bundles redact it.
+
+`install.ps1 -RotateKey` does the same job at (re)install time.
 
 ## Backup
 
@@ -132,7 +156,9 @@ powershell -ExecutionPolicy Bypass -File C:\ProgramData\StudySync\scripts\update
 ```
 
 What it does: stops services → safety backup → swaps `app\config\scripts` →
-recreates `.env` with the SAME API key and DB path → starts services.
+re-injects the (unchanged) `StudySyncSvc` password into the WinSW XMLs →
+recreates `.env` with the SAME API key and DB path → asserts the service
+account via `sc.exe config` → starts services.
 
 **Data is never touched** — `data\library.db`, backups, and logs survive.
 
@@ -146,8 +172,11 @@ same in-place update (the installer is idempotent).
 ## Uninstall / moving to another machine
 
 Best path: **uninstall via Control Panel → StudySync** (runs `uninstall.ps1
--Yes`). It makes a final backup, removes services, scheduled tasks, firewall
-rule, desktop shortcut, then deletes `C:\ProgramData\StudySync`.
+-Yes`). It makes a final backup, **copies the newest backup zip to your
+`Documents\` folder FIRST** (the backup must not live only inside the folder
+being deleted), removes services, scheduled tasks, firewall rules, the
+desktop shortcut, and the `StudySyncSvc` account, then deletes
+`C:\ProgramData\StudySync`.
 
 Manual equivalent:
 
@@ -155,9 +184,9 @@ Manual equivalent:
 C:\ProgramData\StudySync\scripts\uninstall.ps1 -Yes
 ```
 
-> Uninstall DELETES the database after backing it up to `backups\`. Copy that
-> backup elsewhere before uninstalling if you still need the data (e.g. moving
-> to a new server).
+> Uninstall DELETES the database, but a final backup is copied to `Documents\`
+> before anything is removed — check that folder if you still need the data
+> (e.g. moving to a new server).
 
 ## Access from other PCs on the LAN
 
@@ -173,10 +202,12 @@ How the device resolves it depends on the OS:
 
 - The server advertises `studysync.local` via mDNS (UDP 5353) from the API
   service. Firewall rules `StudySync HTTP (port 80)` + `StudySync mDNS
-  (UDP 5353)` allow inbound on **all network profiles** (Private, Domain, and
-  Public), and the installer also switches any Public network to Private
-  (best-effort) — so LAN access works no matter how Windows classifies the
-  network.
+  (UDP 5353)` allow inbound on **Private/Domain profiles only**, and port 80 is
+  additionally restricted to RFC1918 LAN addresses (`10/8`, `172.16/12`,
+  `192.168/16`) + loopback — never the internet, never a network Windows marks
+  Public. If a venue Wi-Fi is classified Public and devices can't connect, set
+  that network to Private in Windows Settings (the installer no longer does
+  this automatically).
 - The advertisement is **self-healing**: the API re-resolves the machine's IP
   every 60 s and re-registers the name if it changed. Moving the laptop to
   another Wi-Fi (different IP) is picked up within a minute with no restart.
@@ -220,7 +251,9 @@ laptop** to another Wi-Fi:
 | Tray icon missing after install | Task `StudySyncTray` runs at logon; re-log on or run `scripts\studysync-tray.exe` manually |
 | Tray icon red | A service is stopped — click the icon and use **Restart** (needs the tray to run elevated, i.e. from the scheduled task) |
 | Tray "Restart" does nothing | The tray was launched manually without admin; re-run the installer or restart it from task `StudySyncTray` |
-| API returns 401 | Browser's saved key no longer matches `app\api\.env` → re-enter the key in Settings |
+| API returns 401 | Browser's saved key no longer matches `app\api\.env` → re-enter the key in Settings (or rotate it: `rotate-key.ps1`) |
+| API returns 429 "Too many requests" | Rate-limited. The backend allows 120 requests/min overall, with tighter per-endpoint caps on sync (5/min) and report-PDF (10/min). Wait and retry — normal under load, or adjust `STUDYSYNC_RATE_LIMIT_PER_MINUTE` in `.env` |
+| Devices can't reach `http://studysync.local` on a venue Wi-Fi | That network is classified **Public**; the firewall rules are Private/Domain only by design. Set the network to Private in Windows Settings. Do NOT re-widen the rules to `Any` |
 | Port 80 conflict on install | Another web server on the machine; installer does not stop foreign processes |
 
 ## Support

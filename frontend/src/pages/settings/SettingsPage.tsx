@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, XCircle, Trash2 } from "lucide-react";
 import { useSettings } from "../../context/SettingsContext";
 import { PageHeader } from "../../components/ui/Feedback";
 import { Field, Input } from "../../components/ui/Form";
@@ -8,7 +8,7 @@ import { apiClient, extractErrorMessage } from "../../api/client";
 import toast from "react-hot-toast";
 
 export function SettingsPage() {
-  const { baseUrl, apiKey, setBaseUrl, setApiKey } = useSettings();
+  const { baseUrl, apiKey, setBaseUrl, setApiKey, clearApiKey } = useSettings();
   const [localBaseUrl, setLocalBaseUrl] = useState(baseUrl);
   const [localApiKey, setLocalApiKey] = useState(apiKey);
   const [testState, setTestState] = useState<"idle" | "testing" | "ok" | "fail">("idle");
@@ -56,6 +56,17 @@ export function SettingsPage() {
       setTestState("fail");
       setTestMessage(extractErrorMessage(err));
     }
+  }
+
+  function handleRemoveKey() {
+    if (!window.confirm("Remove the stored staff API key from this browser? You will need to re-enter it to use StudySync.")) {
+      return;
+    }
+    clearApiKey();
+    setLocalApiKey("");
+    setTestState("idle");
+    setTestMessage("");
+    toast.success("Stored API key removed from this browser.");
   }
 
   return (
@@ -112,10 +123,26 @@ export function SettingsPage() {
         )}
       </form>
 
-      <p className="mt-4 max-w-lg text-xs text-slate">
-        These values are stored only in this browser's local storage — they are sent directly from your
-        browser to the backend on every request.
-      </p>
+      <div className="mt-4 max-w-lg space-y-2">
+        <div className="flex items-center gap-2 rounded-lg border border-rust/40 bg-rust/5 p-4">
+          <Trash2 size={16} className="shrink-0 text-rust" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-ink">Remove the stored staff key</p>
+            <p className="text-xs text-slate">
+              Deletes the API key from this browser. Anything that reads a saved key
+              stops working until you paste a valid key again.
+            </p>
+          </div>
+          <Button type="button" variant="danger" onClick={handleRemoveKey}>
+            Remove key
+          </Button>
+        </div>
+        <p className="text-xs text-slate">
+          These values are stored only in this browser's local storage — they are sent directly from your
+          browser to the backend on every request. In production StudySync is served and proxied from the
+          same origin, so the base URL is normally left empty.
+        </p>
+      </div>
     </div>
   );
 }

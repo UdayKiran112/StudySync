@@ -43,9 +43,20 @@
 	}
 
 	# ---- Logging ----
+	# Request headers are NOT logged: the frontend sends the staff API key as
+	# the X-API-Key header on every request, and Caddy's default JSON log
+	# would write it out verbatim (8184+ lines of leaked keys were found in
+	# access.log). The filter strips the key headers (in both the canonical
+	# MIME spelling Caddy normalises to and the raw one) before anything is
+	# written. Caddy already redacts Cookie/Authorization by default.
 	log {
 		output file C:\ProgramData\StudySync\logs\caddy\access.log
-		format json
+		format filter {
+			request>headers>X-Api-Key delete
+			request>headers>X-API-Key delete
+			request>headers>Authorization delete
+			request>headers>Proxy-Authorization delete
+		}
 		level INFO
 	}
 }

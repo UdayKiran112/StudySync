@@ -14,6 +14,17 @@
   <arguments>run --config C:\ProgramData\StudySync\app\caddy\Caddyfile --adapter caddyfile</arguments>
   <workingdirectory>C:\ProgramData\StudySync\app\caddy</workingdirectory>
 
+  <!-- Run as a dedicated low-privilege local account, NOT LocalSystem (an RCE
+       in Caddy must not equal full machine compromise). install.ps1 replaces
+       the __STUDYSYNC_SVC_PASSWORD__ placeholder with the StudySyncSvc
+       account's random password before the service is registered; update.ps1
+       keeps the same password so the SCM credentials stay valid. -->
+  <serviceaccount>
+    <user>StudySyncSvc</user>
+    <password>__STUDYSYNC_SVC_PASSWORD__</password>
+    <allowservicelogon>true</allowservicelogon>
+  </serviceaccount>
+
   <!-- This service must wait until the API service has started. -->
   <depend>StudySyncAPI</depend>
 

@@ -16,7 +16,20 @@ $work = Join-Path $env:TEMP "studysync-diagnostics_$stamp"
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 
 function Out-Report($name, $content) {
-    if ($content) { $content | Set-Content -Path (Join-Path $work $name) -Encoding UTF8 }
+    if ($content) { $content | ForEach-Object { Redact-Secrets $_ } | Set-Content -Path (Join-Path $work $name) -Encoding UTF8 }
+}
+
+# Never let a support bundle re-expose a secret. Old Caddy access logs (from
+# before the log-filter fix) still contain plaintext API keys, and the .env /
+# WinSW XML tails could carry the key or the service-account password. Every
+# line written to the bundle passes through here.
+function Redact-Secrets($line) {
+    if (-not $line) { return $line }
+    $line = $line -replace '(?i)(STUDYSYNC_API_KEY\s*=\s*)[^\s;]+', '${1}[REDACTED]'
+    $line = $line -replace '(?i)(X-Api-Key|X-API-Key|Authorization|Proxy-Authorization)\s*:\s*[^\s]+', '${1}: [REDACTED]'
+    $line = $line -replace '<password>[^<]+</password>', '<password>[REDACTED]</password>'
+    $line = $line -replace '(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{44,}(?![A-Za-z0-9_-])', '[REDACTED]'
+    return $line
 }
 
 Out-Report "00_health.txt" ((& "$APP_DIR\scripts\healthcheck.exe" 2>&1) -join "`n")
@@ -39,7 +52,7 @@ if (Test-Path $logDir) {
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     Get-ChildItem -Path $logDir -Recurse -File | ForEach-Object {
         $tail = Get-Content -Path $_.FullName -Tail 500
-        $tail | Set-Content -Path (Join-Path $target ($_.FullName.Replace($logDir + "\", "").Replace("\", "__")))
+        $tail | ForEach-Object { Redact-Secrets $_ } | Set-Content -Path (Join-Path $target ($_.FullName.Replace($logDir + "\", "").Replace("\", "__")))
     }
 }
 

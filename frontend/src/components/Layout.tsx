@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import toast, { type Toast } from "react-hot-toast";
 import {
   LayoutDashboard,
@@ -139,7 +139,8 @@ function getInitialOpen(): boolean {
 }
 
 export function Layout() {
-  const { isConfigured } = useSettings();
+  const { isConfigured, clearSettings } = useSettings();
+  const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = useState(getInitialOpen);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -257,6 +258,15 @@ export function Layout() {
 
   function closeOnMobile() {
     if (!window.matchMedia(DESKTOP_BREAKPOINT).matches) setOpen(false);
+  }
+
+  // Sign out: wipe the stored staff API key (and settings) from this browser
+  // so nobody inheriting the machine's browser profile inherits the key, then
+  // land on Settings so the staff member can re-enter it.
+  function handleSignOut() {
+    clearSettings();
+    toast.success("Signed out — stored key removed from this browser.");
+    navigate("/settings");
   }
 
   return (
@@ -385,6 +395,14 @@ export function Layout() {
               <CircleAlert size={14} className="ml-auto text-brass-light" />
             )}
           </NavLink>
+          <button
+            onClick={handleSignOut}
+            className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm text-paper/70 transition-colors hover:bg-white/5 hover:text-white"
+            title="Remove the stored staff API key from this browser"
+          >
+            <LogOut size={16} />
+            Sign out
+          </button>
         </div>
       </aside>
 

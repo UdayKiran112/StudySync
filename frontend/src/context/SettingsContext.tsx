@@ -14,6 +14,10 @@ interface Settings {
 interface SettingsContextValue extends Settings {
   setBaseUrl: (v: string) => void;
   setApiKey: (v: string) => void;
+  /** Blanks the API key (keeps the base URL). Persists as an empty value. */
+  clearApiKey: () => void;
+  /** Removes the whole settings entry from localStorage and resets to defaults. */
+  clearSettings: () => void;
   isConfigured: boolean;
 }
 
@@ -49,8 +53,23 @@ function loadInitial(): Settings {
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings>(loadInitial);
 
+  // Never persist an empty/cleared key: as soon as there is no API key the
+  // entry is removed from localStorage entirely, so a cleared setup (or a
+  // sign-out) leaves no secret behind for anyone with the browser profile.
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    if (!settings.apiKey) {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // ignore storage errors
+      }
+      return;
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    } catch {
+      // ignore quota / security errors
+    }
   }, [settings]);
 
   const value: SettingsContextValue = {
@@ -67,6 +86,15 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setSettings((s) => ({ ...s, baseUrl: trimmed }));
     },
     setApiKey: (v) => setSettings((s) => ({ ...s, apiKey: v })),
+    clearApiKey: () => setSettings((s) => ({ ...s, apiKey: "" })),
+    clearSettings: () => {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // ignore storage errors
+      }
+      setSettings({ baseUrl: DEFAULT_BASE_URL, apiKey: "" });
+    },
     isConfigured: Boolean(settings.apiKey),
   };
 

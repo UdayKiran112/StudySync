@@ -4,18 +4,25 @@
 .DESCRIPTION
     One-time installation. Copies the pre-built package to
     C:\ProgramData\StudySync, generates a fresh API key, registers the
-    StudySync API + Caddy Windows services, opens the firewall for port 80,
-    schedules automatic backups and a health watchdog, and starts everything.
+    StudySync API + Caddy Windows services (running as a dedicated
+    low-privilege local account, NOT LocalSystem), opens the firewall for
+    port 80 (Private/Domain profiles, RFC1918 LAN addresses only), schedules
+    automatic backups and a health watchdog, and starts everything.
     Designed to be run exactly the same way on every machine (staff repeat
     deployment = run this script once, elevated).
 .PARAMETER PackageDir
     Path to the pre-built package folder (default: .\package next to this script).
+.PARAMETER RotateKey
+    Generate a fresh API key instead of reusing the one from a previous
+    install. Use this after a key has leaked (see rotate-key.ps1). Staff
+    browsers must re-enter the new key.
 .NOTES
     Requires elevation. Run:  powershell -ExecutionPolicy Bypass -File install.ps1
 #>
 [CmdletBinding()]
 param(
-    [string]$PackageDir = (Join-Path (Split-Path $PSScriptRoot -Parent) "package")
+    [string]$PackageDir = (Join-Path (Split-Path $PSScriptRoot -Parent) "package"),
+    [switch]$RotateKey
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,6 +54,79 @@ function New-ApiKey([int]$length = 48) {
 function Invoke-WinSw([string]$binary, [string]$action, [bool]$failOnError = $true) {
     & $binary $action 2>&1 | Out-String | ForEach-Object { if ($_ -match "^\S") { Write-Log "  winsw[$action]: $_" } }
     if ($failOnError -and $LASTEXITCODE -ne 0) { throw "WinSW '$action' failed for $binary (exit $LASTEXITCODE)" }
+}
+
+# ---------------------------------------------------------------- service account
+# The API and Caddy services run as a DEDICATED low-privilege local account
+# ("StudySyncSvc"), never LocalSystem. An RCE in either service must not equal
+# full machine compromise. The account's random password lives in the WinSW
+# XML files; install/update keep it stable so the Service Control Manager's
+# stored credentials (set at service creation) stay valid without ever
+# uninstall/reinstalling the registration (which can leave a service stuck
+# "marked for deletion").
+$SVC_ACCOUNT = "StudySyncSvc"
+
+function Get-ServicePassword {
+    # Reuse the password from a previous install if one is recorded in the
+    # existing WinSW XML (this is what keeps the SCM credentials valid across
+    # reinstalls). A fresh install generates one.
+    foreach ($xml in @("$APP_DIR\config\winsw\studysync-api.xml", "$APP_DIR\config\winsw\studysync-caddy.xml")) {
+        if (Test-Path $xml) {
+            $pw = (Select-String -Path $xml -Pattern '<password>(.+)</password>' -ErrorAction SilentlyContinue | Select-Object -First 1).Matches.Groups[1].Value
+            if ($pw -and $pw -ne "__STUDYSYNC_SVC_PASSWORD__") { return $pw }
+        }
+    }
+    return (New-ApiKey -length 32)
+}
+
+function Ensure-ServiceAccount([string]$password) {
+    $secure = ConvertTo-SecureString $password -AsPlainText -Force
+    if (Get-LocalUser -Name $SVC_ACCOUNT -ErrorAction SilentlyContinue) {
+        Set-LocalUser -Name $SVC_ACCOUNT -Password $secure -PasswordNeverExpires $true -UserMayNotChangePassword $true
+        Write-Log "Service account '$SVC_ACCOUNT' exists; password refreshed (kept stable with the SCM registration)."
+    } else {
+        New-LocalUser -Name $SVC_ACCOUNT -Password $secure `
+            -FullName "StudySync Service Account" `
+            -Description "Low-privilege account that runs the StudySync API and Caddy services" `
+            -AccountNeverExpires $true -PasswordNeverExpires $true -UserMayNotChangePassword $true | Out-Null
+        Write-Log "Created dedicated low-privilege service account '$SVC_ACCOUNT'."
+    }
+}
+
+function Set-ServiceAccountInXml([string]$xmlPath, [string]$password) {
+    if (-not (Test-Path $xmlPath)) { return }
+    $content = Get-Content -Path $xmlPath -Raw
+    $content = $content -replace '<password>__STUDYSYNC_SVC_PASSWORD__</password>', "<password>$password</password>"
+    Set-Content -Path $xmlPath -Value $content -Encoding ASCII -NoNewline
+}
+
+function Set-SecureAcls {
+    # The package tree currently inherits C:\ProgramData's default ACL, which
+    # gives BUILTIN\Users read access to EVERYTHING - including the Caddy
+    # access log that previously leaked API keys and the WinSW XML that now
+    # carries the service-account password. Strip the inherited ACEs and grant
+    # access to exactly: SYSTEM, Administrators, the interactive installing
+    # user (for the scheduled tasks) and the service account (read-only for
+    # the app, write access to data/logs/backups).
+    $system       = "NT AUTHORITY\SYSTEM"
+    $admins       = "BUILTIN\Administrators"
+    $interactive  = "$env:USERDOMAIN\$env:USERNAME"
+    $svc          = "$env:COMPUTERNAME\$SVC_ACCOUNT"
+
+    if (-not (Get-LocalUser -Name $SVC_ACCOUNT -ErrorAction SilentlyContinue)) {
+        throw "Service account '$SVC_ACCOUNT' must exist before hardening ACLs."
+    }
+
+    & icacls $APP_DIR /inheritance:r /T /Q 2>$null | Out-Null
+    & icacls $APP_DIR /grant:r "${system}:(OI)(CI)F" "${admins}:(OI)(CI)F" "${interactive}:(OI)(CI)F" "${svc}:(OI)(CI)RX" /T /Q 2>$null | Out-Null
+    foreach ($writable in @("data", "logs", "backups")) {
+        $p = Join-Path $APP_DIR $writable
+        if (Test-Path $p) {
+            & icacls $p /grant:r "${svc}:(OI)(CI)M" /T /Q 2>$null | Out-Null
+        }
+    }
+    if ($LASTEXITCODE -ne 0) { throw "ACL hardening failed (icacls exit $LASTEXITCODE)" }
+    Write-Log "ACLs hardened: inherited BUILTIN\Users access removed from $APP_DIR."
 }
 
 # ---------------------------------------------------------------- checks
@@ -110,10 +190,26 @@ foreach ($d in @("data", "backups", "logs\api", "logs\caddy", "logs\winsw", "log
 }
 Write-Log "Data/log folders created."
 
+# ---------------------------------------------- service account + ACLs
+# Patch the WinSW XMLs with the service account's password (before the
+# services are registered) and lock the tree down so BUILTIN\Users can no
+# longer read logs/secrets. Runs after the file copy and folder creation so
+# the ACLs cover everything, and before services start so the low-privilege
+# account can write its data/logs from the first boot.
+$svcPass = Get-ServicePassword
+Ensure-ServiceAccount $svcPass
+Set-ServiceAccountInXml "$APP_DIR\config\winsw\studysync-api.xml"  $svcPass
+Set-ServiceAccountInXml "$APP_DIR\config\winsw\studysync-caddy.xml" $svcPass
+Write-Log "WinSW XMLs configured to run services as '$SVC_ACCOUNT' (low-privilege)."
+Set-SecureAcls
+
 # ------------------------------------------------------ generate API key
 $envFile = "$APP_DIR\app\api\.env"
 $apiKey = $null
-if (Test-Path $envFile) {
+if ($RotateKey) {
+    $apiKey = New-ApiKey
+    Write-Log "Generating a FRESH API key (-RotateKey requested)."
+} elseif (Test-Path $envFile) {
     $existing = (Select-String -Path $envFile -Pattern '^STUDYSYNC_API_KEY=(.+)$' -ErrorAction SilentlyContinue | Select-Object -First 1).Matches.Groups[1].Value
     if ($existing) { $apiKey = $existing }
 }
@@ -138,8 +234,9 @@ if (Test-Path $envFile) {
     "STUDYSYNC_API_KEY=$apiKey"
     "STUDYSYNC_DB_PATH=$APP_DIR\data\library.db"
 ) + $extraLines | Set-Content -Path $envFile -Encoding ASCII
+# NOTE: deliberately NOT logging the key value here. install.log is ACL-locked
+# now, but a secret that never gets written is a secret that can never leak.
 Write-Log "API key written to $envFile"
-Write-Log "API key: $apiKey"
 
 # ------------------------------------------------------------ services
 $apiBin   = "$APP_DIR\config\winsw\studysync-api.exe"
@@ -173,44 +270,53 @@ Ensure-WinSwService $apiBin "StudySyncAPI"
 Write-Log "Registering StudySync Caddy service..."
 Ensure-WinSwService $caddyBin "StudySyncCaddy"
 
+# Assert the service account on BOTH registrations. On a fresh install WinSW
+# already created them with StudySyncSvc (via <serviceaccount> in the XML);
+# on a reinstall/upgrade of a pre-hardening machine the registration may
+# still be LocalSystem, and only the SCM (not the XML) decides which account
+# the process runs under. sc.exe config migrates it in place - no
+# uninstall/install, so no "marked for deletion" race. The SCM also grants
+# "Log on as a service" automatically for the new account. The password is
+# passed as an argument to sc.exe; output is suppressed so it is never
+# echoed to the install log.
+foreach ($svcName in @("StudySyncAPI", "StudySyncCaddy")) {
+    & sc.exe config $svcName obj= ".\$SVC_ACCOUNT" password= $svcPass | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe config $svcName failed (exit $LASTEXITCODE)" }
+}
+Write-Log "Both services configured to run as '$SVC_ACCOUNT'."
+
 Write-Log "Starting StudySync API service..."
 Invoke-WinSw $apiBin "start"
 Write-Log "Starting StudySync Caddy service..."
 Invoke-WinSw $caddyBin "start"
 
 # ----------------------------------------------------------- firewall
-# Rules cover ALL profiles (Private, Domain AND Public). A fresh install on a
-# venue network usually lands on a network Windows marks Public; without Public
-# in the rule, other devices could not reach the app. Recreated on every run so
-# the profile set stays correct after a reinstall.
+# Deliberately NOT "all profiles / any remote address": that left the app
+# (and the staff API key + student PII, which travelled over cleartext HTTP)
+# reachable from any interface, including a WAN-facing one, on any network
+# Windows marked Public. The rules now allow inbound traffic ONLY:
+#   * on Private/Domain network profiles (a Public/cafe/venue network gets
+#     no inbound access at all - that is the safe default), and
+#   * from RFC1918 private LAN addresses plus loopback (never from the
+#     internet). RemoteAddress filtering is what keeps a machine that sits
+#     behind a public IP from exposing port 80 to the whole internet.
+# Recreated on every run so the settings stay correct after a reinstall.
 $ruleName = "StudySync HTTP (port 80)"
 Remove-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP `
-    -LocalPort 80 -Action Allow -Profile Any | Out-Null
-Write-Log "Firewall rule created for inbound port 80 (all profiles)."
+    -LocalPort 80 -Action Allow -Profile Private, Domain `
+    -RemoteAddress 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8 | Out-Null
+Write-Log "Firewall rule created for inbound port 80 (Private/Domain profiles, RFC1918 LAN + loopback only)."
 
 # mDNS (UDP 5353): lets devices resolve http://studysync.local by name. Without
 # an inbound rule the responder may not see queries, so clients could not
-# resolve the name even though the app advertises it.
+# resolve the name even though the app advertises it. Restricted to
+# Private/Domain like the HTTP rule.
 $mdnsRule = "StudySync mDNS (UDP 5353)"
 Remove-NetFirewallRule -DisplayName $mdnsRule -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName $mdnsRule -Direction Inbound -Protocol UDP `
-    -LocalPort 5353 -Action Allow -Profile Any | Out-Null
-Write-Log "Firewall rule created for inbound mDNS (UDP 5353, all profiles)."
-
-# ------------------------------------------------- network profile
-# Best-effort: switch any network Windows marked Public to Private. With the
-# rules above this is not required for port 80 / mDNS to work, but a Private
-# profile also enables Windows network discovery, which makes the NetBIOS
-# fallback name (e.g. http://Myth) resolve more reliably on LAN devices.
-foreach ($prof in (Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.NetworkCategory -eq "Public" })) {
-    try {
-        Set-NetConnectionProfile -InterfaceIndex $prof.InterfaceIndex -NetworkCategory Private
-        Write-Log "Network '$($prof.InterfaceAlias)' switched from Public to Private (LAN access enabled)."
-    } catch {
-        Write-Log "WARN: could not switch '$($prof.InterfaceAlias)' to Private: $($_.Exception.Message)"
-    }
-}
+    -LocalPort 5353 -Action Allow -Profile Private, Domain | Out-Null
+Write-Log "Firewall rule created for inbound mDNS (UDP 5353, Private/Domain only)."
 
 # ------------------------------------------------- Bonjour for Windows (client PCs only)
 # The StudySync server advertises http://studysync.local itself over mDNS
@@ -286,6 +392,8 @@ Write-Host "`nInstallation complete." -ForegroundColor Green
 Write-Host "  App URL : http://localhost   (LAN: http://studysync.local)" -ForegroundColor Green
 Write-Host "  API key: $apiKey" -ForegroundColor Yellow
 Write-Host "  Save the API key somewhere safe. Staff enter it ONCE per browser in Settings." -ForegroundColor Yellow
+Write-Host "  Services run as the low-privilege '$SVC_ACCOUNT' account (not LocalSystem)." -ForegroundColor Cyan
+Write-Host "  After a key leak: run scripts\rotate-key.ps1 (or re-run this script with -RotateKey)." -ForegroundColor Cyan
 Write-Host "  LAN access: Apple/Android use http://studysync.local directly; Windows PCs need" -ForegroundColor Cyan
 Write-Host "  Apple Bonjour (kept at $APP_DIR\tools\Bonjour64.msi - install it on each staff PC," -ForegroundColor Cyan
 Write-Host "  NOT on this server, which advertises the name itself)." -ForegroundColor Cyan

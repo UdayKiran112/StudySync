@@ -20,6 +20,10 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 API_KEY = "test-key-0123456789abcdef0123456789abcdef"
 os.environ["STUDYSYNC_API_KEY"] = API_KEY
+# The integration suite issues dozens of requests against one TestClient in
+# well under a minute; raise the default per-client limit so the suite isn't
+# rate-limited. Per-endpoint limits (sync, PDF) stay at their real values.
+os.environ["STUDYSYNC_RATE_LIMIT_PER_MINUTE"] = "100000/minute"
 
 import database  # noqa: E402
 

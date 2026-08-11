@@ -129,7 +129,7 @@ Copy-Item (Join-Path $deploy "winsw\studysync-caddy.xml") (Join-Path $package "c
 foreach ($name in @("backup", "restore", "healthcheck", "studysync-tray")) {
     Copy-Item (Join-Path $dist "$name.exe") (Join-Path $package "scripts\$name.exe") -Force
 }
-foreach ($ps1 in @("install.ps1", "update.ps1", "uninstall.ps1", "diagnostics.ps1")) {
+foreach ($ps1 in @("install.ps1", "update.ps1", "uninstall.ps1", "diagnostics.ps1", "rotate-key.ps1")) {
     Copy-Item (Join-Path $deploy "scripts\$ps1") (Join-Path $package "scripts") -Force
 }
 

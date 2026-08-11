@@ -30,10 +30,11 @@ import sqlite3
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from database import get_db_dependency
 from models.sync import SheetSyncResult, SyncResponse, SyncLogEntry
+from rate_limit import limiter
 from security import require_api_key
 from sheets_client import write_sheet, SheetsConfigError
 
@@ -422,11 +423,15 @@ SYNC_TASKS = [
 
 
 @router.post("", response_model=SyncResponse)
-def sync_to_sheets(db: sqlite3.Connection = Depends(get_db_dependency)):
+@limiter.limit("5/minute")
+def sync_to_sheets(
+    request: Request, db: sqlite3.Connection = Depends(get_db_dependency)
+):
     """
     Push the full current database to Google Sheets, one tab per module.
     Each sheet is attempted independently so one failure doesn't block
-    the rest.
+    the rest. Rate-limited: a full push is a slow, quota-heavy operation
+    that should never be triggered on a loop.
     """
     results: List[SheetSyncResult] = []
 
@@ -465,8 +470,11 @@ def sync_to_sheets(db: sqlite3.Connection = Depends(get_db_dependency)):
 
 
 @router.get("/history", response_model=List[SyncLogEntry])
+@limiter.limit("20/minute")
 def get_sync_history(
-    limit: int = 20, db: sqlite3.Connection = Depends(get_db_dependency)
+    request: Request,
+    limit: int = 20,
+    db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     """Recent sync attempts, most recent first -- lets staff check sync status without re-triggering one."""
     rows = db.execute(

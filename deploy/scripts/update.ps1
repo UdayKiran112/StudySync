@@ -46,12 +46,44 @@ if (-not (Test-Path "$APP_DIR\app\api\.env")) {
 # from the live .env BEFORE stopping anything, so a config problem aborts the
 # update while the install is still fully untouched. The package ships no .env,
 # so these values are written back after the swap (never rotate the key).
+# Also capture the WinSW service-account password from the current XMLs: the
+# package ships the XML templates with a placeholder password, and the running
+# services keep their account/password in the Service Control Manager, so the
+# password must be re-injected unchanged or the services will fail to start.
 $apiKey = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_API_KEY=(.+)$').Matches[0].Groups[1].Value
 $dbEnv = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_DB_PATH=(.+)$').Matches[0].Groups[1].Value
 $extraLines = Get-Content -Path "$APP_DIR\app\api\.env" | Where-Object {
-    $_ -match '^\s*(ZK_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
+    $_ -match '^\s*(ZK_|GOOGLE_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
 }
 Write-Log "Preserving API key (kept from current install)."
+
+$svcAccount = "StudySyncSvc"
+$svcPass = $null
+foreach ($xml in @("$APP_DIR\config\winsw\studysync-api.xml", "$APP_DIR\config\winsw\studysync-caddy.xml")) {
+    if (Test-Path $xml) {
+        $pw = (Select-String -Path $xml -Pattern '<password>(.+)</password>' -ErrorAction SilentlyContinue | Select-Object -First 1).Matches.Groups[1].Value
+        if ($pw -and $pw -ne "__STUDYSYNC_SVC_PASSWORD__") { $svcPass = $pw; break }
+    }
+}
+if (-not $svcPass) {
+    # Upgrade from a pre-hardening install: the old WinSW XMLs have no
+    # <serviceaccount> block and no password. Migrate in place instead of
+    # aborting: create the account (or refresh its password), and let the
+    # sc.exe config step below move both services off LocalSystem.
+    Write-Host "No StudySyncSvc credential found - upgrading from a pre-hardening install. Creating the service account now (services will be migrated off LocalSystem)." -ForegroundColor Yellow
+    $chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    $svcPass = -join (1..32 | ForEach-Object { $chars[(Get-Random -Maximum $chars.Length)] })
+    $secure = ConvertTo-SecureString $svcPass -AsPlainText -Force
+    if (Get-LocalUser -Name $svcAccount -ErrorAction SilentlyContinue) {
+        Set-LocalUser -Name $svcAccount -Password $secure -PasswordNeverExpires $true -UserMayNotChangePassword $true
+    } else {
+        New-LocalUser -Name $svcAccount -Password $secure `
+            -FullName "StudySync Service Account" `
+            -Description "Low-privilege account that runs the StudySync API and Caddy services" `
+            -AccountNeverExpires $true -PasswordNeverExpires $true -UserMayNotChangePassword $true | Out-Null
+    }
+}
+Write-Log "Preserving service account '$svcAccount' credentials (kept from current install)."
 
 # 1. Stop services so files are not locked. Use the Service Control Manager
 #    (sc.exe) rather than WinSW's `stop` subcommand, which on some installs
@@ -105,6 +137,31 @@ foreach ($rel in @("app\api", "app\frontend", "app\caddy", "config\winsw", "scri
 }
 Write-Log "New application files copied."
 
+# 3b. Re-inject the service-account password into the freshly copied WinSW
+#     XMLs (the package carries the placeholder). The password is not logged.
+Set-Content -Path "$APP_DIR\config\winsw\studysync-api.xml" -Value ((Get-Content -Path "$APP_DIR\config\winsw\studysync-api.xml" -Raw) -replace '<password>__STUDYSYNC_SVC_PASSWORD__</password>', "<password>$svcPass</password>") -Encoding ASCII -NoNewline
+Set-Content -Path "$APP_DIR\config\winsw\studysync-caddy.xml" -Value ((Get-Content -Path "$APP_DIR\config\winsw\studysync-caddy.xml" -Raw) -replace '<password>__STUDYSYNC_SVC_PASSWORD__</password>', "<password>$svcPass</password>") -Encoding ASCII -NoNewline
+Write-Log "WinSW XMLs re-configured to run services as '$svcAccount'."
+
+# 3c. Re-apply the ACL hardening. update.ps1 swaps the whole tree on every run,
+#     so the freshly copied files inherit the (possibly still open) parent ACL.
+#     Strip inherited ACEs and grant access to exactly: SYSTEM, Administrators,
+#     the installing user, and the service account (read-only on the app, write
+#     on data/logs/backups). This also locks down a legacy pre-hardening tree.
+$system = "NT AUTHORITY\SYSTEM"
+$admins = "BUILTIN\Administrators"
+$interactive = "$env:USERDOMAIN\$env:USERNAME"
+$svc = "$env:COMPUTERNAME\$svcAccount"
+& icacls $APP_DIR /inheritance:r /T /Q 2>$null | Out-Null
+& icacls $APP_DIR /grant:r "${system}:(OI)(CI)F" "${admins}:(OI)(CI)F" "${interactive}:(OI)(CI)F" "${svc}:(OI)(CI)RX" /T /Q 2>$null | Out-Null
+foreach ($writable in @("data", "logs", "backups")) {
+    $p = Join-Path $APP_DIR $writable
+    if (Test-Path $p) {
+        & icacls $p /grant:r "${svc}:(OI)(CI)M" /T /Q 2>$null | Out-Null
+    }
+}
+Write-Log "ACLs hardened on $APP_DIR (inherited BUILTIN\Users read access removed)."
+
 # 4. Recreate .env with the SAME api key and db path (never rotate the key on
 #    update), plus the preserved device/operator settings captured above.
 @(
@@ -121,12 +178,23 @@ Write-Log ".env preserved."
 #    an install here would fail with "service already exists" and, worse, an
 #    uninstall -> install cycle can leave the service stuck "marked for
 #    deletion".
+# Assert the service account on both registrations. A pre-hardening install
+# may still be running as LocalSystem, and only the Service Control Manager
+# (not the XML) decides which account the process runs under; sc.exe config
+# migrates it in place - no uninstall/install, so no "marked for deletion"
+# race. It also re-syncs the SCM credential with the (unchanged) password.
+foreach ($svcName in @("StudySyncAPI", "StudySyncCaddy")) {
+    & sc.exe config $svcName obj= ".\$svcAccount" password= $svcPass | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe config $svcName failed (exit $LASTEXITCODE)" }
+}
+Write-Log "Both services confirmed running as '$svcAccount'."
+
 sc.exe start StudySyncAPI | Out-Null
 Start-Sleep -Seconds 4
 sc.exe start StudySyncCaddy | Out-Null
 
-# Restart the tray monitor if installed (task re-registers it at next logon;
-# starting it now picks up the new exe immediately).
+# Restart the tray monitor if installed (the scheduled task re-registers it at
+# next logon; starting it now picks up the new exe immediately).
 if (Test-Path "$APP_DIR\scripts\studysync-tray.exe") {
     Start-Process "$APP_DIR\scripts\studysync-tray.exe" -WindowStyle Hidden
 }
