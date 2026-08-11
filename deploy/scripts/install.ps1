@@ -219,14 +219,15 @@ if (-not $apiKey) {
 } else {
     Write-Log "Reusing existing API key (reinstall preserves staff Settings)."
 }
-# Preserve any device-integration / operator settings from a previous .env
-# (ZK_DEVICE_IP, ZK_COMM_KEY, ZK_INTEGRATION, STUDYSYNC_ALLOWED_ORIGINS,
-# STUDYSYNC_HOST/PORT, ...) so a ZKTeco device configured once keeps working
-# after an install/update instead of silently losing its connection settings.
+# Preserve any device-integration / operator / sync settings from a previous
+# .env (ZK_DEVICE_IP, ZK_COMM_KEY, ZK_INTEGRATION, GOOGLE_SPREADSHEET_ID,
+# GOOGLE_CREDS_FILE, STUDYSYNC_ALLOWED_ORIGINS, STUDYSYNC_HOST/PORT, ...) so a
+# ZKTeco device configured once, or a Google Sheets setup, keeps working after
+# an install/update instead of silently losing its connection settings.
 $extraLines = @()
 if (Test-Path $envFile) {
     $extraLines = Get-Content -Path $envFile | Where-Object {
-        $_ -match '^\s*(ZK_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
+        $_ -match '^\s*(ZK_|GOOGLE_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
     }
 }
 @(

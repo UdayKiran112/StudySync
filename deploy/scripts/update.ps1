@@ -162,6 +162,20 @@ foreach ($writable in @("data", "logs", "backups")) {
 }
 Write-Log "ACLs hardened on $APP_DIR (inherited BUILTIN\Users read access removed)."
 
+# 3d. Recreate the firewall rules so a pre-hardening install (rules on ALL
+#     profiles, any remote address) is tightened on update. Port 80 is
+#     restricted to Private/Domain profiles and RFC1918 LAN + loopback, so a
+#     Public/cafe network gets no inbound access and a machine behind a public
+#     IP cannot expose port 80 to the internet.
+Remove-NetFirewallRule -DisplayName "StudySync HTTP (port 80)" -ErrorAction SilentlyContinue
+New-NetFirewallRule -DisplayName "StudySync HTTP (port 80)" -Direction Inbound -Protocol TCP `
+    -LocalPort 80 -Action Allow -Profile Private, Domain `
+    -RemoteAddress 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8 | Out-Null
+Remove-NetFirewallRule -DisplayName "StudySync mDNS (UDP 5353)" -ErrorAction SilentlyContinue
+New-NetFirewallRule -DisplayName "StudySync mDNS (UDP 5353)" -Direction Inbound -Protocol UDP `
+    -LocalPort 5353 -Action Allow -Profile Private, Domain | Out-Null
+Write-Log "Firewall rules restricted to Private/Domain (port 80: RFC1918 LAN + loopback only)."
+
 # 4. Recreate .env with the SAME api key and db path (never rotate the key on
 #    update), plus the preserved device/operator settings captured above.
 @(
