@@ -35,7 +35,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from database import get_db_dependency
 from security import require_api_key
 from zkteco import device
-from attendance_punch import backfill_empty_sessions
 from zkteco.config import attendance_mode, device_config
 from zkteco.live import get_live_status
 from zkteco.reconcile import current_sync_status, verify_pyzk_vs_db
@@ -121,7 +120,7 @@ def zk_attendance(
     """
     Raw attendance buffer from the device (one entry per swipe).
 
-    This does NOT clear the buffer -- use the sync endpoint for that.
+    Read-only -- the device buffer is never cleared.
     """
     config = _config_or_503()
     try:
@@ -138,21 +137,22 @@ def zk_sync_attendance(
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     """
-    Pull swipes from the device, applying each as a check-in or check-out.
+    Pull swipes from the device, applying each as check-in/check-out.
 
-    First swipe of a day opens an attendance row (check_in set, no
-    check_out yet); the next swipe closes it. session and duration use the
-    same logic as the manual front-desk flow. The device buffer is cleared
-    automatically once the writes are committed -- there is no
-    clear_after_sync flag anymore, because in this model every log is
-    captured the moment it is read.
+    TODAY's first swipe opens an attendance row immediately (check_in set,
+    no check_out yet, so the student shows as present); the next swipe
+    closes it. A PAST day only materializes an attendance row when its
+    check-out punch lands (a lone past-day check-in stays 'pending' in the
+    device_punches ledger and never produces an open row). session and
+    duration use the same logic as the manual front-desk flow. The device
+    buffer is never cleared -- StudySync only reads; the exactly-once
+    ledger makes a re-read a no-op.
     """
     config = _config_or_503()
     try:
         tally, logs = sync_attendance_from_device(
             db, config, return_logs=True
         )
-        tally["backfilled"] = backfill_empty_sessions(db)
         serial = device.device_serial(config)
         verify = verify_pyzk_vs_db(db, logs, serial)
         tally["verify_verified"] = verify["verified"]

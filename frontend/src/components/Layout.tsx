@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import toast from "react-hot-toast";
+import toast, { type Toast } from "react-hot-toast";
 import {
   LayoutDashboard,
   Users,
@@ -20,15 +20,64 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Search as SearchIcon,
+  LogIn,
+  LogOut,
 } from "lucide-react";
 import { useSettings } from "../context/SettingsContext";
-import { useRealtimeEvents, type RenewalEvent } from "../api/realtime";
+import {
+  useRealtimeEvents,
+  type AttendanceEvent,
+  type RenewalEvent,
+} from "../api/realtime";
 import { formatDate } from "../lib/format";
 import { CommandPalette } from "./ui/CommandPalette";
 import clsx from "clsx";
 
 /** Renewal notifications outlive normal toasts so the desk can't miss them. */
 const RENEWAL_TOAST_MS = 10000;
+/** Live punch notifications: long enough to read, short enough to not pile up. */
+const PUNCH_TOAST_MS = 5000;
+
+/** A compact live-punch notification: who swiped, which direction, at what time. */
+function PunchToast({
+  t,
+  name,
+  direction,
+  time,
+}: {
+  t: Toast;
+  name: string;
+  direction: "in" | "out";
+  time: string;
+}) {
+  const Icon = direction === "in" ? LogIn : LogOut;
+  return (
+    <div
+      className={clsx(
+        "pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-lg border bg-card p-4 shadow-lg",
+        direction === "in" ? "border-brass/40" : "border-slate/30",
+      )}
+      onClick={() => toast.dismiss(t.id)}
+    >
+      <span
+        className={clsx(
+          "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+          direction === "in"
+            ? "bg-brass/15 text-brass"
+            : "bg-slate/10 text-slate",
+        )}
+      >
+        <Icon size={16} />
+      </span>
+      <div className="flex-1">
+        <p className="font-display text-sm font-semibold text-ink">{name}</p>
+        <p className="mt-0.5 text-xs text-slate">
+          {direction === "in" ? "Punched in at" : "Punched out at"} {time}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 const NAV_SECTIONS = [
   {
@@ -129,12 +178,37 @@ export function Layout() {
 
   // Live stream: punches written by the ZKTeco poller/live transport
   // instantly invalidate the attendance queries (so rows appear with no
-  // polling delay), and auto-renewals surface as a notification instead of
-  // a modal prompt. A burst of renewals (e.g. a full device re-import)
-  // coalesces onto one toast so the desk isn't spammed -- subsequent
-  // renewals within the window fold into the same toast.
+  // polling delay) and pop a live notification when someone swipes in or
+  // out. Auto-renewals surface as a notification instead of a modal
+  // prompt. A burst of renewals (e.g. a full device re-import) coalesces
+  // onto one toast so the desk isn't spammed -- subsequent renewals within
+  // the window fold into the same toast.
   const renewalToastRef = useRef<{ id: string; count: number } | null>(null);
   useRealtimeEvents({
+    onAttendance: (event: AttendanceEvent) => {
+      // Only a punch happening TODAY is a live swipe at the desk. A past
+      // day's session completed by a later re-read is historical backfill,
+      // not someone walking in right now -- don't notify for it.
+      const now = new Date();
+      const today = [
+        now.getFullYear(),
+        String(now.getMonth() + 1).padStart(2, "0"),
+        String(now.getDate()).padStart(2, "0"),
+      ].join("-");
+      if (event.day !== today) return;
+      const name = event.name ?? `Student #${event.student_id}`;
+      toast.custom(
+        (t) => (
+          <PunchToast
+            t={t}
+            name={name}
+            direction={event.outcome === "checked_out" ? "out" : "in"}
+            time={event.punch}
+          />
+        ),
+        { duration: PUNCH_TOAST_MS },
+      );
+    },
     onRenewal: (event: RenewalEvent) => {
       const name = event.name ?? `Student #${event.student_id}`;
       const message = event.valid_until

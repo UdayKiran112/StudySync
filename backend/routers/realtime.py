@@ -13,7 +13,7 @@ those broadcasts into a `text/event-stream` response the browser consumes,
 so a swipe shows up on the Attendance page the instant it is written.
 
 Events:
-    attendance  {"student_id", "day", "punch", "outcome"}  -- a punch applied
+    attendance  {"student_id", "name", "day", "punch", "outcome"}  -- a punch applied
     renewal     {"student_id", "name"}                     -- membership auto-renewed
 
 The connection is authenticated with the same X-API-Key header as every

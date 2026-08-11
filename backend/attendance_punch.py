@@ -20,11 +20,31 @@ situation this file's placement is designed to avoid. This module
 DOES depend on routers/attendance.py (for those helpers) and on
 database.py's schema, but not on zkteco, so it's safe either way.
 
-The rules mirror the front-desk flow in routers/attendance.py exactly:
-first punch of a day opens a session (check_in set), the next punch
-closes it (check_out set, session/duration recomputed with the 1-2 PM
-lunch-break rule). See routers/attendance.py's module docstring for the
-session/duration logic itself -- it is not duplicated here.
+SESSION COMPLETION RULE (why some swipes never touch attendance)
+----------------------------------------------------------------
+The attendance table stores ONLY sessions that are "real". A PAST day
+with two punches (in then out) becomes one row with both check_in and
+check_out set. A lone check-in on a PAST day -- a student who swiped in
+but never swiped out -- is NOT materialized into attendance: it stays in
+the device_punches ledger in state 'pending' as an open check-in, waiting
+for its check-out punch. When the check-out arrives, the pair is
+materialized as one attendance row (session/duration recomputed with the
+same 1-2 PM lunch-break rule as the front desk) and BOTH ledger punches
+become 'applied'. A past day with an odd punch count therefore contributes
+no attendance row at all -- no open rows and no artificial 23:59
+stale-close of device history.
+
+TODAY is the one deliberate exception: a swipe happening NOW is live
+presence. A student who checks in today and has not yet checked out still
+gets an attendance row immediately (check_in set, check_out NULL), exactly
+like the front-desk manual check-in, so they show as present. Their
+check-out closes that row when it lands; if it never lands, the row is
+closed at 23:59 of its own day before their next check-in.
+
+Session/duration logic itself is not duplicated here -- see
+routers/attendance.py's module docstring. The manual front-desk
+check-in/check-out flow is unchanged: staff click "check in" and
+"check out" as two deliberate actions.
 
 EXACTLY-ONCE LEDGER
 -------------------
@@ -45,6 +65,16 @@ raw record survives for audit) but is NOT a check-out and does NOT open a
 new session. The original raw device record is always preserved in the
 ledger's raw_record column regardless of how the punch is classified.
 
+MEMBERSHIP RENEWAL
+------------------
+A swipe only reactivates a lapsed membership when it is happening NOW --
+a same-day show-up, the same rule as the front desk. Historical records
+being re-imported from a device buffer NEVER renew anyone (a student who
+attended 2024-25 but nothing after is not renewed in 2026 just because
+their old records were re-read). Renewal adds exactly ONE year, once -- it
+does not loop over every lapsed year. See
+routers.students.auto_renew_if_expired.
+
 SESSION CONFLICT RECONCILIATION
 -------------------------------
 The attendance schema enforces UNIQUE(student_id, date, session). When the
@@ -52,21 +82,22 @@ device re-reads days that ALSO have pre-existing/preloaded attendance
 (e.g. the full re-import after a database restore), a device-derived
 session promotion (Morning -> Full Day at day-end) can collide with a
 pre-existing row for that student-date. That collision is detected and
-reconciled BEFORE the write (see _resolve_session_conflict) instead of
-raising through the poll: the pre-existing row is treated as the stale one,
-PyZK device data is authoritative, and a "session conflict reconciled"
-warning is logged with both rows plus every device punch recorded for the
-day. Conflicts that only surface as an INSERT collision (a device punch
-whose provisional session is already claimed by a closed pre-existing row)
-are preserved in the ledger as duplicate_session -- never a crash and never
-a second attendance row.
+reconciled BEFORE the write (see _resolve_session_conflict /
+_drop_conflicting_session) instead of raising through the poll: the
+pre-existing row is treated as the stale one, PyZK device data is
+authoritative, and a "session conflict reconciled" warning is logged with
+both rows plus every device punch recorded for the day. Conflicts that
+only surface as an INSERT collision (a device punch whose provisional
+session is already claimed by a closed pre-existing row) are preserved in
+the ledger as duplicate_session -- never a crash and never a second
+attendance row.
 """
 
 import logging
 import os
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 logger = logging.getLogger("studysync.attendance_punch")
@@ -153,10 +184,14 @@ def capture_and_apply(
        duplicate and touch NOTHING in the attendance table.
     2. Resolve the device user_id to a students.student_id. Unknown PINs are
        recorded as unknown_student, never fabricated into attendance.
-    3. Auto-renew a lapsed membership (same rule as the front desk).
-    4. apply_punch() derives the session effect -- first punch of a day
-       opens a session, the next closes it, etc. Re-taps inside the debounce
-       window become duplicate_debounced and can never close a session.
+    3. Auto-renew a lapsed membership, but ONLY for a same-day show-up and
+       only one year at a time (historical re-imports never renew).
+    4. apply_punch() derives the session effect -- for TODAY it opens an
+       attendance row immediately (check_in set, closed by the next punch);
+       for PAST days a lone check-in stays 'pending' in the ledger and only
+       becomes an attendance row when its check-out punch lands. Re-taps
+       inside the debounce window become duplicate_debounced and can never
+       close a session.
     5. Commit while holding the process-wide lock, so the claim is visible
        to competing transports before this function returns.
 
@@ -216,24 +251,39 @@ def capture_and_apply(
                 db.commit()
                 return {"outcome": "unknown_student", "renewed": False}
 
-            # A show-up reactivates a lapsed membership. Idempotent.
-            renewed = auto_renew_if_expired(db, student_id)
+            # A show-up reactivates a lapsed membership -- but only a real
+            # one happening NOW. Historical records being re-imported from a
+            # device buffer never renew anyone (see the module docstring and
+            # routers.students.auto_renew_if_expired). Idempotent.
+            renewed = False
+            if punch_dt.date() == date.today():
+                renewed = auto_renew_if_expired(db, student_id)
 
             outcome = apply_punch(
                 db, student_id, day, time_str, punch_debounce_minutes()
             )
 
-            if outcome in ("checked_in", "checked_out"):
-                state = "applied"
-            elif outcome == "duplicate_debounced":
-                state = "duplicate_debounced"
+            if outcome == "checked_in":
+                # Opens (today) or registers (past day) an open check-in that
+                # is awaiting its check-out punch -- never a complete row yet.
+                state = "pending"
+                db.execute(
+                    "UPDATE device_punches SET state = ?, student_id = ? "
+                    "WHERE punch_id = ?",
+                    (state, student_id, punch_id),
+                )
             else:
-                state = "duplicate_session"
-            db.execute(
-                "UPDATE device_punches SET state = ?, student_id = ?, applied_at = ? "
-                "WHERE punch_id = ?",
-                (state, student_id, now, punch_id),
-            )
+                if outcome == "checked_out":
+                    state = "applied"
+                elif outcome == "duplicate_debounced":
+                    state = "duplicate_debounced"
+                else:
+                    state = "duplicate_session"
+                db.execute(
+                    "UPDATE device_punches SET state = ?, student_id = ?, applied_at = ? "
+                    "WHERE punch_id = ?",
+                    (state, student_id, now, punch_id),
+                )
             db.commit()
             return {"outcome": outcome, "renewed": renewed}
         except Exception:
@@ -272,22 +322,32 @@ def student_id_for_user_id(db: sqlite3.Connection, user_id) -> Optional[int]:
     return row["student_id"] if row else None
 
 
+def _student_name(db: sqlite3.Connection, student_id: int) -> Optional[str]:
+    """The student's display name, for the live punch notification payload."""
+    row = db.execute(
+        "SELECT name FROM students WHERE student_id = ?", (student_id,)
+    ).fetchone()
+    return row["name"] if row else None
+
+
 def latest_punch_time(
     db: sqlite3.Connection, student_id: int, day: str
 ) -> Optional[str]:
     """
-    Latest punch already recorded for this student on this day (the later
-    of any row's check_in/check_out, HH:MM strings compare chronologically).
-    Used by the double-tap debounce below, and works across polls and pyzk
-    live events alike since it always reads from the database, not from any
-    transport's in-memory state.
+    Latest physical punch already captured in the ledger for this student on
+    this day (the later of any punch's full timestamp, HH:MM string). Used
+    by the double-tap debounce below. Reads the device_punches ledger rather
+    than the attendance table so a just-registered open check-in (which has
+    no attendance row yet on a past day) still counts as the reference time
+    for the next punch.
     """
     row = db.execute(
-        """SELECT MAX(CASE WHEN check_out IS NOT NULL THEN check_out ELSE check_in END) AS latest
-           FROM attendance WHERE student_id = ? AND date = ?""",
-        (student_id, day),
+        """SELECT MAX(punch_time) AS latest
+           FROM device_punches WHERE student_id = ? AND punch_time LIKE ?""",
+        (student_id, day + "%"),
     ).fetchone()
-    return row["latest"] if row and row["latest"] else None
+    latest = row["latest"] if row and row["latest"] else None
+    return latest[11:16] if latest else None
 
 
 def _find_conflicting_session(
@@ -432,142 +492,81 @@ def close_stale_open_session(db: sqlite3.Connection, student_id: int, day: str) 
     )
 
 
-def close_open_with_last_punch(
-    db: sqlite3.Connection, student_id: int, day: str
-) -> Optional[str]:
-    """
-    Backfill the check-out of an "empty" attendance row (check_out NULL) from
-    the day's last device punch, when that punch is strictly LATER than the
-    row's check-in.
-
-    An empty row normally means the student's final punch of the day was
-    itself the check-in (odd punch count) -- there is no out-punch to backfill
-    with, so the row is left open for the 23:59 stale-close on their next
-    visit. But when a later punch exists and simply never became a check-out
-    (e.g. it was debounced as a double-tap, or a session conflict kept the row
-    open), that punch is the truthful closing time and this is where the row
-    gets it, instead of waiting for the artificial 23:59 auto-close.
-
-    Recomputes session and duration through _compute_session_and_duration()
-    (same 1-2 PM lunch-break rule as every other write) and runs the
-    _resolve_session_conflict() guard first, so promoting e.g. Morning ->
-    Full Day can never collide with a UNIQUE(student_id, date, session) slot.
-
-    Returns the new check_out (HH:MM) that was written, or None when there is
-    no open row, no device punch for the day, or no punch strictly after the
-    check-in (nothing truthful to close with).
-    """
-    open_session = db.execute(
-        "SELECT * FROM attendance WHERE student_id = ? AND date = ? AND check_out IS NULL",
-        (student_id, day),
-    ).fetchone()
-    if open_session is None:
-        return None
-
-    last = db.execute(
-        """SELECT MAX(punch_time) AS last
-           FROM device_punches
-           WHERE student_id = ? AND punch_time LIKE ?""",
-        (student_id, day + "%"),
-    ).fetchone()["last"]
-    if not last:
-        return None
-
-    last_hm = last[11:16]
-    if last_hm <= open_session["check_in"]:
-        return None
-
-    final_session, duration = _compute_session_and_duration(
-        open_session["check_in"], last_hm
-    )
-    _resolve_session_conflict(
-        db,
-        student_id,
-        day,
-        final_session,
-        open_session["attendance_id"],
-        open_session["check_in"],
-        last_hm,
-    )
-    db.execute(
-        """
-        UPDATE attendance
-        SET check_out = ?, session = ?, duration_minutes = ?
-        WHERE attendance_id = ?
-        """,
-        (last_hm, final_session, duration, open_session["attendance_id"]),
-    )
-    return last_hm
-
-
-def backfill_empty_sessions(db: sqlite3.Connection) -> int:
-    """
-    Close every "empty" attendance row that has a later device punch to
-    backfill with. Runs at the end of a reconcile pass so no open row is
-    left behind when the data to close it exists. Runs under the punch
-    lock so it can't race a live transport, and commits its own
-    transaction. Returns how many rows were closed.
-    """
-    open_rows = db.execute(
-        "SELECT DISTINCT student_id, date FROM attendance WHERE check_out IS NULL"
-    ).fetchall()
-    closed = 0
-    if not open_rows:
-        return 0
-    with _punch_lock:
-        for row in open_rows:
-            if close_open_with_last_punch(db, row["student_id"], row["date"]) is not None:
-                closed += 1
-        db.commit()
-    return closed
-
-
-def apply_punch(
+def _drop_conflicting_session(
     db: sqlite3.Connection,
     student_id: int,
     day: str,
-    punch: str,
-    debounce_minutes: int,
+    final_session: str,
+    check_in: str,
+    check_out: str,
+) -> None:
+    """
+    Device-derived INSERT variant of _resolve_session_conflict: when a
+    materialized (check_in, check_out) pair computes to a session slot that a
+    pre-existing/preloaded attendance row already claims, the pre-existing
+    row is the stale one -- PyZK device data is authoritative, so it is
+    removed and the device-derived row is inserted. Logs the same "session
+    conflict reconciled" warning as the UPDATE-path resolver.
+    """
+    conflicting = _find_conflicting_session(
+        db, student_id, day, final_session, exclude_attendance_id=-1
+    )
+    if conflicting is None:
+        return
+
+    punches = db.execute(
+        """SELECT punch_time, state FROM device_punches
+           WHERE student_id = ? AND punch_time LIKE ? AND punch_time != ''
+           ORDER BY punch_time""",
+        (student_id, day + "%"),
+    ).fetchall()
+
+    logger.warning(
+        "Session conflict reconciled: student %s on %s -- the device punch "
+        "stream derives session=%s (check_in=%s, check_out=%s) but an existing "
+        "row already claims that session (attendance_id=%s, session=%s, "
+        "check_in=%s, check_out=%s). PyZK device data is authoritative, so the "
+        "obsolete pre-existing row is removed and the device-derived row is "
+        "kept. Device punches recorded for the day: %s",
+        student_id,
+        day,
+        final_session,
+        check_in,
+        check_out,
+        conflicting["attendance_id"],
+        conflicting["session"],
+        conflicting["check_in"],
+        conflicting["check_out"],
+        [(p["punch_time"], p["state"]) for p in punches],
+    )
+
+    db.execute(
+        "DELETE FROM attendance WHERE attendance_id = ?",
+        (conflicting["attendance_id"],),
+    )
+
+
+def _apply_today(
+    db: sqlite3.Connection, student_id: int, day: str, punch: str
 ) -> str:
     """
-    Apply ONE HH:MM punch for a student on a given day.
-
-    Returns one of:
-      "checked_in"        - opened a new attendance row (first punch of the day)
-      "checked_out"       - closed the student's currently-open row
-      "duplicate_debounced" - re-tap within the debounce window of the
-                            student's previous successful punch (accidental
-                            double fingerprint) -- no write, and crucially
-                            NOT a check-out and NOT a new session
-      "duplicate"         - a re-read of an already-applied punch or an
-                            out-of-order/stale punch; no write made
-
-    Caller is responsible for resolving the device user_id to a
-    student_id (student_id_for_user_id) and for auto-renewing a lapsed
-    membership (routers.students.auto_renew_if_expired) before calling
-    this -- both are per-student concerns, not per-punch ones.
+    Today's swipe is LIVE presence: the first punch of the day opens an
+    attendance row immediately (check_in set, check_out NULL, provisional
+    session label) so the student shows as present right away -- exactly the
+    front-desk manual check-in. The next punch closes it, recomputing
+    session/duration with the lunch-break rule. This is the only path that
+    ever leaves a check_out IS NULL row behind (today is still in progress);
+    a row left open overnight is closed at 23:59 of its own day by
+    close_stale_open_session() before the student's next check-in.
     """
-    # Double-tap guard: a punch right after the previous one (e.g. a
-    # second scan a second later, or a straddling minute boundary) is
-    # almost certainly accidental -- ignore it so it can't close a session
-    # instantly or re-open one. Only punches AT/AFTER the last one count as
-    # debounce candidates; an earlier (out-of-order) punch falls through to
-    # the session logic where it is safely classified as a duplicate.
-    latest = latest_punch_time(db, student_id, day)
-    diff = _minutes_between(latest, punch) if latest is not None else None
-    if diff is not None and 0 <= diff <= debounce_minutes:
-        return "duplicate_debounced"
-
     open_session = db.execute(
         "SELECT * FROM attendance WHERE student_id = ? AND date = ? AND check_out IS NULL",
         (student_id, day),
     ).fetchone()
 
     if open_session is None:
-        # Re-read guard: a log that was already applied (e.g. a poll's
-        # device-buffer clear failed after a committed import, or the
-        # same live event got delivered twice) would otherwise be
-        # mistaken for a fresh check-in. Skip it.
+        # Re-read guard: a log that was already applied would otherwise be
+        # mistaken for a fresh check-in.
         already = db.execute(
             """SELECT 1 FROM attendance
                WHERE student_id = ? AND date = ?
@@ -576,12 +575,9 @@ def apply_punch(
         ).fetchone()
         if already:
             return "duplicate"
-        # Covered-by-span guard: if a pre-existing/preloaded row for this day
-        # ALREADY spans the punch time (e.g. a preloaded "Full Day" row
-        # 09:40 - 18:00 and the device re-reads a 09:41 punch), the punch adds
-        # no new presence -- opening a second session for it would both double
-        # the day and (once a closing punch promotes it to "Full Day") collide
-        # with the preloaded row. Treat it as a duplicate instead.
+        # Covered-by-span guard: a pre-existing/preloaded row already spans
+        # the punch time -- opening a second session for it would double the
+        # day and (once a closing punch promotes it) collide with that row.
         spanned = db.execute(
             """SELECT 1 FROM attendance
                WHERE student_id = ? AND date = ?
@@ -604,6 +600,7 @@ def apply_punch(
                 "attendance",
                 {
                     "student_id": student_id,
+                    "name": _student_name(db, student_id),
                     "day": day,
                     "punch": punch,
                     "outcome": "checked_in",
@@ -644,16 +641,146 @@ def apply_punch(
             """,
             (punch, final_session, duration, open_session["attendance_id"]),
         )
+        # The ledger check-in punch for this row is now a complete pair with
+        # this check-out -- mark it applied too so the ledger stays honest.
+        # The day's only 'pending' punch is exactly that open check-in, so
+        # matching on state keeps a debounced re-tap from being clobbered.
+        db.execute(
+            """UPDATE device_punches SET state = 'applied', applied_at = ?
+               WHERE student_id = ? AND punch_time LIKE ? AND state = 'pending'""",
+            (datetime.utcnow().isoformat(), student_id, day + "%"),
+        )
         _auto_fill_offline_if_needed(db, student_id, day)
         publish(
             "attendance",
             {
                 "student_id": student_id,
+                "name": _student_name(db, student_id),
                 "day": day,
                 "punch": punch,
+                "check_in": open_session["check_in"],
                 "outcome": "checked_out",
             },
         )
         return "checked_out"
 
     return "duplicate"
+
+
+def _apply_historical(
+    db: sqlite3.Connection, student_id: int, day: str, punch: str
+) -> str:
+    """
+    A PAST day's swipe contributes an attendance row ONLY when it completes a
+    session. The first punch of a past day is registered as an open check-in
+    in the device_punches ledger (state 'pending') and nothing is written to
+    attendance. When its check-out punch lands, the pair is materialized as
+    one complete row (check_in + check_out, session/duration recomputed) and
+    BOTH ledger punches become 'applied'. A past day with a lone check-in
+    never produces an attendance row at all.
+    """
+    pending = db.execute(
+        """SELECT * FROM device_punches
+           WHERE student_id = ? AND state = 'pending' AND punch_time LIKE ?
+           ORDER BY punch_time LIMIT 1""",
+        (student_id, day + "%"),
+    ).fetchone()
+
+    if pending is None:
+        # Covered-by-span guard: a pre-existing/preloaded row already covers
+        # this punch time, so it is not genuine new presence.
+        spanned = db.execute(
+            """SELECT 1 FROM attendance
+               WHERE student_id = ? AND date = ?
+                 AND check_in <= ? AND check_out >= ? LIMIT 1""",
+            (student_id, day, punch, punch),
+        ).fetchone()
+        if spanned:
+            return "duplicate"
+        # A live row left open on an earlier day (today's path) is stale now
+        # that a later check-in is being processed -- close it at 23:59 of
+        # its own day, exactly as a fresh today check-in would.
+        close_stale_open_session(db, student_id, day)
+        # This punch becomes the day's open check-in. The ledger row (already
+        # inserted by capture_and_apply, state set to 'pending') is the open
+        # session; no attendance write happens until a check-out arrives.
+        return "checked_in"
+
+    pending_hm = pending["punch_time"][11:16]
+    if punch <= pending_hm:
+        return "duplicate"
+
+    final_session, duration = _compute_session_and_duration(pending_hm, punch)
+    _drop_conflicting_session(db, student_id, day, final_session, pending_hm, punch)
+    db.execute(
+        """
+        INSERT INTO attendance (student_id, date, session, check_in, check_out, duration_minutes)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (student_id, day, final_session, pending_hm, punch, duration),
+    )
+    db.execute(
+        "UPDATE device_punches SET state = 'applied', applied_at = ? WHERE punch_id = ?",
+        (datetime.utcnow().isoformat(), pending["punch_id"]),
+    )
+    _auto_fill_offline_if_needed(db, student_id, day)
+    publish(
+        "attendance",
+        {
+            "student_id": student_id,
+            "name": _student_name(db, student_id),
+            "day": day,
+            "punch": punch,
+            "check_in": pending_hm,
+            "outcome": "checked_out",
+        },
+    )
+    return "checked_out"
+
+
+def apply_punch(
+    db: sqlite3.Connection,
+    student_id: int,
+    day: str,
+    punch: str,
+    debounce_minutes: int,
+) -> str:
+    """
+    Apply ONE HH:MM punch for a student on a given day.
+
+    Returns one of:
+      "checked_in"          - today: opened an attendance row; past day:
+                              registered an open check-in in the ledger
+      "checked_out"         - completed a session (row now has both times)
+      "duplicate_debounced" - re-tap within the debounce window of the
+                              student's previous punch (accidental double
+                              fingerprint) -- no write, and crucially NOT a
+                              check-out and NOT a new session
+      "duplicate"           - a re-read of an already-applied punch, an
+                              out-of-order/stale punch, or a punch already
+                              covered by a pre-existing row; no write made
+
+    TODAY's punches follow the live front-desk model (open row immediately,
+    closed by the next punch). PAST days follow the session-completion rule:
+    a lone check-in stays 'pending' in the ledger and only becomes an
+    attendance row when its check-out punch lands -- see the module docstring.
+
+    Caller is responsible for resolving the device user_id to a
+    student_id (student_id_for_user_id) and for auto-renewing a lapsed
+    membership (routers.students.auto_renew_if_expired) before calling
+    this -- both are per-student concerns, not per-punch ones.
+    """
+    # Double-tap guard: a punch right after the previous one (e.g. a
+    # second scan a second later, or a straddling minute boundary) is
+    # almost certainly accidental -- ignore it so it can't close a session
+    # instantly or re-open one. Only punches AT/AFTER the last one count as
+    # debounce candidates; an earlier (out-of-order) punch falls through to
+    # the session logic where it is safely classified as a duplicate.
+    latest = latest_punch_time(db, student_id, day)
+    diff = _minutes_between(latest, punch) if latest is not None else None
+    if diff is not None and 0 <= diff <= debounce_minutes:
+        return "duplicate_debounced"
+
+    if day == date.today().isoformat():
+        return _apply_today(db, student_id, day, punch)
+    return _apply_historical(db, student_id, day, punch)

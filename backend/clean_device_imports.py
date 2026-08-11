@@ -3,8 +3,8 @@ clean_device_imports.py
 -----------------------
 Go-live cleanup: remove the punch-derived data so StudySync starts fresh.
 
-Run this as part of the "wipe the device buffer, then go live" rollout,
-BEFORE pointing StudySync at the device again. It deletes:
+Run this to start StudySync fresh: delete the punch-derived data BEFORE
+pointing StudySync at the device again. It deletes:
 
   * device_state   -- per-device health bookkeeping
   * device_punches -- the raw-punch exactly-once ledger (every row here is
@@ -12,10 +12,10 @@ BEFORE pointing StudySync at the device again. It deletes:
   * attendance     -- rows that came from device punches (and, unless
                       --keep-manual, EVERY attendance row)
 
-Default behaviour wipes the whole attendance table (matching the wiped
-device buffer). With --keep-manual, attendance rows whose check_in /
-check_out match a device punch for the same student+date are removed while
-rows with no matching punch (i.e. front-desk manual entries) survive.
+Default behaviour wipes the whole attendance table. With --keep-manual,
+attendance rows whose check_in / check_out match a device punch for the
+same student+date are removed while rows with no matching punch (i.e.
+front-desk manual entries) survive.
 
 Stop the API (or at least unset ZK_DEVICE_IP) before running so no live /
 poll / reconcile loop writes in the middle of the wipe.

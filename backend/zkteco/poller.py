@@ -5,20 +5,19 @@ Background task that keeps StudySync in sync with the ZKTeco device.
 
 While the FastAPI app is alive and a device is configured (ZK_DEVICE_IP),
 a poller task wakes up every ``ZK_POLL_INTERVAL`` seconds, opens a fresh
-connection, reads the attendance buffer, and applies each swipe as a
-check-in or check-out (see zkteco/sync.py). No manual "Sync" click is
-required anymore -- a first punch opens an attendance row, the next punch
-closes it.
+connection, reads the attendance buffer, and applies each swipe under the
+hybrid model (see zkteco/sync.py): TODAY's first punch opens an attendance
+row immediately, its next punch closes it; a PAST day only materializes a
+row when its check-out punch lands (a lone past-day check-in stays
+'pending' in the device_punches ledger). No manual "Sync" click is required.
 
 Design notes:
 
-  * The sync captures each log the moment it is read and (unless
-    ZK_CLEAR_BUFFER=0, for devices another system also drains) clears the
-    device buffer itself once the writes are committed, so the buffer
-    never accumulates and no operator cleanup is needed. In read-only
-    mode the poll is just a re-check; re-reads are no-ops thanks to the
-    exactly-once ledger.
-  * Inserts are idempotent and a re-read can only close an open session
+  * The sync captures each log the moment it is read and never clears the
+    device buffer -- StudySync is a pure reader, so the device keeps its
+    own log and the exactly-once ledger turns any re-read into a no-op.
+    The buffer can keep accumulating on the device; it is never touched.
+  * Inserts are idempotent and a re-read can only close an open today-row
     with a strictly later punch time, so a crash mid-poll never corrupts
     data or duplicates rows.
   * Device failures (unreachable, mid-reboot) are logged and swallowed --
@@ -32,7 +31,7 @@ import asyncio
 import logging
 
 from database import get_connection
-from zkteco.config import device_config, poll_interval, zk_clear_buffer
+from zkteco.config import device_config, poll_interval
 from zkteco.device import ZkError
 from zkteco.sync import sync_attendance_from_device
 
@@ -46,7 +45,7 @@ def _poll_once() -> None:
         return
     db = get_connection()
     try:
-        result = sync_attendance_from_device(db, config, clear=zk_clear_buffer())
+        result = sync_attendance_from_device(db, config)
         db.commit()
         if result["imported"]:
             logger.info(

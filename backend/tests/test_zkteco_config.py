@@ -1,6 +1,6 @@
 """Unit tests for the pyzk integration settings used by the venue rollout.
 
-Exercises zkteco/config.py's attendance mode / buffer-clear switches
+Exercises zkteco/config.py's attendance-mode / device-config switches
 against a patched environment (no hardware). Run from the project root:
     & .\\study_sync\\Scripts\\python.exe -m unittest discover -s backend/tests -v
 """
@@ -19,7 +19,7 @@ from zkteco import config  # noqa: E402
 
 class ZktecoConfigTests(unittest.TestCase):
     def tearDown(self):
-        for key in ("ZK_ATTENDANCE_MODE", "ZK_CLEAR_BUFFER", "ZK_DEVICE_IP"):
+        for key in ("ZK_ATTENDANCE_MODE", "ZK_DEVICE_IP"):
             os.environ.pop(key, None)
 
     def _patch_env(self, **values):
@@ -40,23 +40,6 @@ class ZktecoConfigTests(unittest.TestCase):
     def test_attendance_mode_falls_back_to_poll_on_garbage(self):
         with self._patch_env(ZK_ATTENDANCE_MODE="sideways"):
             self.assertEqual(config.attendance_mode(), "poll")
-
-    # --- zk_clear_buffer ---------------------------------------------------
-
-    def test_clear_buffer_defaults_to_true(self):
-        os.environ.pop("ZK_CLEAR_BUFFER", None)
-        self.assertTrue(config.zk_clear_buffer())
-
-    def test_clear_buffer_false_when_disabled(self):
-        for value in ("0", "false", "no", "off"):
-            with self._patch_env(ZK_CLEAR_BUFFER=value):
-                self.assertFalse(config.zk_clear_buffer(), f"ZK_CLEAR_BUFFER={value}")
-
-    def test_clear_buffer_true_for_any_other_value(self):
-        with self._patch_env(ZK_CLEAR_BUFFER="1"):
-            self.assertTrue(config.zk_clear_buffer())
-        with self._patch_env(ZK_CLEAR_BUFFER="yes"):
-            self.assertTrue(config.zk_clear_buffer())
 
     # --- device_config -----------------------------------------------------
 

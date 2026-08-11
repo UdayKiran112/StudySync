@@ -4,24 +4,26 @@ zkteco/sync.py
 Turn raw ZKTeco swipe logs into StudySync attendance records.
 
 A ZKTeco device reports one log per swipe. Each swipe is mapped to a
-check-in or a check-out exactly like the front-desk flow
-(routers/attendance.py):
+check-in or a check-out under the hybrid model (attendance_punch.py):
 
-  * First punch of the day  -> check-in: an OPEN attendance row is created
-    immediately (check_in set, check_out NULL, provisional session label).
-    It shows up on the attendance page within a poll cycle -- no pairing
-    of swipes required.
-  * Next punch for that day -> check-out: the student's open row is closed
-    (check_out set, session and duration recomputed with the same 1-2 PM
-    lunch-break rule as manual entry). Punch #3 reopens (afternoon),
-    punch #4 closes it again, so Morning + Afternoon splits fall out
-    naturally from the alternating punches. A re-tap within
-    ZK_PUNCH_DEBOUNCE_MINUTES (default 1) is an accidental double-tap and
-    is NOT treated as a check-out or a new session.
-  * Because the open state now lives in the database, the device buffer is
-    cleared only AFTER every swipe in it has been durably captured in the
-    device_punches ledger (see capture_and_apply in attendance_punch.py)
-    and committed to the attendance table.
+  * TODAY's first punch -> check-in: an OPEN attendance row is created
+    immediately (check_in set, check_out NULL, provisional session label)
+    so the student shows as present right away -- no pairing of swipes
+    required. The next punch for today closes that row (check_out set,
+    session and duration recomputed with the same 1-2 PM lunch-break rule
+    as manual entry), so Morning + Afternoon splits fall out naturally
+    from the alternating punches. A re-tap within ZK_PUNCH_DEBOUNCE_MINUTES
+    (default 1) is an accidental double-tap and is NOT treated as a
+    check-out or a new session.
+  * A PAST day's swipe only produces an attendance row when it completes a
+    session: the first punch registers an open check-in in the
+    device_punches ledger (state 'pending'), and the row is materialized
+    only when its check-out punch lands. A lone past-day check-in never
+    leaves an open attendance row.
+  * StudySync is a PURE READER of the device: the buffer is never cleared
+    or wiped. Every punch stays on the device; the exactly-once ledger
+    (see capture_and_apply in attendance_punch.py) makes a re-read a
+    no-op, so nothing is lost and nothing is double-counted.
 
 Exactly-once: every physical punch is claimed in the device_punches ledger
 by fingerprint, so a swipe that the live transport already captured is
@@ -58,38 +60,7 @@ from typing import Optional
 
 from attendance_punch import capture_and_apply, new_punch_tally, record_punch_tally
 from zkteco.config import ZkDeviceConfig
-from zkteco.device import clear_attendance, device_serial, list_attendance
-
-
-def drain_and_clear(db: sqlite3.Connection, config: ZkDeviceConfig, source: str) -> None:
-    """
-    Close the "punch landed while we were syncing" race, then clear the
-    buffer.
-
-    pyzk's clear_attendance() wipes the WHOLE buffer, so if a swipe is
-    buffered between our read and our clear it would be destroyed before
-    ever reaching the database. We re-read the buffer, apply anything new
-    through the same ledger + apply path (silently -- it is not re-counted
-    in the surfaced tally), commit, and only then clear. The residual
-    sub-second window is covered by a fast poll or the live transport,
-    which captures each punch the instant it happens.
-    """
-    extra = list_attendance(config)
-    if extra:
-        serial = device_serial(config)
-        for log in extra:
-            capture_and_apply(
-                db,
-                serial,
-                log["user_id"],
-                log["timestamp"],
-                log["status"],
-                "",
-                None,
-                source,
-            )
-        db.commit()
-    clear_attendance(config)
+from zkteco.device import device_serial, list_attendance
 
 
 def sync_attendance_from_device(
@@ -97,36 +68,33 @@ def sync_attendance_from_device(
     config: ZkDeviceConfig,
     since: Optional[date] = None,
     source: str = "pyzk_poll",
-    clear: bool = True,
     return_logs: bool = False,
 ):
     """
-    Pull the device buffer, capture each swipe in the device_punches ledger
-    and apply it as a check-in or check-out, then (optionally) clear the
-    buffer once the writes are committed.
+    Pull the device buffer and capture each swipe in the device_punches
+    ledger, applying it as a check-in or check-out.
+
+    Read-only against the device: the attendance buffer is NEVER cleared
+    (pyzk's get_attendance() only reads it). The device keeps its own log,
+    so a crash, restart or re-read can never lose data -- the exactly-once
+    ledger turns any re-read into a no-op.
 
     Returns a tally: pulled / imported / duplicates / duplicate_transport /
     duplicate_debounced / unknown_students / renewed / incomplete.
-    ``incomplete`` is always 0 -- a lone punch is an open session now, not
-    a dropped punch. ``renewed`` counts students whose lapsed memberships
-    were auto-renewed by this run. Raises zkteco.device.ZkError if the
-    device can't be reached (nothing is written in that case).
+    ``incomplete`` is always 0 -- a lone punch is never dropped: today it
+    is live presence (an open row), on a past day it is a 'pending' open
+    check-in awaiting its check-out. ``renewed`` counts students whose
+    lapsed memberships were auto-renewed by this run. Raises
+    zkteco.device.ZkError if the device can't be reached (nothing is
+    written in that case).
 
     When ``return_logs`` is True, returns ``(tally, logs)`` where ``logs``
     is the exact list of pyzk records this run pulled -- the caller (the
     reconcile pass) uses it to verify that every record from the device has
     a corresponding durable write in the database.
 
-    When ``since`` is given, the buffer is read and applied but NOT
-    cleared -- older (unfiltered) logs must stay on the device so they can
-    be captured by a later full sync.
-
-    When ``clear`` is False the run is read-only even in full-buffer mode:
-    the device is shared with another reader that owns the drain, so
-    StudySync must never wipe the ring. A punch that lands while we read
-    is picked up by the next cycle instead of the mid-sync re-read, which
-    is why this mode is only used alongside the realtime live transport or
-    a fast poll.
+    When ``since`` is given, only logs on/after that date are applied; the
+    rest stay in the buffer untouched for a later full sync.
     """
     logs = list_attendance(config)
 
@@ -149,12 +117,6 @@ def sync_attendance_from_device(
         )
         record_punch_tally(tally, result)
     db.commit()
-
-    # In full-buffer mode (no `since`), re-read to catch anything that
-    # landed mid-sync, then clear the buffer safely -- unless this device
-    # is shared and clearing is disabled (clear=False).
-    if since is None and clear:
-        drain_and_clear(db, config, source)
 
     if return_logs:
         return tally, logs

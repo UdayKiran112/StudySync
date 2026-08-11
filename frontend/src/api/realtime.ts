@@ -10,13 +10,29 @@ export interface RenewalEvent {
   valid_until: string | null;
 }
 
+export interface AttendanceEvent {
+  student_id: number;
+  /** Student display name (from the backend at punch time). */
+  name?: string | null;
+  /** Punch date (YYYY-MM-DD). */
+  day: string;
+  /** Punch time (HH:MM). */
+  punch: string;
+  /** "checked_in" | "checked_out". */
+  outcome: string;
+  /** Check-in time (HH:MM) that this punch closed, on check-outs. */
+  check_in?: string;
+}
+
 /**
  * Opens one Server-Sent Events connection to /api/realtime/stream and
  * reacts to live backend events:
  *
  *   - "attendance"  -> invalidates every attendance query so the page
  *                      refetches the instant a punch is written (no more
- *                      waiting for the 5s poll).
+ *                      waiting for the 5s poll), and calls
+ *                      opts.onAttendance with the punch details so the
+ *                      desk can show a notification.
  *   - "renewal"     -> calls opts.onRenewal so the desk sees the renewal
  *                      notification.
  *
@@ -25,7 +41,7 @@ export interface RenewalEvent {
  * automatically with exponential backoff if the stream drops.
  */
 export function useRealtimeEvents(opts: {
-  onAttendance?: () => void;
+  onAttendance?: (event: AttendanceEvent) => void;
   onRenewal?: (event: RenewalEvent) => void;
 }): void {
   const queryClient = useQueryClient();
@@ -124,7 +140,7 @@ export function useRealtimeEvents(opts: {
                 queryClientRef.current.invalidateQueries({
                   queryKey: ["attendance"],
                 });
-                cb.onAttendance?.();
+                cb.onAttendance?.(payload as AttendanceEvent);
               } else if (eventName === "renewal") {
                 cb.onRenewal?.(payload as RenewalEvent);
               }

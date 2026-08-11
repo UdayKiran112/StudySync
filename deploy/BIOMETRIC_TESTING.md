@@ -199,10 +199,9 @@ Set these in the backend `.env` — dev: `backend\.env`; production:
 | `ZK_DEVICE_PORT` | `4370` | Device TCP port. |
 | `ZK_COMM_KEY` | `0` | Device comm key (Section 4). |
 | `ZK_DEVICE_TIMEOUT` | `30` | Seconds to wait for a device reply. |
-| `ZK_ATTENDANCE_MODE` | `poll` | `poll` (periodic buffer pull) or `live` (persistent `live_capture`) or `both`. One clearing reader at a time. |
+| `ZK_ATTENDANCE_MODE` | `poll` | `poll` (periodic buffer pull) or `live` (persistent `live_capture`) or `both`. StudySync is a pure reader and never clears the device buffer, so multiple readers are safe. |
 | `ZK_POLL_INTERVAL` | `3` | Seconds between poller cycles (poll mode). |
 | `ZK_LIVE_RECONNECT_SECONDS` | `5` | Reconnect backoff for live mode. |
-| `ZK_CLEAR_BUFFER` | `1` | `0` makes poll/reconcile read-only (for a device another system also drains). |
 | `ZK_RECONCILE_INTERVAL` | `60` | Seconds between full-buffer reconciliation passes. |
 | `ZK_PUNCH_DEBOUNCE_MINUTES` | `1` | A swipe within this many minutes of the student's previous swipe that day is ignored as a double-tap (`0` disables). |
 

@@ -1,8 +1,10 @@
 """Tests for reconcile-time verification of pyzk records vs. database writes.
 
 verify_pyzk_vs_db() (zkteco/reconcile.py) confirms that every record pulled
-from the device ended up as a durable device_punches ledger row in a terminal
-state. These tests exercise it against an in-memory database with no device.
+from the device ended up as a durable device_punches ledger row. A row in
+state 'pending' is NOT a mismatch: under the session completion rule that is
+a past-day lone check-in legitimately awaiting its check-out punch. These
+tests exercise it against an in-memory database with no device.
 
 Run from the project root with:
     & .\\study_sync\\Scripts\\python.exe -m unittest discover -s backend/tests -v
@@ -69,10 +71,11 @@ class ReconcileVerifyTests(unittest.TestCase):
         self.assertEqual(report["issue_count"], 1)
         self.assertEqual(report["issues"][0]["issue"], "no ledger row written")
 
-    def test_pending_ledger_row_is_a_mismatch(self):
-        # The ledger row exists but never reached a terminal state -- the
-        # write is not durable, which is exactly what the verify pass exists
-        # to surface.
+    def test_pending_ledger_row_is_not_a_mismatch(self):
+        # A ledger row in 'pending' is the legitimate state of a past-day
+        # lone check-in whose attendance row has not materialized yet (the
+        # session completion rule). Its write IS durable -- the record was
+        # captured into the ledger -- so it verifies as healthy, not as a bug.
         log = self._log(1001, "2026-06-10 09:00:00")
         fingerprint = attendance_punch.build_fingerprint(
             self.serial, log["user_id"], log["timestamp"], log["status"]
@@ -89,9 +92,9 @@ class ReconcileVerifyTests(unittest.TestCase):
         )
         self.db.commit()
         report = verify_pyzk_vs_db(self.db, [log], self.serial)
-        self.assertEqual(report["verified"], 0)
-        self.assertEqual(report["issue_count"], 1)
-        self.assertEqual(report["issues"][0]["issue"], "ledger row still pending")
+        self.assertEqual(report["verified"], 1)
+        self.assertEqual(report["issue_count"], 0)
+        self.assertEqual(report["issues"], [])
 
     def test_malformed_record_is_reported(self):
         logs = [{"uid": 1, "user_id": None, "timestamp": None, "status": "0"}]

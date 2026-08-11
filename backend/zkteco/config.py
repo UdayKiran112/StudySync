@@ -27,18 +27,10 @@ Environment variables:
                                   the device reports a punch, via pyzk's
                                   live_capture())
                           both -> the live stream PLUS the poll as a
-                                  safety net (shared-device deployments:
-                                  with ZK_CLEAR_BUFFER=0 the poll only
-                                  re-checks the buffer, never clears it)
-                        Only one CLEARING reader should run against a
-                        given device at a time -- two readers both wiping
-                        the same physical buffer is how records get lost.
-    ZK_CLEAR_BUFFER     "1" (default) or "0". Whether the poller and the
-                        reconcile loop may clear the device's attendance
-                        buffer after a successful full read. Set "0" when
-                        another system also drains the device: StudySync
-                        then reads read-only, and a re-read is a no-op
-                        thanks to the exactly-once ledger.
+                                  safety net.
+                        StudySync NEVER clears the device buffer -- it is a
+                        pure reader, so any number of readers can run
+                        against the same device without records being lost.
     ZK_LIVE_RECONNECT_SECONDS
                         Default 5. Wait time before zkteco/live.py retries
                         after a dropped/failed connection.
@@ -107,19 +99,6 @@ def attendance_mode() -> str:
     """
     mode = os.getenv("ZK_ATTENDANCE_MODE", "poll").strip().lower()
     return mode if mode in ("poll", "live", "both") else "poll"
-
-
-def zk_clear_buffer() -> bool:
-    """
-    Whether the poller/reconcile may clear the device buffer after a
-    successful full read (env ZK_CLEAR_BUFFER, default "1").
-
-    Set ZK_CLEAR_BUFFER=0 on a device that another system also drains:
-    StudySync then reads read-only and never wipes the ring, and the
-    exactly-once ledger turns any re-read into a no-op.
-    """
-    value = os.getenv("ZK_CLEAR_BUFFER", "1").strip().lower()
-    return value not in ("0", "false", "no", "off", "")
 
 
 def live_reconnect_seconds() -> int:

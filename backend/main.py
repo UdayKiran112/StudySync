@@ -135,9 +135,8 @@ async def lifespan(_: FastAPI):
         mode = attendance_mode()
         # mode "poll" (default): periodic buffer pulls. mode "live":
         # realtime punch stream. mode "both": the live stream PLUS a
-        # periodic pull as a safety net. On a shared device set
-        # ZK_CLEAR_BUFFER=0 so neither the poll nor the reconcile ever
-        # wipes the ring another system drains. If the device refuses the
+        # periodic pull as a safety net. StudySync never clears the
+        # device buffer -- it is a pure reader. If the device refuses the
         # poll's second concurrent session, drop back to
         # ZK_ATTENDANCE_MODE=live -- the reconcile loop below stays
         # active as the completeness backstop either way.

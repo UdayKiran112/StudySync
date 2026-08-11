@@ -68,7 +68,6 @@ class ZkSyncResult(BaseModel):
     unknown_students: int
     renewed: int = 0
     incomplete: int
-    backfilled: int = 0
     verify_verified: int = 0
     verify_issue_count: int = 0
 
@@ -89,7 +88,6 @@ class ZkSyncReport(BaseModel):
     ledger_duplicate_session: int = 0
     ledger_unknown_student: int = 0
     open_sessions: int = 0
-    last_backfilled: int = 0
     last_verify_verified: int = 0
     last_verify_issue_count: int = 0
     fully_synced: bool = False

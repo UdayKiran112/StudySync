@@ -157,9 +157,9 @@ def list_attendance(config: ZkDeviceConfig) -> List[dict]:
     Return every attendance log currently buffered on the device, oldest
     first. Each entry is one finger/card/facial swipe.
 
-    Note: this does NOT clear the device buffer -- that only happens via an
-    explicit call to clear_attendance() after a successful sync, so a crash
-    mid-sync never silently loses logs.
+    Read-only: this NEVER clears the device buffer. StudySync is a pure
+    reader -- the device keeps its own log, and the exactly-once ledger
+    turns any re-read into a no-op.
     """
     with zk_connection(config) as conn:
         logs = _safe(conn.get_attendance, "Reading attendance logs")
@@ -189,12 +189,6 @@ def memory_usage(config: ZkDeviceConfig) -> dict:
             "records": conn.records,
             "records_capacity": conn.rec_cap,
         }
-
-
-def clear_attendance(config: ZkDeviceConfig) -> None:
-    """Erase the attendance buffer on the device (used after a sync)."""
-    with zk_connection(config) as conn:
-        _safe(conn.clear_attendance, "Clearing device attendance buffer")
 
 
 def device_time(config: ZkDeviceConfig) -> Optional[any]:

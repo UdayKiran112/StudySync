@@ -13,20 +13,18 @@ eventually lands in the database regardless:
     the exact same capture_and_apply() ledger the poller/live use, so
     records that the live transport already handled become
     duplicate_transport no-ops and anything it MISSED gets applied.
-  * It is what keeps the buffer safe to clear: sync_attendance_from_device
-    re-reads the buffer after applying and only then clears it, so no log
-    is destroyed before its ledger row is durable. On a device another
-    system drains, set ZK_CLEAR_BUFFER=0 and the pass becomes read-only --
-    a pure completeness check that never wipes the ring.
+  * It NEVER clears the device buffer -- StudySync is a pure reader, so
+    the pass is always read-only against the device and any re-read is a
+    no-op thanks to the exactly-once ledger.
   * It persists per-device health into the device_state table
     (last_reconcile_at, buffer size, ledger pending counts) so operators
     can see, after a restart, that the system is fully caught up.
   * After applying, it verifies that every pyzk record it pulled has a
     durable ledger write (see verify_pyzk_vs_db) -- any mismatch is logged
-    as "reconcile verify mismatch" without killing the pass -- and it
-    backfills open attendance rows that have a later device punch to close
-    with (see backfill_empty_sessions), so a debounced or conflict-stalled
-    closing punch still becomes a real check-out instead of an empty entry.
+    as "reconcile verify mismatch" without killing the pass. A past-day
+    lone check-in is a legitimate 'pending' ledger state (its attendance
+    row materializes only when its check-out punch lands), so it verifies
+    as healthy rather than as an anomaly.
 
 It runs alongside the pyzk poller (where it's a redundant safety net and
 the status keeper) or the pyzk live listener (where it is the only buffer
@@ -38,9 +36,9 @@ import json
 import logging
 from datetime import datetime
 
-from attendance_punch import backfill_empty_sessions, build_fingerprint
+from attendance_punch import build_fingerprint
 from database import get_connection
-from zkteco.config import device_config, reconcile_interval, zk_clear_buffer
+from zkteco.config import device_config, reconcile_interval
 from zkteco.device import ZkError, device_serial
 from zkteco.sync import sync_attendance_from_device
 
@@ -76,11 +74,11 @@ def verify_pyzk_vs_db(db, logs, serial: str) -> dict:
 
     For each record the device reported, rebuild its exact ledger
     fingerprint (same inputs capture_and_apply() used) and confirm the
-    device_punches row exists AND has reached a terminal state (applied /
-    duplicate_transport / duplicate_debounced / duplicate_session /
-    unknown_student). A missing row or a row still in 'pending' means the
-    record was fetched but never durably written -- exactly the class of
-    bug reconcile exists to catch. Malformed records (no user_id, unparsed
+    device_punches row exists -- a missing row means the record was fetched
+    but never durably written, exactly the class of bug reconcile exists to
+    catch. A row still in state 'pending' is NOT an anomaly: under the
+    session completion rule that is a past-day lone check-in legitimately
+    awaiting its check-out punch. Malformed records (no user_id, unparsed
     timestamp) are reported too.
 
     Never raises: any anomaly is returned in the report so the pass keeps
@@ -123,15 +121,10 @@ def verify_pyzk_vs_db(db, logs, serial: str) -> dict:
                     "issue": "no ledger row written",
                 }
             )
-        elif row["state"] == "pending":
-            issues.append(
-                {
-                    "user_id": str(uid),
-                    "timestamp": str(ts),
-                    "issue": "ledger row still pending",
-                }
-            )
         else:
+            # Any existing row -- including 'pending', a past-day lone
+            # check-in legitimately awaiting its check-out punch -- counts
+            # as a durable write.
             verified += 1
     return {"verified": verified, "issue_count": len(issues), "issues": issues[:20]}
 
@@ -169,19 +162,16 @@ def _update_device_state(db, config, tally: dict) -> None:
 def reconcile_once() -> dict:
     """
     One reconciliation pass over the full device buffer: read everything,
-    apply anything not yet in the ledger/database, then (unless
-    ZK_CLEAR_BUFFER=0) re-read + clear the buffer safely, and persist
-    device health. Returns the run tally.
+    apply anything not yet in the ledger/database, and persist device
+    health. The device buffer is NEVER cleared -- StudySync is a pure
+    reader, so a re-read is a no-op thanks to the exactly-once ledger.
+    Returns the run tally.
 
-    After the apply pass the run also:
-      * backfills every open ("empty") attendance row whose day's last
-        device punch is later than its check-in, so a debounced or
-        conflict-stalled closing punch still becomes a real check-out;
-      * verifies each pyzk record it pulled maps to a durable ledger write
-        (see verify_pyzk_vs_db), reporting any mismatch as a
-        "reconcile verify" warning instead of aborting the pass.
-
-    Both are folded into the tally returned and persisted in device_state.
+    After the apply pass the run also verifies each pyzk record it pulled
+    maps to a durable ledger write (see verify_pyzk_vs_db), reporting any
+    mismatch as a "reconcile verify" warning instead of aborting the pass.
+    The verify results are folded into the tally returned and persisted in
+    device_state.
     """
     config = device_config()
     if config is None:
@@ -189,9 +179,8 @@ def reconcile_once() -> dict:
     db = get_connection()
     try:
         tally, logs = sync_attendance_from_device(
-            db, config, source="reconcile", clear=zk_clear_buffer(), return_logs=True
+            db, config, source="reconcile", return_logs=True
         )
-        tally["backfilled"] = backfill_empty_sessions(db)
         serial = device_serial(config)
         verify = verify_pyzk_vs_db(db, logs, serial)
         tally["verify_verified"] = verify["verified"]
@@ -205,21 +194,14 @@ def reconcile_once() -> dict:
                 tally["pulled"],
                 verify["issues"],
             )
-        if tally["backfilled"]:
-            logger.info(
-                "Reconcile backfill: closed %s empty attendance rows from the "
-                "day's last device punch.",
-                tally["backfilled"],
-            )
         logger.info(
             "ZKTeco reconcile: pulled=%s imported=%s dup_transport=%s "
-            "dup_debounced=%s unknown=%s backfilled=%s verified=%s",
+            "dup_debounced=%s unknown=%s verified=%s",
             tally["pulled"],
             tally["imported"],
             tally["duplicate_transport"],
             tally["duplicate_debounced"],
             tally["unknown_students"],
-            tally["backfilled"],
             verify["verified"],
         )
         return tally
@@ -261,7 +243,6 @@ def current_sync_status() -> dict:
             "ledger_duplicate_session": stats["ledger_duplicate_session"],
             "ledger_unknown_student": stats["ledger_unknown_student"],
             "open_sessions": open_sessions,
-            "last_backfilled": last_result.get("backfilled", 0),
             "last_verify_verified": last_result.get("verify_verified", 0),
             "last_verify_issue_count": last_result.get("verify_issue_count", 0),
             "fully_synced": fully_synced,
