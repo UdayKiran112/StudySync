@@ -53,6 +53,7 @@ from routers import (
     coaching,
     other_activities,
     realtime,
+    sync,
 )
 
 # --- ZKTeco attendance integration (PyZK only) ---
@@ -253,6 +254,7 @@ app.include_router(dashboard.router)
 app.include_router(coaching.router)
 app.include_router(other_activities.router)
 app.include_router(realtime.router)
+app.include_router(sync.router)
 if pyzk_enabled and zkteco is not None:
     app.include_router(zkteco.router)
 

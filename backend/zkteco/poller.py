@@ -29,13 +29,45 @@ Design notes:
 
 import asyncio
 import logging
+import time
 
 from database import get_connection
+from attendance_punch import ledger_retention_days, prune_old_ledger_rows
 from zkteco.config import device_config, poll_interval
 from zkteco.device import ZkError
 from zkteco.sync import sync_attendance_from_device
 
 logger = logging.getLogger("zkteco.poller")
+
+# Run the ledger retention prune at most this often. A 3-second poll cycle
+# runs far faster than rows age out of the retention window, so pruning on
+# every cycle would just churn the database needlessly.
+PRUNE_INTERVAL_SECONDS = 3600
+_prune_due = time.monotonic()
+
+
+def _prune_ledger_if_due(db) -> None:
+    """Delete retention-window-expired ledger rows, at most once an hour."""
+    global _prune_due
+    now = time.monotonic()
+    if now - _prune_due < PRUNE_INTERVAL_SECONDS:
+        return
+    _prune_due = now
+    try:
+        deleted = 0
+        while True:
+            batch = prune_old_ledger_rows(db, ledger_retention_days())
+            deleted += batch
+            if batch == 0:
+                break
+        if deleted:
+            logger.info(
+                "ZKTeco poll: pruned %s stale ledger rows (%s-day retention).",
+                deleted,
+                ledger_retention_days(),
+            )
+    except Exception:  # noqa: BLE001 -- a prune failure must not kill the cycle
+        logger.exception("ZKTeco poll: ledger prune failed; retrying next cycle.")
 
 
 def _poll_once() -> None:
@@ -59,7 +91,10 @@ def _poll_once() -> None:
     except ZkError as e:
         logger.warning("ZKTeco poll failed (device unreachable?): %s", e)
     finally:
-        db.close()
+        try:
+            _prune_ledger_if_due(db)
+        finally:
+            db.close()
 
 
 async def zkteco_poller_loop(stop_event: asyncio.Event) -> None:

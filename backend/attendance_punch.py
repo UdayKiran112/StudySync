@@ -97,7 +97,7 @@ import logging
 import os
 import sqlite3
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 logger = logging.getLogger("studysync.attendance_punch")
@@ -229,13 +229,11 @@ def capture_and_apply(
             )
             if cursor.rowcount == 0:
                 # Already claimed by another transport / a device retry of
-                # the same physical punch. Record the extra sighting for
-                # audit, apply nothing.
-                db.execute(
-                    "UPDATE device_punches SET source = source || ', ' || ? "
-                    "WHERE fingerprint = ?",
-                    (source, fingerprint),
-                )
+                # the same physical punch. Apply nothing. The source stays
+                # the FIRST sighting: appending one tag per re-sight would
+                # grow a row to tens of KB on a punch that stays visible in
+                # the (never-cleared) device buffer -- the poll re-reads
+                # every visible punch every few seconds.
                 db.commit()
                 return {"outcome": "duplicate_transport", "renewed": False}
 
@@ -308,6 +306,70 @@ def punch_debounce_minutes() -> int:
         return max(0, int(os.getenv("ZK_PUNCH_DEBOUNCE_MINUTES", "1")))
     except ValueError:
         return 1
+
+
+def ledger_retention_days() -> int:
+    """
+    Days of ledger history the retention pruner keeps (env var
+    ZK_LEDGER_RETENTION_DAYS, default 90, clamped to >= 1). Rows older than
+    this that are no longer needed for dedup/debounce are deleted by
+    prune_old_ledger_rows() (called from the poller and from any manual
+    housekeeping). The debounce/dedup windows are minutes-to-a-few-days
+    deep, so a 90-day default keeps a generous audit trail while bounding
+    the ledger's footprint. Lives here rather than zkteco/config.py for the
+    same reason as punch_debounce_minutes: it is a punch-application
+    setting shared by every transport.
+    """
+    try:
+        return max(1, int(os.getenv("ZK_LEDGER_RETENTION_DAYS", "90")))
+    except ValueError:
+        return 90
+
+
+def prune_old_ledger_rows(
+    db: sqlite3.Connection,
+    retention_days: int = None,
+    batch_size: int = 2000,
+) -> int:
+    """
+    Delete ledger rows that are no longer needed and past the retention
+    window. Returns the number of rows deleted, capped at ``batch_size``;
+    call repeatedly (until it returns 0) to drain a deep backlog.
+
+    Exactly-once dedup and the double-tap debounce only need ledger rows for
+    punches the device could still re-serve, plus any still-'pending' open
+    check-in awaiting its check-out. Once a row is 'applied' or
+    'duplicate_*' and its punch is far in the past it is pure audit: the
+    attendance table already holds the real sessions and nightly backups
+    hold the raw record. Keeping it forever is what let the ledger grow to
+    ~100k rows / ~18 MB in production.
+
+    Never deletes:
+      * state = 'pending'  -- an open check-in still awaiting its check-out.
+      * today's punches    -- the debounce reads same-day rows to swallow
+                              accidental double-taps.
+    """
+    if retention_days is None:
+        retention_days = ledger_retention_days()
+    cutoff = (
+        date.today() - timedelta(days=retention_days)
+    ).strftime("%Y-%m-%d") + " 00:00:00"
+    today = date.today().isoformat()
+    cursor = db.execute(
+        """
+        DELETE FROM device_punches
+         WHERE punch_id IN (
+               SELECT punch_id FROM device_punches
+                WHERE punch_time < ?
+                  AND state != 'pending'
+                  AND substr(punch_time, 1, 10) != ?
+                LIMIT ?
+         )
+        """,
+        (cutoff, today, batch_size),
+    )
+    db.commit()
+    return cursor.rowcount
 
 
 def student_id_for_user_id(db: sqlite3.Connection, user_id) -> Optional[int]:

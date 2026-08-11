@@ -1,7 +1,7 @@
 # test_device_connection.py
 from zk import ZK
 
-DEVICE_IP = "192.168.1.100"  # your device's actual IP
+DEVICE_IP = "192.168.0.101"  # your device's actual IP
 PORT = 4370
 COMM_KEY = 0
 

@@ -44,6 +44,14 @@ Environment variables:
                         fewer after a student's previous punch for the same
                         day is treated as an accidental double-tap and
                         ignored (set 0 to disable).
+    ZK_LEDGER_RETENTION_DAYS
+                        Default 90. How many days of 'applied'/'duplicate_*'
+                        device_punches ledger rows to keep for the dedup and
+                        debounce windows before they are pruned (see
+                        attendance_punch.prune_old_ledger_rows). 'pending'
+                        open check-ins and today's punches are always kept.
+                        A small value shrinks the database but shrinks the
+                        punch audit trail too.
 
 Not configured (no ZK_DEVICE_IP) => every device endpoint returns 503 (and
 the background poller stays idle) so the rest of the app keeps working until
@@ -60,6 +68,7 @@ from typing import Optional
 # setting shared by poll/live alike, not a pyzk-specific one -- see that
 # module's docstring.
 from attendance_punch import punch_debounce_minutes  # noqa: F401
+from attendance_punch import ledger_retention_days  # noqa: F401
 
 
 @dataclass(frozen=True)

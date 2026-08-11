@@ -222,5 +222,104 @@ class ApiModuleTests(unittest.TestCase):
         self.assertTrue(body["fully_synced"])
 
 
+    def test_12_sync_to_sheets_per_module(self):
+        # The sync endpoint must push every module to its own worksheet with
+        # a Student ID + Student Name on every row. Google Sheets is mocked;
+        # the endpoint itself (SQL + per-sheet assembly) is what we test.
+        from unittest import mock
+
+        import routers.sync as sync_router
+
+        captured: dict = {}
+
+        def fake_write_sheet(sheet_name, headers, data):
+            captured[sheet_name] = (headers, data)
+            return len(data)
+
+        with mock.patch.object(sync_router, "write_sheet", side_effect=fake_write_sheet):
+            response = self.request("POST", "/api/sync")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "Success")
+        self.assertEqual(len(body["sheets"]), 8)
+        self.assertEqual(
+            list(captured.keys()),
+            [
+                "Attendance",
+                "Digital Library",
+                "Offline Library",
+                "Exams",
+                "Quizzes",
+                "Students",
+                "Coaching",
+                "Other Activities",
+            ],
+        )
+
+        for sheet_name, (headers, data) in captured.items():
+            if sheet_name == "Students":
+                self.assertIn("Student ID", headers)
+                self.assertIn("Name", headers)
+                self.assertIn("Join Date", headers)
+                continue
+            self.assertIn("Student ID", headers, sheet_name)
+            self.assertIn("Student Name", headers, sheet_name)
+            for row in data:
+                name_idx = headers.index("Student Name")
+                self.assertTrue(row[name_idx], f"{sheet_name} row missing name: {row}")
+                if sheet_name not in ("Coaching", "Other Activities"):
+                    id_idx = headers.index("Student ID")
+                    self.assertTrue(row[id_idx], f"{sheet_name} row missing id: {row}")
+
+        # Coaching roster must include both the library student (9001, by id)
+        # and the external participant (by name only, no student id).
+        coaching_headers, coaching_rows = captured["Coaching"]
+        id_idx = coaching_headers.index("Student ID")
+        name_idx = coaching_headers.index("Student Name")
+        self.assertIn(9001, [row[id_idx] for row in coaching_rows])
+        self.assertIn("Outside Visitor", [row[name_idx] for row in coaching_rows])
+        self.assertIn(
+            "",
+            [row[id_idx] for row in coaching_rows if row[name_idx] == "Outside Visitor"],
+        )
+
+        # Every run is recorded so history shows it without re-triggering.
+        history = self.request("GET", "/api/sync/history")
+        self.assertEqual(history.status_code, 200)
+        entries = history.json()
+        self.assertGreaterEqual(len(entries), 1)
+        self.assertEqual(entries[0]["status"], "Success")
+
+    def test_13_sync_marks_partial_failure_is_reported(self):
+        # One module failing must not stop the others, and the run is
+        # recorded as Partial with the failing sheet's error.
+        from unittest import mock
+
+        import routers.sync as sync_router
+
+        def boom(db):
+            raise RuntimeError("simulated failure")
+
+        # SYNC_TASKS captures the function objects at import time, so the
+        # failing sheet must be swapped inside the tasks list, not on the
+        # module attribute that already has its own reference.
+        tasks = [
+            (name, boom) if name == "Students" else (name, fn)
+            for name, fn in sync_router.SYNC_TASKS
+        ]
+        with mock.patch.object(
+            sync_router, "SYNC_TASKS", tasks
+        ), mock.patch.object(sync_router, "write_sheet", return_value=0):
+            response = self.request("POST", "/api/sync")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "Partial")
+        failed = [s for s in body["sheets"] if s["status"] == "Failed"]
+        self.assertEqual([s["sheet_name"] for s in failed], ["Students"])
+        self.assertIn("simulated failure", failed[0]["error"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

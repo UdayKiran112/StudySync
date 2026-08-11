@@ -275,7 +275,10 @@ class AttendancePunchTests(unittest.TestCase):
         ledger = self._ledger()
         self.assertEqual(len(ledger), 1)  # one ledger row, two sightings
         self.assertEqual(ledger[0]["state"], "pending")  # open past-day check-in
-        self.assertEqual(ledger[0]["source"], "pyzk_poll, pyzk_live")
+        # The source records the FIRST sighting only: appending one tag per
+        # re-sight would grow a row into tens of KB on a punch that stays
+        # visible in the never-cleared device buffer.
+        self.assertEqual(ledger[0]["source"], "pyzk_poll")
         self.assertEqual(self._attendance(), [])  # no row until a check-out lands
 
     def test_14_same_punch_replayed_by_device_is_a_duplicate(self):
@@ -441,6 +444,90 @@ class AttendancePunchTests(unittest.TestCase):
         self.assertEqual([r["session"] for r in rows], ["Morning", "Afternoon"])
         self.assertEqual(rows[1]["check_in"], "15:00")
         self.assertEqual(rows[1]["check_out"], "17:00")
+
+    # --- ledger retention pruner ----------------------------------------------
+
+    def test_26_ledger_retention_settings(self):
+        saved = os.environ.get("ZK_LEDGER_RETENTION_DAYS")
+        os.environ.pop("ZK_LEDGER_RETENTION_DAYS", None)
+        try:
+            self.assertEqual(attendance_punch.ledger_retention_days(), 90)
+            os.environ["ZK_LEDGER_RETENTION_DAYS"] = "7"
+            self.assertEqual(attendance_punch.ledger_retention_days(), 7)
+            os.environ["ZK_LEDGER_RETENTION_DAYS"] = "garbage"
+            self.assertEqual(attendance_punch.ledger_retention_days(), 90)
+            os.environ["ZK_LEDGER_RETENTION_DAYS"] = "0"
+            self.assertEqual(attendance_punch.ledger_retention_days(), 1)  # clamped
+            from zkteco.config import ledger_retention_days as config_retention
+            self.assertEqual(
+                config_retention(), attendance_punch.ledger_retention_days()
+            )
+        finally:
+            if saved is None:
+                os.environ.pop("ZK_LEDGER_RETENTION_DAYS", None)
+            else:
+                os.environ["ZK_LEDGER_RETENTION_DAYS"] = saved
+
+    def test_27_pruner_removes_old_rows_keeps_recent_and_today(self):
+        # An applied pair far outside retention, one inside retention, and
+        # today's live pair (pending open check-in + applied check-out).
+        self._punch(1001, "2024-01-31 09:00:00")
+        self._punch(1001, "2024-01-31 17:00:00")  # applied pair (2 rows)
+        self._punch(1001, "2026-06-10 09:00:00")  # within the 90-day window
+        self._punch(1001, "2026-06-10 17:00:00")  # applied pair (2 rows)
+        today = _today()
+        self._punch(1001, today + " 09:00:00")    # pending (live presence)
+        self._punch(1001, today + " 17:00:00")    # applied
+
+        self.assertEqual(
+            self.db.execute("SELECT COUNT(*) FROM device_punches").fetchone()[0], 6
+        )
+
+        deleted = attendance_punch.prune_old_ledger_rows(self.db, retention_days=90)
+        self.assertEqual(deleted, 2)  # only the 2024-01-31 pair
+
+        rows = self.db.execute(
+            "SELECT punch_time, state FROM device_punches ORDER BY punch_id"
+        ).fetchall()
+        self.assertEqual(len(rows), 4)
+        kept_days = {r["punch_time"][:10] for r in rows}
+        self.assertEqual(kept_days, {"2026-06-10", today})
+        today_rows = [r for r in rows if r["punch_time"][:10] == today]
+        self.assertEqual(len(today_rows), 2)  # today's punches always survive
+        self.assertTrue(all(r["state"] == "applied" for r in today_rows))
+
+    def test_28_pruner_never_deletes_pending_open_checkin(self):
+        self._punch(1001, "2024-01-31 09:00:00")  # lone past-day check-in -> pending
+        self.assertEqual(
+            self.db.execute("SELECT state FROM device_punches").fetchone()["state"],
+            "pending",
+        )
+        deleted = attendance_punch.prune_old_ledger_rows(self.db, retention_days=30)
+        self.assertEqual(deleted, 0)
+        self.assertEqual(
+            self.db.execute("SELECT COUNT(*) FROM device_punches").fetchone()[0], 1
+        )
+
+    def test_29_pruner_honors_batch_size_and_drains_backlog(self):
+        for day in ["2024-01-28", "2024-01-29", "2024-01-30"]:
+            self._punch(1001, day + " 09:00:00")
+            self._punch(1001, day + " 17:00:00")  # 6 applied rows
+        self.assertEqual(
+            self.db.execute("SELECT COUNT(*) FROM device_punches").fetchone()[0], 6
+        )
+        total = 0
+        while True:
+            batch = attendance_punch.prune_old_ledger_rows(
+                self.db, retention_days=30, batch_size=2
+            )
+            self.assertLessEqual(batch, 2)
+            total += batch
+            if batch == 0:
+                break
+        self.assertEqual(total, 6)
+        self.assertEqual(
+            self.db.execute("SELECT COUNT(*) FROM device_punches").fetchone()[0], 0
+        )
 
 
 if __name__ == "__main__":

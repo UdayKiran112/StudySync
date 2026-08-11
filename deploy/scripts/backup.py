@@ -92,6 +92,11 @@ def main() -> int:
         dst = sqlite3.connect(str(temp_copy))
         with dst:
             src.backup(dst)
+        # The ledger retention pruner deletes old device_punches rows daily,
+        # so the live file carries dead pages it keeps reusing. Compact the
+        # COPY here (never the live database) so backups stay small; the
+        # freed pages in the live file are harmlessly reused.
+        dst.execute("VACUUM")
         dst.close()
         src.close()
     except Exception as exc:  # noqa: BLE001
