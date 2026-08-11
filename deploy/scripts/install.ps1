@@ -354,11 +354,14 @@ $backupSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIf
 Register-ScheduledTask -TaskName "StudySyncNightly" -Action $backupAction -Trigger $backupTrigger -Principal $taskPrincipal -Settings $backupSettings -Description "Nightly StudySync database backup" -Force | Out-Null
 Write-Log "Scheduled task 'StudySyncNightly' registered (02:00 daily, $taskUser, battery-safe)."
 
-# Health watchdog every 5 minutes (elevated so it can restart a service)
+# Health watchdog every 5 minutes (elevated so it can restart a service and
+# auto-restore the database from a backup when it is missing/corrupt). The
+# long execution limit covers the rare case where the restore has to pull the
+# newest backup down from Google Drive first.
 $healthAction = New-ScheduledTaskAction -Execute "$APP_DIR\scripts\healthcheck.exe" -WorkingDirectory $APP_DIR
 $healthTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
-$healthSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
-Register-ScheduledTask -TaskName "StudySyncServiceCheck" -Action $healthAction -Trigger $healthTrigger -Principal $taskPrincipal -Settings $healthSettings -Description "Every 5 min: verify StudySync services and restart if down" -Force | Out-Null
+$healthSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+Register-ScheduledTask -TaskName "StudySyncServiceCheck" -Action $healthAction -Trigger $healthTrigger -Principal $taskPrincipal -Settings $healthSettings -Description "Every 5 min: verify StudySync services, restart if down, auto-restore a missing/corrupt database from backup" -Force | Out-Null
 Write-Log "Scheduled task 'StudySyncServiceCheck' registered (every 5 minutes, $taskUser, battery-safe)."
 
 # System-tray monitor at logon (elevated so it can restart services from the

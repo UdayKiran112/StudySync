@@ -66,8 +66,47 @@ def prune_to_min_free() -> int:
     return removed
 
 
+def sync_remote() -> int:
+    """Best-effort: mirror local backups to Google Drive, then prune remote
+    copies older than the retention window.
+
+    Never raises and never changes the caller's exit code: if Drive is not
+    configured or unreachable the LOCAL backup still stands.
+    """
+    try:
+        import gdrive
+
+        gdrive.load_env()
+        if not gdrive.enabled():
+            log("Drive sync skipped (set GOOGLE_CREDS_FILE + GOOGLE_DRIVE_FOLDER_ID)")
+            return 0
+        session = gdrive.get_session()
+        remote_names = {f["name"] for f in gdrive.list_remote(session)}
+        uploaded = 0
+        for f in sorted(BACKUP_DIR.glob("studysync_*.zip")):
+            if f.name not in remote_names:
+                gdrive.upload_file(session, f)
+                uploaded += 1
+                log(f"Uploaded {f.name} to Drive")
+        if uploaded == 0:
+            log("Drive sync: all local backups already uploaded")
+        pruned = gdrive.prune_remote(session, RETENTION_DAYS)
+        if pruned:
+            log(f"Pruned {pruned} remote backup(s) older than {RETENTION_DAYS} days")
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        log(f"WARNING: Drive sync failed (local backup unaffected): {exc}")
+        return 0
+
+
 def main() -> int:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        import gdrive
+
+        gdrive.load_env()
+    except Exception:  # noqa: BLE001
+        pass
 
     if not DB_PATH.exists():
         log(f"SKIP: database not found at {DB_PATH}")
@@ -129,6 +168,9 @@ def main() -> int:
             continue
     if removed:
         log(f"Pruned {removed} backup(s) older than {RETENTION_DAYS} days")
+
+    # 4) Mirror to Google Drive (optional, never blocks the local backup).
+    sync_remote()
     return 0
 
 
