@@ -14,10 +14,10 @@ import { Field, Input, Select } from "../../components/ui/Form";
 import { Button } from "../../components/ui/Button";
 import {
   LiveClock,
-  OpenSessionTime,
   OpenSessionDuration,
 } from "../../components/ui/LiveClock";
 import { StudentPicker } from "../../components/ui/StudentPicker";
+import { StudentName } from "../../components/ui/StudentName";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Modal } from "../../components/ui/Modal";
 import { StatusTab, sessionTone } from "../../components/ui/Tabs";
@@ -33,10 +33,11 @@ import { useZkSync } from "../../api/zkteco";
 import {
   formatDate,
   formatDuration,
-  formatClockTime,
+  formatClockHM,
   todayIso,
   nowHHMM,
 } from "../../lib/format";
+import { useStudent } from "../../api/students";
 import type { Student, Attendance } from "../../api/types";
 
 const LIMIT = 20;
@@ -370,11 +371,11 @@ export function AttendancePage() {
                   : null;
                 const open = Boolean(checkInDate && !checkOutDate);
                 const checkInDisplay = checkInDate
-                  ? formatClockTime(checkInDate)
+                  ? formatClockHM(checkInDate)
                   : "—";
                 const checkOutDisplay = checkOutDate
-                  ? formatClockTime(checkOutDate)
-                  : "—";
+                  ? formatClockHM(checkOutDate)
+                  : "--";
                 const closedDuration =
                   checkInDate && checkOutDate
                     ? formatDuration(
@@ -390,7 +391,9 @@ export function AttendancePage() {
 
                 return (
                   <Tr key={a.attendance_id}>
-                    <Td className="font-mono text-xs">{a.student_id}</Td>
+                    <Td>
+                      <StudentName studentId={a.student_id} />
+                    </Td>
                     <Td>{formatDate(a.date)}</Td>
                     <Td>
                       <StatusTab tone={sessionTone(a.session)}>
@@ -398,13 +401,7 @@ export function AttendancePage() {
                       </StatusTab>
                     </Td>
                     <Td className="font-mono text-xs">{checkInDisplay}</Td>
-                    <Td className="font-mono text-xs">
-                      {open ? (
-                        <OpenSessionTime />
-                      ) : (
-                        checkOutDisplay || "—"
-                      )}
-                    </Td>
+                    <Td className="font-mono text-xs">{checkOutDisplay}</Td>
                     <Td className="text-slate">
                       {open && checkInDate ? (
                         <OpenSessionDuration checkInDate={checkInDate} />
@@ -487,6 +484,7 @@ function EditAttendanceModal({
   const [checkOut, setCheckOut] = useState(record.check_out ?? "");
   const [error, setError] = useState("");
   const updateMutation = useUpdateAttendance(record.attendance_id);
+  const { data: student } = useStudent(record.student_id);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -508,7 +506,7 @@ function EditAttendanceModal({
       open={open}
       onClose={onClose}
       title="Edit attendance"
-      subtitle={`Student ${record.student_id} · ${formatDate(record.date)} — session and duration recalculate automatically`}
+      subtitle={`Student ${student?.name ?? record.student_id} (${record.student_id}) · ${formatDate(record.date)} — session and duration recalculate automatically`}
       width="sm"
     >
       <form onSubmit={handleSubmit} className="space-y-4">

@@ -12,6 +12,7 @@ import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Field, Input } from "../../components/ui/Form";
 import { Button } from "../../components/ui/Button";
 import { StudentPicker } from "../../components/ui/StudentPicker";
+import { StudentName } from "../../components/ui/StudentName";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import {
   useOfflineLibraryList,
@@ -263,7 +264,9 @@ export function OfflineLibraryPage() {
             <tbody>
               {data.map((u) => (
                 <Tr key={u.usage_id}>
-                  <Td className="font-mono text-xs">{u.student_id}</Td>
+                  <Td>
+                    <StudentName studentId={u.student_id} />
+                  </Td>
                   <Td>{formatDate(u.date)}</Td>
                   <Td>
                     {u.book_id ? (

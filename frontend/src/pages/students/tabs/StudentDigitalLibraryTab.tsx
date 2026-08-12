@@ -3,7 +3,7 @@ import { Spinner, ErrorBanner, EmptyState } from "../../../components/ui/Feedbac
 import { Table, Thead, Th, Tr, Td } from "../../../components/ui/Table";
 import { useDigitalLibraryList } from "../../../api/digitalLibrary";
 import { extractErrorMessage } from "../../../api/client";
-import { formatDate, formatDuration } from "../../../lib/format";
+import { formatDate, formatDuration, formatClockHM } from "../../../lib/format";
 
 export function StudentDigitalLibraryTab({ studentId }: { studentId: number }) {
   const { data, isLoading, isError, error } = useDigitalLibraryList({ student_id: studentId, limit: 100 });
@@ -33,12 +33,8 @@ export function StudentDigitalLibraryTab({ studentId }: { studentId: number }) {
           const inDate = u.in_time ? new Date(`${u.date}T${u.in_time}`) : null;
           const outDate = u.out_time ? new Date(`${u.date}T${u.out_time}`) : null;
           const effectiveOutDate = outDate ?? now;
-          const inDisplay = inDate
-            ? inDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-            : "—";
-          const outDisplay = outDate
-            ? outDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-            : (inDate ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—");
+          const inDisplay = inDate ? formatClockHM(inDate) : "—";
+          const outDisplay = outDate ? formatClockHM(outDate) : "--";
           const durationMinutes = inDate
             ? Math.max(0, Math.round((effectiveOutDate.getTime() - inDate.getTime()) / 60000))
             : (u.duration_minutes ?? 0);
@@ -49,7 +45,7 @@ export function StudentDigitalLibraryTab({ studentId }: { studentId: number }) {
               <Td className="font-medium">{u.platform_name}</Td>
               <Td className="text-slate">{u.account_type === "Library Subscription" ? u.subscription_id : "Own account"}</Td>
               <Td className="font-mono text-xs">{inDisplay}</Td>
-              <Td className="font-mono text-xs">{u.out_time ? outDisplay : <span className="text-brass">{outDisplay}</span>}</Td>
+              <Td className="font-mono text-xs">{outDisplay}</Td>
               <Td className="text-slate">{formatDuration(durationMinutes)}</Td>
             </Tr>
           );

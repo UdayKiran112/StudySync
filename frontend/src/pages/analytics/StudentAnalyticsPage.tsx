@@ -24,7 +24,7 @@ import { IdTab, StatusTab, studentStatusTone } from "../../components/ui/Tabs";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { useStudentDashboard } from "../../api/dashboard";
 import { extractErrorMessage } from "../../api/client";
-import { formatDate, formatDuration } from "../../lib/format";
+import { formatDate, formatDuration, formatClockHM } from "../../lib/format";
 import { computeHolidayAwareStats } from "../../lib/attendanceStats";
 import { HOLIDAY_RULE_DESCRIPTION } from "../../lib/holidays";
 import type { Student } from "../../api/types";
@@ -365,21 +365,29 @@ function Report({
               <Th>Duration</Th>
             </Thead>
             <tbody>
-              {dashboard.attendance_history.slice(0, 15).map((a) => (
-                <Tr key={a.attendance_id}>
-                  <Td>{formatDate(a.date)}</Td>
-                  <Td>{a.session}</Td>
-                  <Td className="font-mono text-xs">{a.check_in ?? "—"}</Td>
-                  <Td className="font-mono text-xs">
-                    {a.check_out ?? (
-                      <span className="text-brass">Still in</span>
-                    )}
-                  </Td>
-                  <Td className="text-slate">
-                    {formatDuration(a.duration_minutes)}
-                  </Td>
-                </Tr>
-              ))}
+              {dashboard.attendance_history.slice(0, 15).map((a) => {
+                const checkInDate = a.check_in
+                  ? new Date(`${a.date}T${a.check_in}`)
+                  : null;
+                const checkOutDate = a.check_out
+                  ? new Date(`${a.date}T${a.check_out}`)
+                  : null;
+                return (
+                  <Tr key={a.attendance_id}>
+                    <Td>{formatDate(a.date)}</Td>
+                    <Td>{a.session}</Td>
+                    <Td className="font-mono text-xs">
+                      {checkInDate ? formatClockHM(checkInDate) : "—"}
+                    </Td>
+                    <Td className="font-mono text-xs">
+                      {checkOutDate ? formatClockHM(checkOutDate) : "--"}
+                    </Td>
+                    <Td className="text-slate">
+                      {formatDuration(a.duration_minutes)}
+                    </Td>
+                  </Tr>
+                );
+              })}
             </tbody>
           </Table>
         )}

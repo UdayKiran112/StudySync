@@ -10,6 +10,7 @@ import { Field, Input, Textarea } from "../../components/ui/Form";
 import { Modal } from "../../components/ui/Modal";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { StudentPicker } from "../../components/ui/StudentPicker";
+import { StudentName } from "../../components/ui/StudentName";
 import { BulkScoresModal, type BulkSaveRow } from "../../components/ui/BulkScoresModal";
 import { useQuiz, useScoresForQuiz, useAddQuizScore, useUpdateQuizScore, useDeleteQuizScore } from "../../api/quizzes";
 import { apiClient, extractErrorMessage } from "../../api/client";
@@ -109,7 +110,9 @@ export function QuizDetail() {
           <tbody>
             {scores.data.map((s) => (
               <Tr key={s.score_id}>
-                <Td className="font-mono text-xs">{s.student_id}</Td>
+                <Td>
+                  <StudentName studentId={s.student_id} />
+                </Td>
                 <Td className="font-medium">
                   {s.score} / {quiz.max_marks}
                 </Td>

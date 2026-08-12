@@ -12,6 +12,7 @@ import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { Field, Input, Select, Textarea } from "../../components/ui/Form";
 import { Button } from "../../components/ui/Button";
 import { StudentPicker } from "../../components/ui/StudentPicker";
+import { StudentName } from "../../components/ui/StudentName";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import {
   useDigitalLibraryList,
@@ -24,6 +25,7 @@ import { apiClient, extractErrorMessage } from "../../api/client";
 import {
   formatDate,
   formatDuration,
+  formatClockHM,
   todayIso,
   nowHHMM,
 } from "../../lib/format";
@@ -459,25 +461,11 @@ export function DigitalLibraryPage() {
                   : null;
                 const effectiveOutDate = outDate ?? now;
                 const inDisplay = inDate
-                  ? inDate.toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    })
+                  ? formatClockHM(inDate)
                   : "—";
                 const outDisplay = outDate
-                  ? outDate.toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    })
-                  : inDate
-                    ? now.toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      })
-                    : "—";
+                  ? formatClockHM(outDate)
+                  : "--";
                 const durationMinutes = inDate
                   ? Math.max(
                       0,
@@ -489,7 +477,9 @@ export function DigitalLibraryPage() {
 
                 return (
                   <Tr key={u.usage_id}>
-                    <Td className="font-mono text-xs">{u.student_id}</Td>
+                    <Td>
+                      <StudentName studentId={u.student_id} />
+                    </Td>
                     <Td>{formatDate(u.date)}</Td>
                     <Td className="font-medium">{u.platform_name}</Td>
                     <Td className="text-slate">
@@ -498,13 +488,7 @@ export function DigitalLibraryPage() {
                         : "Own account"}
                     </Td>
                     <Td className="font-mono text-xs">{inDisplay}</Td>
-                    <Td className="font-mono text-xs">
-                      {u.out_time ? (
-                        outDisplay
-                      ) : (
-                        <span className="text-brass">{outDisplay}</span>
-                      )}
-                    </Td>
+                    <Td className="font-mono text-xs">{outDisplay}</Td>
                     <Td className="text-slate">
                       {formatDuration(durationMinutes)}
                     </Td>

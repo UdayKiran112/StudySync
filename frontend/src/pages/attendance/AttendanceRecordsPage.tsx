@@ -22,8 +22,10 @@ import {
   useDeleteAttendance,
 } from "../../api/attendance";
 import { extractErrorMessage } from "../../api/client";
-import { formatDate, formatDuration, formatClockTime, todayIso } from "../../lib/format";
-import { LiveClock, OpenSessionTime, OpenSessionDuration } from "../../components/ui/LiveClock";
+import { useStudent } from "../../api/students";
+import { formatDate, formatDuration, formatClockHM, todayIso } from "../../lib/format";
+import { LiveClock, OpenSessionDuration } from "../../components/ui/LiveClock";
+import { StudentName } from "../../components/ui/StudentName";
 import { ExportMenu } from "../../components/ui/ExportMenu";
 import type { ExportColumn, ExportRow } from "../../components/ui/ExportMenu";
 import { RecordToolbar } from "../../components/ui/RecordToolbar";
@@ -231,8 +233,8 @@ export function AttendanceRecordsPage() {
                               const checkInDate = record.check_in ? new Date(`${record.date}T${record.check_in}`) : null;
                               const checkOutDate = record.check_out ? new Date(`${record.date}T${record.check_out}`) : null;
                               const open = Boolean(checkInDate && !checkOutDate);
-                              const checkInDisplay = checkInDate ? formatClockTime(checkInDate) : "—";
-                              const checkOutDisplay = checkOutDate ? formatClockTime(checkOutDate) : "—";
+                              const checkInDisplay = checkInDate ? formatClockHM(checkInDate) : "—";
+                              const checkOutDisplay = checkOutDate ? formatClockHM(checkOutDate) : "--";
                               const closedDuration =
                                 checkInDate && checkOutDate
                                   ? formatDuration(Math.max(0, Math.round((checkOutDate.getTime() - checkInDate.getTime()) / 60000)))
@@ -240,7 +242,9 @@ export function AttendanceRecordsPage() {
 
                               return (
                                 <Tr key={record.attendance_id}>
-                                  <Td className="font-mono text-xs">{record.student_id}</Td>
+                                  <Td>
+                                    <StudentName studentId={record.student_id} />
+                                  </Td>
                                   <Td>{formatDate(record.date)}</Td>
                                   <Td>
                                     <StatusTab tone={sessionTone(record.session)}>
@@ -248,9 +252,7 @@ export function AttendanceRecordsPage() {
                                     </StatusTab>
                                   </Td>
                                   <Td className="font-mono text-xs">{checkInDisplay}</Td>
-                                  <Td className="font-mono text-xs">
-                                    {open ? <OpenSessionTime /> : checkOutDisplay || "—"}
-                                  </Td>
+                                  <Td className="font-mono text-xs">{checkOutDisplay}</Td>
                                   <Td className="text-slate">
                                     {open && checkInDate ? <OpenSessionDuration checkInDate={checkInDate} /> : closedDuration}
                                   </Td>
@@ -329,6 +331,7 @@ function EditAttendanceModal({
   const [checkOut, setCheckOut] = useState(record.check_out ?? "");
   const [error, setError] = useState("");
   const updateMutation = useUpdateAttendance(record.attendance_id);
+  const { data: student } = useStudent(record.student_id);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -350,7 +353,7 @@ function EditAttendanceModal({
       open={open}
       onClose={onClose}
       title="Edit attendance"
-      subtitle={`Student ${record.student_id} · ${formatDate(record.date)} — session and duration recalculate automatically`}
+      subtitle={`Student ${student?.name ?? record.student_id} (${record.student_id}) · ${formatDate(record.date)} — session and duration recalculate automatically`}
       width="sm"
     >
       <form onSubmit={handleSubmit} className="space-y-4">

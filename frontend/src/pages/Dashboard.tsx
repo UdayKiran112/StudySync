@@ -17,7 +17,7 @@ import { useDigitalLibraryList } from "../api/digitalLibrary";
 import { useOfflineLibraryList } from "../api/offlineLibrary";
 import { useCurrentlyPresent } from "../api/dashboard";
 import { extractErrorMessage } from "../api/client";
-import { formatClockTime, todayIso } from "../lib/format";
+import { formatClockHM, todayIso } from "../lib/format";
 import { useSettings } from "../context/SettingsContext";
 import { IdTab } from "../components/ui/Tabs";
 import { OpenSessionDuration } from "../components/ui/LiveClock";
@@ -204,7 +204,7 @@ function PresentRow({ item }: { item: PresentItem }) {
         <span className="flex items-center gap-3 text-sm text-slate">
           {checkInDate && (
             <span className="tabular-nums">
-              in at {formatClockTime(checkInDate)}
+              in at {formatClockHM(checkInDate)}
             </span>
           )}
           {checkInDate && <OpenSessionDuration checkInDate={checkInDate} />}

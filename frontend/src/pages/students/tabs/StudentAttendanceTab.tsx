@@ -7,7 +7,7 @@ import {
 import { Table, Thead, Th, Tr, Td } from "../../../components/ui/Table";
 import { useAttendanceList } from "../../../api/attendance";
 import { extractErrorMessage } from "../../../api/client";
-import { formatDate, formatDuration } from "../../../lib/format";
+import { formatDate, formatDuration, formatClockHM } from "../../../lib/format";
 
 export function StudentAttendanceTab({ studentId }: { studentId: number }) {
   const { data: page, isLoading, isError, error } = useAttendanceList({
@@ -44,11 +44,11 @@ export function StudentAttendanceTab({ studentId }: { studentId: number }) {
           const checkOutDate = a.check_out ? new Date(`${a.date}T${a.check_out}`) : null;
           const effectiveCheckOutDate = checkOutDate ?? now;
           const checkInDisplay = checkInDate
-            ? checkInDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+            ? formatClockHM(checkInDate)
             : "—";
           const checkOutDisplay = checkOutDate
-            ? checkOutDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-            : (checkInDate ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—");
+            ? formatClockHM(checkOutDate)
+            : "--";
           const durationMinutes = checkInDate
             ? Math.max(0, Math.round((effectiveCheckOutDate.getTime() - checkInDate.getTime()) / 60000))
             : (a.duration_minutes ?? 0);
@@ -58,7 +58,7 @@ export function StudentAttendanceTab({ studentId }: { studentId: number }) {
               <Td>{formatDate(a.date)}</Td>
               <Td>{a.session}</Td>
               <Td className="font-mono text-xs">{checkInDisplay}</Td>
-              <Td className="font-mono text-xs">{a.check_out ? checkOutDisplay : <span className="text-brass">{checkOutDisplay}</span>}</Td>
+              <Td className="font-mono text-xs">{checkOutDisplay}</Td>
               <Td className="text-slate">{formatDuration(durationMinutes)}</Td>
             </Tr>
           );

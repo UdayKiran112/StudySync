@@ -29,12 +29,6 @@ export function LiveClock({ size = "lg" }: { size?: "lg" | "sm" }) {
   );
 }
 
-/** Live "current time" for a table cell showing a still-open session. */
-export function OpenSessionTime() {
-  const now = useLiveNow();
-  return <span className="text-brass">{formatClockTime(now)}</span>;
-}
-
 /** Live elapsed duration for a still-open session. */
 export function OpenSessionDuration({ checkInDate }: { checkInDate: Date }) {
   const now = useLiveNow();

@@ -31,6 +31,14 @@ export function formatClockTime(date: Date): string {
   });
 }
 
+/** Wall-clock HH:MM for a Date (seconds dropped) — used for record timings. */
+export function formatClockHM(date: Date): string {
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function formatDuration(minutes: number | null | undefined): string {
   if (minutes === null || minutes === undefined) return "—";
   // Averages (e.g. "Average session length") can come through with long
