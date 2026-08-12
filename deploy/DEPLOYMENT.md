@@ -88,13 +88,35 @@ other users' files, secrets, or the OS. The account is created by
 
 | Task | Schedule | Runs |
 | --- | --- | --- |
-| `StudySyncNightly` | daily 02:00 | `backup.exe` (30-day retention) |
-| `StudySyncServiceCheck` | every 5 min | `healthcheck.exe` (restarts a down service) |
+| `StudySyncNightly` | daily 02:00 | `backup.exe` (30-day local + Google Drive mirror) |
+| `StudySyncServiceCheck` | every 5 min | `healthcheck.exe` (restarts a down service; auto-restores a missing/corrupt database from backup) |
 
 Tasks run as the installing (admin) user, `Highest`, battery-safe. Note: on some
 machines security software silently deletes SYSTEM-run tasks, so tasks are NOT
 registered under SYSTEM. The names `StudySyncNightly` / `StudySyncServiceCheck`
 are chosen to survive that filtering.
+
+## Backup & disaster recovery
+
+- **Local retention**: `backup.exe` keeps the newest `studysync_*.zip` files in
+  `C:\ProgramData\StudySync\backups\` and deletes anything older than
+  `STUDYSYNC_BACKUP_RETENTION_DAYS` (default **30**). A disk-space guard prunes
+  oldest-first if free space drops below 1 GiB.
+- **Google Drive mirror (optional)**: if `GOOGLE_CREDS_FILE` (the same
+  service-account JSON used for Sheets) and `GOOGLE_DRIVE_FOLDER_ID` are set in
+  `app\api\.env`, every nightly run uploads any local backups missing from the
+  Drive folder (idempotent, so missed uploads self-heal) and prunes remote
+  copies older than the same 30-day window. The Drive folder must be **shared
+  with the service-account email** (Editor). Drive failures never affect the
+  local backup — they are logged as warnings only.
+- **Auto-restore**: `healthcheck.exe` (every 5 min, elevated) checks the
+  database with `PRAGMA integrity_check`. If the database is missing or corrupt
+  it automatically: stops `StudySyncAPI` → preserves the broken file as
+  `data\library.db.corrupt-<ts>` → extracts the newest local backup (falling
+  back to the newest copy on Google Drive) → verifies the result → restarts the
+  service. A 24-hour cooldown (`STUDYSYNC_AUTO_RESTORE_COOLDOWN_HOURS`) prevents
+  restore loops, and a failed restore rolls back to the pre-restore database.
+  See `logs\health\health.log` for the full audit trail.
 
 ## API key
 

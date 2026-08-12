@@ -29,7 +29,13 @@ New-Item -ItemType Directory -Force -Path $LOG_DIR | Out-Null
 function Write-Log($msg) {
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | $msg"
     Write-Host $line
-    Add-Content -Path $LOG -Value $line -Encoding UTF8
+    # A write failure here must never abort the update (a protected/empty DACL
+    # on the log file after a partial hardening run should not block recovery).
+    try {
+        Add-Content -Path $LOG -Value $line -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        Write-Host "WARN: could not write update log ($LOG): $($_.Exception.Message)" -ForegroundColor Yellow
+    }
 }
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -50,8 +56,18 @@ if (-not (Test-Path "$APP_DIR\app\api\.env")) {
 # package ships the XML templates with a placeholder password, and the running
 # services keep their account/password in the Service Control Manager, so the
 # password must be re-injected unchanged or the services will fail to start.
-$apiKey = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_API_KEY=(.+)$').Matches[0].Groups[1].Value
-$dbEnv = (Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_DB_PATH=(.+)$').Matches[0].Groups[1].Value
+$apiKeyMatch = Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_API_KEY=(.+)$'
+if (-not $apiKeyMatch) {
+    Write-Host "ERROR: STUDYSYNC_API_KEY not found in .env. Aborting; no changes made." -ForegroundColor Red
+    exit 1
+}
+$apiKey = $apiKeyMatch.Matches[0].Groups[1].Value
+$dbMatch = Select-String -Path "$APP_DIR\app\api\.env" -Pattern '^STUDYSYNC_DB_PATH=(.+)$'
+if (-not $dbMatch) {
+    Write-Host "ERROR: STUDYSYNC_DB_PATH not found in .env. Aborting; no changes made." -ForegroundColor Red
+    exit 1
+}
+$dbEnv = $dbMatch.Matches[0].Groups[1].Value
 $extraLines = Get-Content -Path "$APP_DIR\app\api\.env" | Where-Object {
     $_ -match '^\s*(ZK_|GOOGLE_|STUDYSYNC_(ALLOWED_ORIGINS|HOST|PORT))' -and $_ -notmatch '^\s*#'
 }
@@ -61,7 +77,8 @@ $svcAccount = "StudySyncSvc"
 $svcPass = $null
 foreach ($xml in @("$APP_DIR\config\winsw\studysync-api.xml", "$APP_DIR\config\winsw\studysync-caddy.xml")) {
     if (Test-Path $xml) {
-        $pw = (Select-String -Path $xml -Pattern '<password>(.+)</password>' -ErrorAction SilentlyContinue | Select-Object -First 1).Matches.Groups[1].Value
+        $pwMatch = Select-String -Path $xml -Pattern '<password>(.+)</password>' -ErrorAction SilentlyContinue | Select-Object -First 1
+        $pw = if ($pwMatch) { $pwMatch.Matches.Groups[1].Value } else { $null }
         if ($pw -and $pw -ne "__STUDYSYNC_SVC_PASSWORD__") { $svcPass = $pw; break }
     }
 }
@@ -75,12 +92,12 @@ if (-not $svcPass) {
     $svcPass = -join (1..32 | ForEach-Object { $chars[(Get-Random -Maximum $chars.Length)] })
     $secure = ConvertTo-SecureString $svcPass -AsPlainText -Force
     if (Get-LocalUser -Name $svcAccount -ErrorAction SilentlyContinue) {
-        Set-LocalUser -Name $svcAccount -Password $secure -PasswordNeverExpires $true -UserMayNotChangePassword $true
+        Set-LocalUser -Name $svcAccount -Password $secure -PasswordNeverExpires $true -UserMayChangePassword $false
     } else {
         New-LocalUser -Name $svcAccount -Password $secure `
             -FullName "StudySync Service Account" `
-            -Description "Low-privilege account that runs the StudySync API and Caddy services" `
-            -AccountNeverExpires $true -PasswordNeverExpires $true -UserMayNotChangePassword $true | Out-Null
+            -Description "Runs the StudySync API and Caddy services" `
+            -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword | Out-Null
     }
 }
 Write-Log "Preserving service account '$svcAccount' credentials (kept from current install)."
@@ -137,6 +154,14 @@ foreach ($rel in @("app\api", "app\frontend", "app\caddy", "config\winsw", "scri
 }
 Write-Log "New application files copied."
 
+# 3a. Ensure the WinSW wrapper log dir exists. The wrapper writes its own
+#     console logs (.out.log/.err.log) to <logpath>, which the XMLs set to
+#     logs\winsw (NOT config\winsw - hardening makes that dir read-only for
+#     the service account, which previously crashed the wrapper the moment it
+#     tried to open its log). It must exist before the ACL pass below so it is
+#     covered by the writable (Modify) set rather than silently inherited.
+New-Item -ItemType Directory -Force -Path "$APP_DIR\logs\winsw" | Out-Null
+
 # 3b. Re-inject the service-account password into the freshly copied WinSW
 #     XMLs (the package carries the placeholder). The password is not logged.
 Set-Content -Path "$APP_DIR\config\winsw\studysync-api.xml" -Value ((Get-Content -Path "$APP_DIR\config\winsw\studysync-api.xml" -Raw) -replace '<password>__STUDYSYNC_SVC_PASSWORD__</password>', "<password>$svcPass</password>") -Encoding ASCII -NoNewline
@@ -145,22 +170,68 @@ Write-Log "WinSW XMLs re-configured to run services as '$svcAccount'."
 
 # 3c. Re-apply the ACL hardening. update.ps1 swaps the whole tree on every run,
 #     so the freshly copied files inherit the (possibly still open) parent ACL.
-#     Strip inherited ACEs and grant access to exactly: SYSTEM, Administrators,
-#     the installing user, and the service account (read-only on the app, write
-#     on data/logs/backups). This also locks down a legacy pre-hardening tree.
-$system = "NT AUTHORITY\SYSTEM"
-$admins = "BUILTIN\Administrators"
+#     Set ACLs directly on EVERY object: grant exactly SYSTEM, Administrators,
+#     the installing user (for the scheduled tasks), and the service account
+#     (read-only on the app, write on data/logs/backups), with inheritance
+#     disabled so the inherited BUILTIN\Users read access (and any stale
+#     inherited ACE from a legacy pre-hardening tree) can never come back.
+#
+#     This is done with the .NET ACL API rather than icacls: `icacls /grant:r
+#     ... /T` with (OI)(CI) flags writes an inherit-only ACE on FILES (it grants
+#     the file itself nothing), and `icacls /inheritance:r /T` then removes
+#     every inherited ACE - together they leave files with an empty DACL that
+#     locks the whole tree. Setting the DACL on each object directly (as the
+#     owner, after takeown) is deterministic and immune to that trap.
+$system      = "NT AUTHORITY\SYSTEM"
+$admins      = "BUILTIN\Administrators"
 $interactive = "$env:USERDOMAIN\$env:USERNAME"
-$svc = "$env:COMPUTERNAME\$svcAccount"
-& icacls $APP_DIR /inheritance:r /T /Q 2>$null | Out-Null
-& icacls $APP_DIR /grant:r "${system}:(OI)(CI)F" "${admins}:(OI)(CI)F" "${interactive}:(OI)(CI)F" "${svc}:(OI)(CI)RX" /T /Q 2>$null | Out-Null
-foreach ($writable in @("data", "logs", "backups")) {
-    $p = Join-Path $APP_DIR $writable
-    if (Test-Path $p) {
-        & icacls $p /grant:r "${svc}:(OI)(CI)M" /T /Q 2>$null | Out-Null
+$svc         = "$env:COMPUTERNAME\$svcAccount"
+$writableRel = @("data", "logs", "backups")
+# Native takeown writes to stderr even on success; with
+# $ErrorActionPreference=Stop PowerShell 5.1 turns any stderr line into a
+# terminating error, so run it with Continue and check $LASTEXITCODE.
+$eap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+& takeown /f $APP_DIR /r /d y /a 2>$null | Out-Null
+$takeExit = $LASTEXITCODE
+$ErrorActionPreference = $eap
+if ($takeExit -ne 0) { throw "ACL hardening failed: takeown exit $takeExit" }
+
+$all = @(Get-Item $APP_DIR) + @(Get-ChildItem -Path $APP_DIR -Recurse -Force -ErrorAction SilentlyContinue)
+$fixed = 0; $failed = 0
+foreach ($item in $all) {
+    $path = $item.FullName
+    try {
+        $isDir = $item.PSIsContainer
+        $inWritable = $false
+        foreach ($rel in $writableRel) {
+            $base = Join-Path $APP_DIR $rel
+            if ($path -eq $base -or $path.StartsWith($base + "\")) { $inWritable = $true; break }
+        }
+        $svcRights = if ($inWritable) { [System.Security.AccessControl.FileSystemRights]::Modify }
+                     else { [System.Security.AccessControl.FileSystemRights]::ReadAndExecute }
+        if ($isDir) {
+            $sec = New-Object System.Security.AccessControl.DirectorySecurity
+            $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+        } else {
+            $sec = New-Object System.Security.AccessControl.FileSecurity
+            $inherit = [System.Security.AccessControl.InheritanceFlags]::None
+        }
+        $prop = [System.Security.AccessControl.PropagationFlags]::None
+        $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit, $prop, [System.Security.AccessControl.AccessControlType]::Allow)))
+        $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($admins, [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit, $prop, [System.Security.AccessControl.AccessControlType]::Allow)))
+        $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($interactive, [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit, $prop, [System.Security.AccessControl.AccessControlType]::Allow)))
+        $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($svc, $svcRights, $inherit, $prop, [System.Security.AccessControl.AccessControlType]::Allow)))
+        $sec.SetAccessRuleProtection($true, $false)
+        Set-Acl -Path $path -AclObject $sec -ErrorAction Stop
+        $fixed++
+    } catch {
+        $failed++
+        Write-Log "WARN: ACL set failed on $path : $($_.Exception.Message)"
     }
 }
-Write-Log "ACLs hardened on $APP_DIR (inherited BUILTIN\Users read access removed)."
+if ($failed -gt 0) { throw "ACL hardening failed on $failed of $($all.Count) objects under $APP_DIR" }
+Write-Log "ACLs hardened on $APP_DIR ($fixed objects; inherited BUILTIN\Users read access removed)."
 
 # 3d. Recreate the firewall rules so a pre-hardening install (rules on ALL
 #     profiles, any remote address) is tightened on update. Port 80 is
@@ -206,6 +277,19 @@ Write-Log "Both services confirmed running as '$svcAccount'."
 sc.exe start StudySyncAPI | Out-Null
 Start-Sleep -Seconds 4
 sc.exe start StudySyncCaddy | Out-Null
+
+# 5b. Refresh the watchdog's execution limit. Newer packages allow up to 15
+#     minutes so an auto-restore that has to pull a backup down from Google
+#     Drive can finish; the old 2-minute cap could kill healthcheck mid-run.
+#     The task itself survives (same name, same exe path) - only the settings
+#     object is replaced.
+$checkTask = Get-ScheduledTask -TaskName "StudySyncServiceCheck" -ErrorAction SilentlyContinue
+if ($checkTask) {
+    Set-ScheduledTask -TaskName "StudySyncServiceCheck" -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)) | Out-Null
+    Write-Log "StudySyncServiceCheck execution limit updated to 15 min."
+} else {
+    Write-Log "WARN: StudySyncServiceCheck task not found (skipping execution-limit refresh)."
+}
 
 # Restart the tray monitor if installed (the scheduled task re-registers it at
 # next logon; starting it now picks up the new exe immediately).

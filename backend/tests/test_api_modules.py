@@ -324,6 +324,21 @@ class ApiModuleTests(unittest.TestCase):
         self.assertEqual([s["sheet_name"] for s in failed], ["Students"])
         self.assertIn("simulated failure", failed[0]["error"])
 
+    def test_14_rate_limit_returns_429_never_500(self):
+        # Regression: exceeding a rate limit used to surface as a 500
+        # ("'ValueError' object has no attribute 'detail'"). /api/sync/history
+        # is decorated with @limiter.limit("20/minute"); the 21st request in
+        # the same minute must be a clean 429.
+        from main import app
+
+        self.request("GET", "/api/sync/history")
+        app.state.limiter.reset()
+        for _ in range(20):
+            response = self.request("GET", "/api/sync/history")
+            self.assertEqual(response.status_code, 200)
+        response = self.request("GET", "/api/sync/history")
+        self.assertEqual(response.status_code, 429)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

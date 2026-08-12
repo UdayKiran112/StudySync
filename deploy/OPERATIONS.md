@@ -109,6 +109,12 @@ after **30 days** (`STUDYSYNC_BACKUP_RETENTION_DAYS`).
 The backup is made through SQLite's online-backup API, so it is consistent even
 while the API is running — no need to stop services.
 
+**Google Drive mirror (optional):** with `GOOGLE_CREDS_FILE` +
+`GOOGLE_DRIVE_FOLDER_ID` set in `app\api\.env`, each run uploads any local
+backups missing from the Drive folder and prunes remote copies older than 30
+days. Share the Drive folder with the service-account email (Editor). Drive
+errors only log a warning — the local backup is never affected.
+
 Manual backup:
 
 ```powershell
@@ -117,7 +123,11 @@ C:\ProgramData\StudySync\scripts\backup.exe
 
 ## Restore
 
-Restore **requires stopping the API** first (the script refuses while it runs):
+The watchdog `healthcheck.exe` (every 5 min, elevated) **auto-restores** a
+missing/corrupt database from the newest backup (Google Drive included if no
+local backup exists), keeping the broken file as `data\library.db.corrupt-<ts>`
+and guarding against restore loops with a 24h cooldown. To restore manually —
+**stop the API first** (the script refuses while it runs):
 
 ```powershell
 sc stop StudySyncAPI

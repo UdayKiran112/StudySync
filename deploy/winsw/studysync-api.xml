@@ -14,6 +14,13 @@
   <executable>C:\ProgramData\StudySync\app\api\studysync-api.exe</executable>
   <workingdirectory>C:\ProgramData\StudySync\app\api</workingdirectory>
 
+  <!-- WinSW's own console logs (.out.log / .err.log) must NOT go next to the
+       wrapper exe: ACL hardening gives StudySyncSvc only ReadAndExecute on
+       config\winsw, so the wrapper would crash with UnauthorizedAccessException
+       right after spawning the child. logs\winsw lives under the writable
+       logs tree (StudySyncSvc has Modify there) and install/update create it. -->
+  <logpath>C:\ProgramData\StudySync\logs\winsw</logpath>
+
   <!-- Run as a dedicated low-privilege local account, NOT LocalSystem: an
        RCE in the backend must not equal full machine compromise. install.ps1
        creates StudySyncSvc with a random password and replaces the

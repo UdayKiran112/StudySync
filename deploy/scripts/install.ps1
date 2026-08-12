@@ -34,7 +34,11 @@ function Write-Log($msg) {
     New-Item -ItemType Directory -Force -Path $LOG_DIR | Out-Null
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | $msg"
     Write-Host $line
-    Add-Content -Path $installLog -Value $line -Encoding UTF8
+    try {
+        Add-Content -Path $installLog -Value $line -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        Write-Host "WARN: could not write install log ($installLog): $($_.Exception.Message)" -ForegroundColor Yellow
+    }
 }
 
 function Assert-Admin {
@@ -72,7 +76,8 @@ function Get-ServicePassword {
     # reinstalls). A fresh install generates one.
     foreach ($xml in @("$APP_DIR\config\winsw\studysync-api.xml", "$APP_DIR\config\winsw\studysync-caddy.xml")) {
         if (Test-Path $xml) {
-            $pw = (Select-String -Path $xml -Pattern '<password>(.+)</password>' -ErrorAction SilentlyContinue | Select-Object -First 1).Matches.Groups[1].Value
+            $pwMatch = Select-String -Path $xml -Pattern '<password>(.+)</password>' -ErrorAction SilentlyContinue | Select-Object -First 1
+            $pw = if ($pwMatch) { $pwMatch.Matches.Groups[1].Value } else { $null }
             if ($pw -and $pw -ne "__STUDYSYNC_SVC_PASSWORD__") { return $pw }
         }
     }
@@ -82,13 +87,13 @@ function Get-ServicePassword {
 function Ensure-ServiceAccount([string]$password) {
     $secure = ConvertTo-SecureString $password -AsPlainText -Force
     if (Get-LocalUser -Name $SVC_ACCOUNT -ErrorAction SilentlyContinue) {
-        Set-LocalUser -Name $SVC_ACCOUNT -Password $secure -PasswordNeverExpires $true -UserMayNotChangePassword $true
+        Set-LocalUser -Name $SVC_ACCOUNT -Password $secure -PasswordNeverExpires $true -UserMayChangePassword $false
         Write-Log "Service account '$SVC_ACCOUNT' exists; password refreshed (kept stable with the SCM registration)."
     } else {
         New-LocalUser -Name $SVC_ACCOUNT -Password $secure `
             -FullName "StudySync Service Account" `
-            -Description "Low-privilege account that runs the StudySync API and Caddy services" `
-            -AccountNeverExpires $true -PasswordNeverExpires $true -UserMayNotChangePassword $true | Out-Null
+            -Description "Runs the StudySync API and Caddy services" `
+            -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword | Out-Null
         Write-Log "Created dedicated low-privilege service account '$SVC_ACCOUNT'."
     }
 }
@@ -104,29 +109,77 @@ function Set-SecureAcls {
     # The package tree currently inherits C:\ProgramData's default ACL, which
     # gives BUILTIN\Users read access to EVERYTHING - including the Caddy
     # access log that previously leaked API keys and the WinSW XML that now
-    # carries the service-account password. Strip the inherited ACEs and grant
-    # access to exactly: SYSTEM, Administrators, the interactive installing
-    # user (for the scheduled tasks) and the service account (read-only for
-    # the app, write access to data/logs/backups).
+    # carries the service-account password. Set ACLs directly on EVERY object:
+    # grant exactly SYSTEM, Administrators, the interactive installing user
+    # (for the scheduled tasks) and the service account (read-only for the app,
+    # write access to data/logs/backups), with inheritance disabled so the
+    # inherited BUILTIN\Users read access can never come back.
+    #
+    # This is done with the .NET ACL API rather than icacls: `icacls /grant:r
+    # ... /T` with (OI)(CI) flags writes an inherit-only ACE on FILES (it grants
+    # the file itself nothing), and `icacls /inheritance:r /T` then removes
+    # every inherited ACE - together they leave files with an empty DACL that
+    # locks the whole tree. Setting the DACL on each object directly (as the
+    # owner, after takeown) is deterministic and immune to that trap.
     $system       = "NT AUTHORITY\SYSTEM"
     $admins       = "BUILTIN\Administrators"
     $interactive  = "$env:USERDOMAIN\$env:USERNAME"
     $svc          = "$env:COMPUTERNAME\$SVC_ACCOUNT"
+    $writableRel  = @("data", "logs", "backups")
 
     if (-not (Get-LocalUser -Name $SVC_ACCOUNT -ErrorAction SilentlyContinue)) {
         throw "Service account '$SVC_ACCOUNT' must exist before hardening ACLs."
     }
 
-    & icacls $APP_DIR /inheritance:r /T /Q 2>$null | Out-Null
-    & icacls $APP_DIR /grant:r "${system}:(OI)(CI)F" "${admins}:(OI)(CI)F" "${interactive}:(OI)(CI)F" "${svc}:(OI)(CI)RX" /T /Q 2>$null | Out-Null
-    foreach ($writable in @("data", "logs", "backups")) {
-        $p = Join-Path $APP_DIR $writable
-        if (Test-Path $p) {
-            & icacls $p /grant:r "${svc}:(OI)(CI)M" /T /Q 2>$null | Out-Null
+    # Native takeown writes to stderr even on success; with
+    # $ErrorActionPreference=Stop PowerShell 5.1 turns any stderr line into a
+    # terminating error, so run it with Continue and check $LASTEXITCODE.
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    # Self-heal ownership first: a freshly created tree has only inherited ACEs,
+    # and stripping inheritance on such an object removes every ACE (empty DACL),
+    # locking the tree out mid-command. takeown uses SeRestorePrivilege and
+    # still works on an empty-DACL object.
+    & takeown /f $APP_DIR /r /d y /a 2>$null | Out-Null
+    $takeExit = $LASTEXITCODE
+    $ErrorActionPreference = $eap
+    if ($takeExit -ne 0) { throw "ACL hardening failed: takeown exit $takeExit" }
+
+    $all = @(Get-Item $APP_DIR) + @(Get-ChildItem -Path $APP_DIR -Recurse -Force -ErrorAction SilentlyContinue)
+    $fixed = 0; $failed = 0
+    foreach ($item in $all) {
+        $path = $item.FullName
+        try {
+            $isDir = $item.PSIsContainer
+            $inWritable = $false
+            foreach ($rel in $writableRel) {
+                $base = Join-Path $APP_DIR $rel
+                if ($path -eq $base -or $path.StartsWith($base + "\")) { $inWritable = $true; break }
+            }
+            $svcRights = if ($inWritable) { [System.Security.AccessControl.FileSystemRights]::Modify }
+                         else { [System.Security.AccessControl.FileSystemRights]::ReadAndExecute }
+            if ($isDir) {
+                $sec = New-Object System.Security.AccessControl.DirectorySecurity
+                $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+            } else {
+                $sec = New-Object System.Security.AccessControl.FileSecurity
+                $inherit = [System.Security.AccessControl.InheritanceFlags]::None
+            }
+            $prop = [System.Security.AccessControl.PropagationFlags]::None
+            $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit, $prop, [System.Security.AccessControl.AccessControlType]::Allow)))
+            $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($admins, [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit, $prop, [System.Security.AccessControl.AccessControlType]::Allow)))
+            $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($interactive, [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit, $prop, [System.Security.AccessControl.AccessControlType]::Allow)))
+            $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($svc, $svcRights, $inherit, $prop, [System.Security.AccessControl.AccessControlType]::Allow)))
+            $sec.SetAccessRuleProtection($true, $false)
+            Set-Acl -Path $path -AclObject $sec -ErrorAction Stop
+            $fixed++
+        } catch {
+            $failed++
+            Write-Log "WARN: ACL set failed on $path : $($_.Exception.Message)"
         }
     }
-    if ($LASTEXITCODE -ne 0) { throw "ACL hardening failed (icacls exit $LASTEXITCODE)" }
-    Write-Log "ACLs hardened: inherited BUILTIN\Users access removed from $APP_DIR."
+    if ($failed -gt 0) { throw "ACL hardening failed on $failed of $($all.Count) objects under $APP_DIR" }
+    Write-Log "ACLs hardened: inherited BUILTIN\Users access removed from $APP_DIR ($fixed objects)."
 }
 
 # ---------------------------------------------------------------- checks
@@ -210,8 +263,8 @@ if ($RotateKey) {
     $apiKey = New-ApiKey
     Write-Log "Generating a FRESH API key (-RotateKey requested)."
 } elseif (Test-Path $envFile) {
-    $existing = (Select-String -Path $envFile -Pattern '^STUDYSYNC_API_KEY=(.+)$' -ErrorAction SilentlyContinue | Select-Object -First 1).Matches.Groups[1].Value
-    if ($existing) { $apiKey = $existing }
+    $existingMatch = Select-String -Path $envFile -Pattern '^STUDYSYNC_API_KEY=(.+)$' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($existingMatch) { $existing = $existingMatch.Matches.Groups[1].Value }
 }
 if (-not $apiKey) {
     $apiKey = New-ApiKey

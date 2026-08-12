@@ -32,7 +32,11 @@ New-Item -ItemType Directory -Force -Path $LOG_DIR | Out-Null
 function Write-Log($msg) {
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | $msg"
     Write-Host $line
-    Add-Content -Path $installLog -Value $line -Encoding UTF8
+    try {
+        Add-Content -Path $installLog -Value $line -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        Write-Host "WARN: could not write log ($installLog): $($_.Exception.Message)" -ForegroundColor Yellow
+    }
 }
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
