@@ -102,7 +102,7 @@ which recreates the task and starts it).
 
 ## Backup
 
-Automatic nightly at 02:00 (`StudySyncNightly` → `backup.exe`). Backups land in
+Automatic nightly at 17:30 (`StudySyncNightly` → `backup.exe`). Backups land in
 `C:\ProgramData\StudySync\backups\studysync_<timestamp>.zip` and are pruned
 after **30 days** (`STUDYSYNC_BACKUP_RETENTION_DAYS`).
 

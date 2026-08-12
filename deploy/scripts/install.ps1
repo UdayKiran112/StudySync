@@ -402,10 +402,10 @@ $taskPrincipal = New-ScheduledTaskPrincipal -UserId $taskUser -LogonType Interac
 
 # Daily backup at 02:00
 $backupAction = New-ScheduledTaskAction -Execute "$APP_DIR\scripts\backup.exe" -WorkingDirectory $APP_DIR
-$backupTrigger = New-ScheduledTaskTrigger -Daily -At 2:00am
+$backupTrigger = New-ScheduledTaskTrigger -Daily -At 5:30PM
 $backupSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
 Register-ScheduledTask -TaskName "StudySyncNightly" -Action $backupAction -Trigger $backupTrigger -Principal $taskPrincipal -Settings $backupSettings -Description "Nightly StudySync database backup" -Force | Out-Null
-Write-Log "Scheduled task 'StudySyncNightly' registered (02:00 daily, $taskUser, battery-safe)."
+Write-Log "Scheduled task 'StudySyncNightly' registered (17:30 daily, $taskUser, battery-safe)."
 
 # Health watchdog every 5 minutes (elevated so it can restart a service and
 # auto-restore the database from a backup when it is missing/corrupt). The

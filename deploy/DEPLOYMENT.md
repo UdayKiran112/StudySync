@@ -88,7 +88,7 @@ other users' files, secrets, or the OS. The account is created by
 
 | Task | Schedule | Runs |
 | --- | --- | --- |
-| `StudySyncNightly` | daily 02:00 | `backup.exe` (30-day local + Google Drive mirror) |
+| `StudySyncNightly` | daily 17:30 | `backup.exe` (30-day local + Google Drive mirror) |
 | `StudySyncServiceCheck` | every 5 min | `healthcheck.exe` (restarts a down service; auto-restores a missing/corrupt database from backup) |
 
 Tasks run as the installing (admin) user, `Highest`, battery-safe. Note: on some
