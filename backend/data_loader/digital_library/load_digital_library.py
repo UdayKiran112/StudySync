@@ -94,6 +94,7 @@ if str(common_dir) not in sys.path:
 from common import (
     Canonicalizer,
     CLOSE_TIME,
+    NON_SUBSCRIPTION_PLATFORM_KEYS,
     OPEN_TIME,
     canonicalize_subscription_name,
     collapse_ws,
@@ -257,6 +258,22 @@ class DigitalLibraryLoader:
         platform = canonicalize_subscription_name(
             platform_val, self.subscription_canon, context=f"line {line_no}"
         )
+        # Defensive guard (clean_student_data.py already forces these to
+        # 'Own'): publicly-available / non-product platforms (YouTube,
+        # Telegram, RRB exam prep, data-entry junk like a student ID '6308'
+        # or a truncated 'y') must NEVER become a subscription, no matter
+        # what Account Type the cleaned CSV happens to say. Checked both
+        # before (raw spelling) and after (canonical name) canonicalization.
+        if normalize_key(platform_val) in NON_SUBSCRIPTION_PLATFORM_KEYS or (
+            normalize_key(platform) in NON_SUBSCRIPTION_PLATFORM_KEYS
+        ):
+            if account_type != "Own Account":
+                self.log_auto(
+                    "account_type_forced_own",
+                    f"line {line_no}: platform {platform_val!r} forced to 'Own Account' "
+                    "(public/free or data-entry junk - never a subscription)",
+                )
+            account_type = "Own Account"
         sub_id = None
         if account_type == "Library Subscription":
             sub_id = self.get_or_create_subscription(platform, date, line_no)

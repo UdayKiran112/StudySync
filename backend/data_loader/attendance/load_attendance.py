@@ -10,8 +10,13 @@ Usage:
 
 Requires that library.db already exists and its `students` table is
 already populated (e.g. via load_members.py) -- every row here is linked
-to an existing student purely by "Student ID", never by name (the name
-column in this export is unreliable/misspelled).
+to an existing student by "Student ID". Before that link is made, the
+entered ID is verified against the roster by ALSO checking the entered
+Student Name (id_name_corrector): a row whose ID belongs to a student with
+an unrelated name is re-attached to the roster student the punch actually
+names, but only on high-confidence evidence (unique name match, or a near-ID
+match among several name matches). Ambiguous/uncertain rows are left as-is
+and flagged for manual review, never auto-corrected.
 
 WHY THIS READS THE CLEANED CSV INSTEAD OF THE RAW EXPORT
 -----------------------------------------------------------
@@ -98,6 +103,8 @@ from common import (
     parse_time,
 )
 
+import id_name_corrector
+
 LUNCH_START_MIN = 13 * 60  # 13:00
 LUNCH_END_MIN = 14 * 60  # 14:00
 
@@ -159,12 +166,15 @@ def main():
     existing_student_ids = {
         r[0] for r in conn.execute("SELECT student_id FROM students")
     }
+    roster = {r[0]: r[1] for r in conn.execute("SELECT student_id, name FROM students")}
+    name_index = id_name_corrector.build_index(roster)
 
     counts = {"attendance": 0}
     autocorrection_counts = {
         "lunch_break_excluded": 0,
         "checkout_pm_offset_corrected": 0,
         "multiple_swipes_merged": 0,
+        "student_id_corrected": 0,
     }
 
     # Each error/correction type gets its own list, and its own output file
@@ -181,6 +191,7 @@ def main():
         "insert_failed_other": [],  # any other insert failure
         "checkout_pm_offset_corrected": [],
         "multiple_swipes_merged": [],
+        "student_id_corrected": [],
     }
 
     skipped_id = 0
@@ -213,6 +224,25 @@ def main():
                 continue
             total_rows += 1
             student_id = int(id_raw)
+
+            # Verify the entered ID against the roster by name: a row whose
+            # ID belongs to a student with an unrelated name is re-attached to
+            # the roster student the punch actually names (high-confidence
+            # evidence only -- see id_name_corrector.correct).
+            entered_name = id_name_corrector.norm(row.get("Student Name", ""))
+            corrected_id, id_reason = id_name_corrector.correct(
+                entered_name, student_id, roster, name_index
+            )
+            if corrected_id is not None:
+                detail_logs["student_id_corrected"].append(
+                    f"line {line_no}: student {student_id} '{row.get('Student Name')}' "
+                    f"mismatches roster name '{roster.get(student_id)}' -> "
+                    f"re-attached to student {corrected_id} "
+                    f"'{roster[corrected_id]}' ({id_reason} name match)"
+                )
+                autocorrection_counts["student_id_corrected"] += 1
+                student_id = corrected_id
+
             if student_id not in existing_student_ids:
                 skipped_id += 1
                 detail_logs["student_id_not_found"].append(

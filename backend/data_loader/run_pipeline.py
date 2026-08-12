@@ -11,9 +11,13 @@ Steps, in order:
      (this is where the operating-hours / 12h-clock corrections, the
      offline-exam section builder, and the book-ID junk filter live);
   3. organize_internal_marks.py                  -> marks/internal_marks_organized.csv
-  4. rebuild backend/library.db from schema.sql (wipe + recreate);
-  5. load_members.py                             -> students (all FKs depend on it);
-   6. section loaders, in dependency-safe order:
+   4. snapshot existing attendance + device_punches
+      (merge_attendance.py --mode snapshot, run BEFORE the rebuild so the
+      live rows survive the wipe -- the cleaned attendance.csv only covers
+      2025-04-01 onward, and nothing recreates device_punches);
+   5. rebuild backend/library.db from schema.sql (wipe + recreate);
+   6. load_members.py                             -> students (all FKs depend on it);
+    7. section loaders, in dependency-safe order:
        load_attendance, load_digital_library, load_offline_library,
        load_coaching,
        load_exam_marks (marks register -- the ONLY source of real scores;
@@ -21,18 +25,21 @@ Steps, in order:
        load_offline_exam (offline-exam sittings WITHOUT a score in the
        register are not inserted -- marks_obtained is NOT NULL -- and are
        flagged for manual review instead);
-   7. backfill_renewals.py                     -> students.renewal_count / status
-      (replays the attendance auto-renewal math once attendance is loaded,
-      so current members are never left marked 'Inactive' at rest);
-   8. validate_database.py                     -> final gate: abort if any
-      invariant is broken (marks must never exceed an exam's max, no orphan
-      rows, no impossible averages, no duplicates);
-   9. consolidate the manual-review ledger into one report and print final
-      row counts.
+   8. merge_attendance.py --mode merge          -> replay the snapshot back
+      into the rebuilt DB: keep every existing record as-is (source of
+      truth), add what the pipeline genuinely missed, restore device
+      punches (never overwrite, never duplicate);
+    9. backfill_renewals.py                     -> students.renewal_count / status
+       (runs AFTER the merge so the replay's attendance feeds the math);
+   10. validate_database.py                     -> final gate: abort if any
+       invariant is broken (marks must never exceed an exam's max, no orphan
+       rows, no impossible averages, no duplicates);
+   11. consolidate the manual-review ledger into one report and print final
+       row counts.
 
 Everything a loader cannot safely auto-correct is written to the shared
-review ledger during step 6 and rendered into the consolidated report in
-step 8, so a human gets one file to review instead of digging through each
+review ledger during step 7 and rendered into the consolidated report in
+step 10, so a human gets one file to review instead of digging through each
 loader's individual report.
 
 Reports: every report and log the pipeline produces lands in the shared
@@ -77,6 +84,11 @@ MARKS_REGISTER = BASE / "marks" / "internal_marks_organized.csv"
 LEDGER = common.LEDGER_PATH
 REVIEW_REPORT = common.LEDGER_DIR / "manual_review_report.txt"
 PIPELINE_REPORT = common.REPORTS_DIR / "pipeline_run_report.txt"
+
+# Pre-rebuild snapshot of the live attendance + device punches, replayed
+# into the freshly-rebuilt DB after the section loaders (see
+# merge_attendance.py). Lives under the gitignored reports/ tree.
+ATTENDANCE_SNAPSHOT = common.REPORTS_DIR / "attendance" / "pre_pipeline_attendance_backup.json"
 
 SECTIONS = [
     ("attendance", "attendance/attendance.csv", "attendance/load_attendance.py"),
@@ -238,8 +250,26 @@ def main():
 
     run_step(args.python, BASE / "organize_internal_marks.py", [], allow_fail=True)
 
+    # Capture the existing attendance + device punches BEFORE the wipe so the
+    # rebuild below can't destroy them (the cleaned attendance.csv only covers
+    # 2025-04-01 onward, and nothing recreates device_punches).
+    run_step(
+        args.python,
+        BASE / "merge_attendance.py",
+        ["--mode", "snapshot", "--db", DB, "--out", ATTENDANCE_SNAPSHOT],
+    )
+
     rebuild_db(args.python)
     load_sections(args.python)
+
+    # Replay the snapshot into the rebuilt DB: existing records win (never
+    # overwritten, never duplicated), genuinely-missing rows are added, and
+    # device punches are restored.
+    run_step(
+        args.python,
+        BASE / "merge_attendance.py",
+        ["--mode", "merge", "--db", DB, "--in", ATTENDANCE_SNAPSHOT],
+    )
 
     run_step(
         args.python,

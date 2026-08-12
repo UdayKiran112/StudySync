@@ -49,6 +49,7 @@ import pandas as pd
 
 from common import (
     CLOSE_TIME,
+    NON_SUBSCRIPTION_PLATFORM_KEYS,
     OPEN_TIME,
     SUBSCRIPTION_ALIASES,
     Canonicalizer,
@@ -63,9 +64,11 @@ from common import (
 # CONFIG
 # --------------------------------------------------------------------------
 
-# How many non-data rows sit above the real header row in the raw export
-# (in this sheet: 2 blank rows, then the header row).
-HEADER_SKIPROWS = 2
+# The raw export's real header row always carries these exact column names.
+# Older exports had a couple of blank rows above it; newer ones put it on
+# row 1 -- load_raw() scans for the row that carries them instead of
+# assuming a fixed position, so either layout parses identically.
+HEADER_COLUMNS = {"Sl.No", "ID NO", "Name of the Student", "Date", "IN", "OUT"}
 
 # Known misspellings / casing variants -> canonical value
 GENDER_MAP = {
@@ -320,18 +323,35 @@ class ErrorLog:
 # --------------------------------------------------------------------------
 
 
+def _find_header_row(path: Path) -> int:
+    """Locate the raw export's real header row. Older sheets had blank rows
+    above the header; newer ones put it on row 1 -- scan the first rows for
+    one whose cells carry the expected column names instead of assuming a
+    fixed position."""
+    expected = HEADER_COLUMNS
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        for i, row in enumerate(csv.reader(f)):
+            if expected.issubset({c.strip() for c in row}):
+                return i
+    raise ValueError(
+        f"could not locate the header row in {path} -- expected columns "
+        f"{sorted(expected)}"
+    )
+
+
 def load_raw(path: Path) -> pd.DataFrame:
     """Load the export, drop decorative blank rows/columns, keep an
     'Excel Row' reference column that points back to the original file."""
 
-    df = pd.read_csv(path, skiprows=HEADER_SKIPROWS, dtype=str, low_memory=False)
+    header_row = _find_header_row(path)
+    df = pd.read_csv(path, skiprows=header_row, dtype=str, low_memory=False)
 
     # Drop the trailing unlabeled columns Excel/Sheets sometimes exports
     df = df.loc[:, ~df.columns.str.match(r"^Unnamed")]
 
-    # Row N of this dataframe is line (N + HEADER_SKIPROWS + 2) of the raw file
+    # Row N of this dataframe is line (N + header_row + 2) of the raw file
     # (+1 for the header row itself, +1 to go from 0-based to 1-based).
-    df["Excel Row"] = df.index + HEADER_SKIPROWS + 2
+    df["Excel Row"] = df.index + header_row + 2
 
     # Strip whitespace on every text cell
     for col in df.columns:
@@ -1033,6 +1053,29 @@ def build_digital_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
                     "Purpose recorded with no Account Name (platform) - cannot be loaded",
                 )
                 continue
+            # Publicly-available / non-product platforms (YouTube, Telegram,
+            # RRB exam prep, junk like a student ID '6308' or a truncated
+            # 'y') are never subscriptions, even when the 'Online
+            # Subscription' column is filled in -- force them to 'Own' so
+            # no subscriptions master row can be created for them.
+            platform_account_type = (
+                "Own"
+                if normalize_key(platform) in NON_SUBSCRIPTION_PLATFORM_KEYS
+                else account_type
+            )
+            if platform_account_type != account_type:
+                log.add(
+                    "digital_library",
+                    "corrected",
+                    row["Excel Row"],
+                    row["Sl.No"],
+                    row["ID NO"],
+                    row["Name of the Student"],
+                    f"Platform '{platform}' is not a subscription product "
+                    "(public/free or data-entry junk) - Account Type forced to 'Own' "
+                    "instead of 'Library Subscription'",
+                    f"Account Name='{platform}' | Online Subscription='{val}'",
+                )
             records.append(
                 {
                     "Serial No.": row["Sl.No"],
@@ -1040,7 +1083,7 @@ def build_digital_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
                     "Student ID": row["ID NO"],
                     "Student Name": row["Name of the Student"],
                     "Account Name": platform,
-                    "Account Type": account_type,
+                    "Account Type": platform_account_type,
                     "Purpose": purpose,
                     "In Time": digital_in,
                     "Out Time": digital_out,

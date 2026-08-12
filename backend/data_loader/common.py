@@ -744,6 +744,17 @@ SUBSCRIPTION_ALIASES = {
     for v in variants
 }
 
+# Platforms that must NEVER be recorded as a library subscription, no matter
+# what the "Online Subscription" column says. These are publicly available
+# resources (YouTube, Telegram -- free apps; RRB -- railway-recruitment
+# exam materials that are public) or data-entry junk that is not a product
+# at all (a student ID typed into the Account Name column, e.g. "6308"; a
+# truncated single letter like "y"). Keys are pre-normalized with
+# normalize_key, exactly like SUBSCRIPTION_ALIASES. Rows for these platforms
+# are forced to 'Own Account' in clean_student_data.py AND load_digital_library.py
+# so no subscriptions master row can ever be created for them.
+NON_SUBSCRIPTION_PLATFORM_KEYS = {"youtube", "telegram", "rrb", "6308", "y"}
+
 
 def canonicalize_subscription_name(raw, canon, context=""):
     """Canonicalize a platform/subscription Account Name so the same real
