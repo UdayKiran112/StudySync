@@ -25,12 +25,12 @@ SQLite database (WAL)   C:\ProgramData\StudySync\data\library.db
 The API service advertises the LAN name **`http://studysync.local`** over mDNS
 (no PC rename needed). The advertisement self-heals: if the machine's IP changes
 (another Wi-Fi, DHCP), it re-registers within ~60 s. Apple/Android devices
-resolve it natively; Windows PCs need Apple Bonjour (kept at `tools\Bonjour64.msi`
-for staff PCs). On a server that already runs Apple's Bonjour Service, the API
-publishes the name *through* Bonjour using the Bonjour client API (dnssd.dll),
-so Bonjour keeps owning UDP 5353 and the two coexist instead of fighting. Only
-when no Bonjour is installed does the API run its own mDNS responder for the
-name. See OPERATIONS.md.
+resolve it natively; the installer also installs **Apple Bonjour** (silently,
+from `tools\Bonjour64.msi`) so Windows PCs resolve the same name. Because Bonjour
+is then present, the API publishes the name *through* Bonjour using the Bonjour
+client API (dnssd.dll) — Bonjour keeps owning UDP 5353 and the two coexist
+instead of fighting. Only when Bonjour is missing does the API run its own mDNS
+responder for the name. See OPERATIONS.md.
 
 No Python, Node, or npm is needed on the target machine. Everything ships inside
 the installer as compiled executables (PyInstaller bundle + Caddy binary).
@@ -187,10 +187,10 @@ The Inno script (`deploy\installer\studysync.iss`) is deliberately thin:
      inbound access, and a machine behind a public IP cannot expose port 80
      to the internet. Windows is no longer asked to reclassify Public
      networks (the old "switch to Private" step is removed),
-   - keeps Apple Bonjour (`tools\Bonjour64.msi`) on the server for Windows
-     staff PCs. If that same PC also runs the server, install the MSI once and
-     the API publishes `studysync.local` *through* Bonjour rather than running
-     its own responder,
+   - installs Apple Bonjour (`tools\Bonjour64.msi`) silently BEFORE the API
+     service starts, giving Windows staff PCs a native `*.local` resolver. The
+     API then publishes `studysync.local` *through* Bonjour (Bonjour client
+     API, dnssd.dll) rather than running its own responder,
    - registers the two scheduled tasks,
    - writes the desktop shortcut.
 5. Uninstall: Control Panel → StudySync runs `uninstall.ps1 -Yes`, which makes a

@@ -264,7 +264,7 @@ if ($RotateKey) {
     Write-Log "Generating a FRESH API key (-RotateKey requested)."
 } elseif (Test-Path $envFile) {
     $existingMatch = Select-String -Path $envFile -Pattern '^STUDYSYNC_API_KEY=(.+)$' -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($existingMatch) { $existing = $existingMatch.Matches.Groups[1].Value }
+    if ($existingMatch) { $apiKey = $existingMatch.Matches.Groups[1].Value }
 }
 if (-not $apiKey) {
     $apiKey = New-ApiKey
@@ -291,6 +291,35 @@ if (Test-Path $envFile) {
 # NOTE: deliberately NOT logging the key value here. install.log is ACL-locked
 # now, but a secret that never gets written is a secret that can never leak.
 Write-Log "API key written to $envFile"
+
+# --------------------------------------------- Bonjour for Windows
+# Apple Bonjour gives Windows machines a native *.local (mDNS) resolver, so
+# staff PCs can reach http://studysync.local by name instead of a raw IP. This
+# installer installs it silently (/qn), so no manual per-PC setup is needed.
+# The API detects a running Bonjour Service and publishes the name THROUGH it
+# (Bonjour client API, dnssd.dll, see backend/bonjour_mdns.py) rather than
+# running its own zeroconf responder, so the two never fight over UDP 5353.
+# MUST run BEFORE the API service starts: if the API were first to bind UDP
+# 5353 and Bonjour came afterwards, two responders would conflict. If the MSI
+# is missing we degrade gracefully to a warning - LAN devices fall back to
+# http://<server-IP>.
+$bonjourMsi = "$APP_DIR\tools\Bonjour64.msi"
+$bonjourSvc = Get-Service -Name "Bonjour Service" -ErrorAction SilentlyContinue
+if ($bonjourSvc) {
+    Write-Log "Bonjour for Windows already installed - the API will publish studysync.local through it."
+} elseif (Test-Path $bonjourMsi) {
+    Write-Log "Installing Apple Bonjour from $bonjourMsi (silent, non-interactive)..."
+    $bonjourLog = Join-Path $LOG_DIR "bonjour-install.log"
+    $p = Start-Process msiexec.exe -ArgumentList "/i", "`"$bonjourMsi`"", "/qn", "/norestart", "/l*v", "`"$bonjourLog`"" -Wait -PassThru
+    # 0 = success, 3010 = success but a restart is required.
+    if ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) {
+        Write-Log "Apple Bonjour installed successfully (exit $($p.ExitCode))."
+    } else {
+        Write-Log "WARN: Bonjour install returned exit code $($p.ExitCode) (see $bonjourLog); Windows PCs can still use http://<server-IP>."
+    }
+} else {
+    Write-Log "WARN: Bonjour64.msi not found in tools; Windows PCs will need http://<server-IP> instead of http://studysync.local."
+}
 
 # ------------------------------------------------------------ services
 $apiBin   = "$APP_DIR\config\winsw\studysync-api.exe"
@@ -372,25 +401,6 @@ New-NetFirewallRule -DisplayName $mdnsRule -Direction Inbound -Protocol UDP `
     -LocalPort 5353 -Action Allow -Profile Private, Domain | Out-Null
 Write-Log "Firewall rule created for inbound mDNS (UDP 5353, Private/Domain only)."
 
-# ------------------------------------------------- Bonjour for Windows (client PCs only)
-# The StudySync server advertises http://studysync.local itself over mDNS
-# (the API's zeroconf responder), so it must NOT also run Apple Bonjour --
-# two mDNS responders on one machine fight over UDP 5353 and break the name.
-# Bonjour is only for OTHER Windows PCs on the LAN, which cannot resolve
-# *.local without it (Windows' built-in DNS client only resolves the machine's
-# own hostname). The MSI stays under $APP_DIR\tools so staff PCs can be set
-# up from the server; it is deliberately NOT installed here. If Bonjour is
-# already present on this server (installed for other reasons), the API skips
-# its own mDNS advertisement rather than conflict with it.
-$bonjourMsi = "$APP_DIR\tools\Bonjour64.msi"
-if (Get-Service -Name "Bonjour Service" -ErrorAction SilentlyContinue) {
-    Write-Log "Bonjour already installed on this server - the API will skip its own mDNS advertisement (see api.log)."
-} elseif (Test-Path $bonjourMsi) {
-    Write-Log "Bonjour MSI kept at $APP_DIR\tools\Bonjour64.msi for Windows staff PCs (not installed here - the server advertises mDNS itself)."
-} else {
-    Write-Log "WARN: Bonjour64.msi not found in tools; Windows staff PCs will need http://<server-IP> instead of http://studysync.local."
-}
-
 # -------------------------------------------------- scheduled tasks
 # Tasks run as the installing (admin) user with an interactive logon.
 # Note: on some machines security software silently deletes SYSTEM-run
@@ -400,7 +410,7 @@ if (Get-Service -Name "Bonjour Service" -ErrorAction SilentlyContinue) {
 $taskUser = "$env:USERDOMAIN\$env:USERNAME"
 $taskPrincipal = New-ScheduledTaskPrincipal -UserId $taskUser -LogonType Interactive -RunLevel Highest
 
-# Daily backup at 02:00
+# Daily backup at 17:30
 $backupAction = New-ScheduledTaskAction -Execute "$APP_DIR\scripts\backup.exe" -WorkingDirectory $APP_DIR
 $backupTrigger = New-ScheduledTaskTrigger -Daily -At 5:30PM
 $backupSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
@@ -451,6 +461,5 @@ Write-Host "  API key: $apiKey" -ForegroundColor Yellow
 Write-Host "  Save the API key somewhere safe. Staff enter it ONCE per browser in Settings." -ForegroundColor Yellow
 Write-Host "  Services run as the low-privilege '$SVC_ACCOUNT' account (not LocalSystem)." -ForegroundColor Cyan
 Write-Host "  After a key leak: run scripts\rotate-key.ps1 (or re-run this script with -RotateKey)." -ForegroundColor Cyan
-Write-Host "  LAN access: Apple/Android use http://studysync.local directly; Windows PCs need" -ForegroundColor Cyan
-Write-Host "  Apple Bonjour (kept at $APP_DIR\tools\Bonjour64.msi - install it on each staff PC," -ForegroundColor Cyan
-Write-Host "  NOT on this server, which advertises the name itself)." -ForegroundColor Cyan
+Write-Host "  LAN access: every device uses http://studysync.local - Apple Bonjour was" -ForegroundColor Cyan
+Write-Host "  installed automatically by this installer so Windows PCs resolve the name too." -ForegroundColor Cyan

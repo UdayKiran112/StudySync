@@ -221,17 +221,15 @@ How the device resolves it depends on the OS:
 - The advertisement is **self-healing**: the API re-resolves the machine's IP
   every 60 s and re-registers the name if it changed. Moving the laptop to
   another Wi-Fi (different IP) is picked up within a minute with no restart.
-- If the server already runs Apple's Bonjour Service, the API publishes
+- Because the installer installs Apple Bonjour, the API publishes
   `studysync.local` **through** it (Bonjour client API, dnssd.dll) — Bonjour
   keeps owning UDP 5353 and answers for the name, so the two coexist. Only when
-  no Bonjour is installed does the API run its own mDNS responder.
+  Bonjour is missing does the API run its own mDNS responder.
 - **Windows PCs need Apple Bonjour** to resolve `*.local` names (Windows' built-in
-  DNS client only resolves its own hostname). Bonjour is not auto-installed on
-  the server; the installer keeps a copy
-  at `C:\ProgramData\StudySync\tools\Bonjour64.msi`. For each Windows staff PC:
-  double-click that MSI (or
-  `\\<server-name>\C$\ProgramData\StudySync\tools\Bonjour64.msi`) once, then
-  `http://studysync.local` resolves. If a PC lacks Bonjour, use `http://Myth`.
+  DNS client only resolves its own hostname). The installer installs Bonjour
+  automatically, so `http://studysync.local` resolves on the machine it runs on
+  (and stays on any machine that has it). If a PC lacks Bonjour, use
+  `http://<server-name>` (e.g. `http://Myth`) or `http://<server-IP>`.
 - Staff enter the API key once per browser in Settings.
 
 ### Using it on another network (demo / venue)
