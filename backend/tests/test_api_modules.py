@@ -402,5 +402,57 @@ class ApiModuleTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/holidays").json(), [])
 
 
+    def test_16_device_config_endpoints(self):
+        # Settings: GET /api/zkteco/device reports what StudySync is wired to,
+        # POST persists an operator-picked device, DELETE falls back to .env.
+        from unittest import mock
+
+        import routers.zkteco as zk_router
+
+        status = self.request("GET", "/api/zkteco/device").json()
+        self.assertIn(status["source"], {"none", "env", "discovered"})
+        self.assertEqual(status["configured"], status["source"] != "none")
+
+        # Pick 192.0.2.55 (TEST-NET); mock the serial probe so the test never
+        # touches the network, then confirm the runtime config took effect.
+        with mock.patch.object(zk_router, "probe_device", return_value=None):
+            response = self.request(
+                "POST", "/api/zkteco/device", json={"ip": "192.0.2.55"}
+            )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["configured"])
+        self.assertEqual(body["source"], "discovered")
+        self.assertEqual(body["ip"], "192.0.2.55")
+        self.assertEqual(body["discovered_ip"], "192.0.2.55")
+
+        # An empty IP is rejected.
+        self.assertEqual(
+            self.request("POST", "/api/zkteco/device", json={"ip": "  "}).status_code,
+            422,
+        )
+
+        # Discovery (mocked: no hardware) must be a clean, shape-correct 200.
+        with mock.patch.object(
+            zk_router,
+            "discover",
+            return_value={
+                "scanned_subnets": ["192.0.2.0/24"],
+                "scanned_hosts": 0,
+                "devices": [],
+                "elapsed_ms": 12,
+            },
+        ), mock.patch.object(zk_router, "record_scan", return_value=None):
+            scan = self.request("GET", "/api/zkteco/discover")
+        self.assertEqual(scan.status_code, 200)
+        self.assertEqual(scan.json()["scanned_subnets"], ["192.0.2.0/24"])
+        self.assertEqual(scan.json()["devices"], [])
+
+        # Forgetting the picked device un-wires it (falls back to env/none).
+        cleared = self.request("DELETE", "/api/zkteco/device")
+        self.assertEqual(cleared.status_code, 200)
+        self.assertIn(cleared.json()["source"], {"none", "env"})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

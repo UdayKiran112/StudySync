@@ -33,8 +33,9 @@ import time
 
 from database import get_connection
 from attendance_punch import ledger_retention_days, prune_old_ledger_rows
-from zkteco.config import device_config, poll_interval
+from zkteco.config import effective_device_config, poll_interval
 from zkteco.device import ZkError
+from zkteco.discovery import discovered_device_config, scan_and_cache
 from zkteco.sync import sync_attendance_from_device
 from typing import Optional
 
@@ -45,6 +46,16 @@ logger = logging.getLogger("zkteco.poller")
 # every cycle would just churn the database needlessly.
 PRUNE_INTERVAL_SECONDS = 3600
 _prune_due = time.monotonic()
+
+# Auto-heal: after this many consecutive connect failures the poller runs a
+# LAN discovery scan (throttled to SCAN_MIN_INTERVAL_SECONDS). If the device
+# answers at a new IP (its DHCP lease moved it, e.g. .101 -> .100), the new
+# address is persisted in runtime_config and syncing resumes on the next
+# cycle -- no .env edit and no restart needed.
+SCAN_AFTER_FAILURES = 3
+SCAN_MIN_INTERVAL_SECONDS = 300
+_scan_due = 0.0
+_consecutive_failures = 0
 
 
 def _buffer_min_ts(db) -> Optional[str]:
@@ -90,26 +101,81 @@ def _prune_ledger_if_due(db) -> None:
         logger.exception("ZKTeco poll: ledger prune failed; retrying next cycle.")
 
 
+def _try_heal(db, last_error: Exception) -> None:
+    """
+    Discovery fallback after repeated connect failures: scan the LAN, and if
+    the device answers (single confirmed hit) cache its current IP and retry
+    once against it. Throttled so an unreachable device never turns the
+    poller into a scan loop.
+    """
+    global _scan_due, _consecutive_failures
+    now = time.monotonic()
+    if now - _scan_due < SCAN_MIN_INTERVAL_SECONDS:
+        return
+    _scan_due = now
+    try:
+        report = scan_and_cache(db)
+    except Exception:  # never let a broken scan kill the poll cycle
+        logger.exception("ZKTeco auto-heal: discovery scan crashed.")
+        return
+    healed = discovered_device_config(db)
+    if healed is None:
+        logger.warning(
+            "ZKTeco auto-heal: device still unreachable (%s); no device found "
+            "on the LAN after %s failure(s).",
+            last_error,
+            _consecutive_failures,
+        )
+        return
+    try:
+        result = sync_attendance_from_device(db, healed)
+        db.commit()
+        _consecutive_failures = 0
+        logger.info(
+            "ZKTeco auto-heal: recovered, syncing from device at %s "
+            "(pulled=%s imported=%s).",
+            healed.ip,
+            result["pulled"],
+            result["imported"],
+        )
+    except ZkError as e:
+        logger.warning(
+            "ZKTeco auto-heal: recovery attempt against %s failed: %s",
+            healed.ip,
+            e,
+        )
+
+
 def _poll_once() -> None:
     """One synchronous sync cycle. Runs in a worker thread off the loop."""
-    config = device_config()
-    if config is None:
-        return
+    global _consecutive_failures
     db = get_connection()
     try:
-        result = sync_attendance_from_device(db, config)
-        db.commit()
-        if result["imported"]:
-            logger.info(
-                "ZKTeco poll: pulled=%s imported=%s duplicates=%s "
-                "unknown_students=%s",
-                result["pulled"],
-                result["imported"],
-                result["duplicates"],
-                result["unknown_students"],
+        config = effective_device_config(db)
+        if config is None:
+            return
+        try:
+            result = sync_attendance_from_device(db, config)
+            db.commit()
+            _consecutive_failures = 0
+            if result["imported"]:
+                logger.info(
+                    "ZKTeco poll: pulled=%s imported=%s duplicates=%s "
+                    "unknown_students=%s",
+                    result["pulled"],
+                    result["imported"],
+                    result["duplicates"],
+                    result["unknown_students"],
+                )
+        except ZkError as e:
+            _consecutive_failures += 1
+            logger.warning(
+                "ZKTeco poll failed (%s); %s consecutive failure(s).",
+                e,
+                _consecutive_failures,
             )
-    except ZkError as e:
-        logger.warning("ZKTeco poll failed (device unreachable?): %s", e)
+            if _consecutive_failures >= SCAN_AFTER_FAILURES:
+                _try_heal(db, e)
     finally:
         try:
             _prune_ledger_if_due(db)
@@ -119,8 +185,8 @@ def _poll_once() -> None:
 
 async def zkteco_poller_loop(stop_event: asyncio.Event) -> None:
     """Poll the device every interval until ``stop_event`` is set."""
-    if device_config() is None:
-        logger.info("ZKTeco polling disabled: ZK_DEVICE_IP is not set.")
+    if effective_device_config() is None:
+        logger.info("ZKTeco polling disabled: no device configured (set ZK_DEVICE_IP or find one in Settings).")
         return
 
     interval = poll_interval()

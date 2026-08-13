@@ -361,6 +361,36 @@ export interface ZkSyncResult {
   incomplete: number;
 }
 
+/** A device found during a LAN scan (mirrors ZkDiscoveredDevice). */
+export interface ZkDiscoveredDevice {
+  ip: string;
+  port: number;
+  serial: string | null;
+  device_name: string | null;
+  confirmed: boolean;
+}
+
+/** Result of a discovery scan (mirrors ZkDiscoveryResult). */
+export interface ZkDiscoveryResult {
+  scanned_subnets: string[];
+  scanned_hosts: number;
+  devices: ZkDiscoveredDevice[];
+  elapsed_ms: number;
+}
+
+/** What StudySync is currently configured to talk to (mirrors ZkDeviceConfigStatus). */
+export interface ZkDeviceConfigStatus {
+  configured: boolean;
+  /** "discovered" (runtime_config) | "env" (.env) | "none" */
+  source: "discovered" | "env" | "none";
+  ip: string | null;
+  port: number | null;
+  discovered_ip: string | null;
+  discovered_serial: string | null;
+  env_ip: string | null;
+  last_scan_at: string | null;
+}
+
 // ---------------------------------------------------------------------
 // Student profile dashboard (mirrors backend/models/dashboard.py)
 // ---------------------------------------------------------------------

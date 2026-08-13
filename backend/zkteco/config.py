@@ -121,6 +121,39 @@ def device_config() -> Optional[ZkDeviceConfig]:
     )
 
 
+def effective_device_config(db=None) -> Optional[ZkDeviceConfig]:
+    """
+    The device StudySync should talk to right now.
+
+    Precedence:
+      1. ``runtime_config.zk.device_ip`` -- the device the discovery feature
+         auto-healed to, or the operator explicitly selected in Settings.
+         Persisted in the database (writable by the service account), so it
+         survives restarts and update swaps.
+      2. ``ZK_DEVICE_IP`` in the environment -- the .env value, used as the
+         seed/first-run config and when discovery has never run.
+
+    The runtime value wins because it is always the freshest known-good
+    address: an auto-heal only records an IP after a successful connect,
+    and a DHCP re-lease (the MB360 moving from .101 to .100, say) is exactly
+    the case where the .env value goes stale.
+    """
+    from database import get_connection
+    from zkteco.discovery import discovered_device_config
+
+    owns_db = db is None
+    if owns_db:
+        db = get_connection()
+    try:
+        discovered = discovered_device_config(db)
+    finally:
+        if owns_db:
+            db.close()
+    if discovered is not None:
+        return discovered
+    return device_config()
+
+
 def poll_interval() -> int:
     """Seconds between background syncs. Clamped to >= 1s, bad values -> 3s."""
     try:

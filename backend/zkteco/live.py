@@ -84,7 +84,7 @@ from typing import Optional
 
 from database import get_connection
 from attendance_punch import capture_and_apply
-from zkteco.config import device_config, live_reconnect_seconds
+from zkteco.config import effective_device_config, live_reconnect_seconds
 from zkteco.device import build_zk
 
 logger = logging.getLogger("zkteco.live")
@@ -186,9 +186,9 @@ def _run_until_stopped(stop_event: threading.Event) -> None:
     backoff = live_reconnect_seconds()
 
     while not stop_event.is_set():
-        config = device_config()
+        config = effective_device_config()
         if config is None:
-            logger.info("ZKTeco live capture disabled: ZK_DEVICE_IP is not set.")
+            logger.info("ZKTeco live capture disabled: no device configured.")
             return
 
         zk = build_zk(config)
@@ -255,8 +255,8 @@ async def zkteco_live_loop(stop_event: asyncio.Event) -> None:
     this bridges the asyncio stop_event to a threading.Event and runs the
     actual listen loop via asyncio.to_thread.
     """
-    if device_config() is None:
-        logger.info("ZKTeco live capture disabled: ZK_DEVICE_IP is not set.")
+    if effective_device_config() is None:
+        logger.info("ZKTeco live capture disabled: no device configured.")
         return
 
     thread_stop = threading.Event()

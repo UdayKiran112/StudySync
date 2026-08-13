@@ -50,7 +50,7 @@ from zkteco.config import (
     buffer_alert_percent,
     buffer_auto_clear_enabled,
     buffer_clear_percent,
-    device_config,
+    effective_device_config,
     reconcile_interval,
 )
 from zkteco.device import (
@@ -363,11 +363,12 @@ def reconcile_once() -> dict:
     deliberately gated; everything else in this pass remains read-only
     against the device.
     """
-    config = device_config()
-    if config is None:
-        return {}
+    config = None
     db = get_connection()
     try:
+        config = effective_device_config(db)
+        if config is None:
+            return {}
         tally, logs = sync_attendance_from_device(
             db, config, source="reconcile", return_logs=True
         )
@@ -485,8 +486,8 @@ def current_sync_status() -> dict:
 
 async def zkteco_reconcile_loop(stop_event: asyncio.Event) -> None:
     """Reconcile the full device buffer every interval until stopped."""
-    if device_config() is None:
-        logger.info("ZKTeco reconciliation disabled: ZK_DEVICE_IP is not set.")
+    if effective_device_config() is None:
+        logger.info("ZKTeco reconciliation disabled: no device configured.")
         return
 
     interval = reconcile_interval()

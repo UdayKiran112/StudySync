@@ -429,3 +429,16 @@ CREATE TABLE holidays (
     notes        TEXT,
     created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ===================================
+-- RUNTIME CONFIG (operator/system key-values)
+-- ===================================
+-- Survives restarts and update swaps. NOT environment config (.env is the
+-- read-only-for-the-service-account source of truth); this is where the
+-- ZKTeco discovery feature remembers the device's current IP so attendance
+-- keeps flowing when the device's DHCP lease changes.
+CREATE TABLE runtime_config (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

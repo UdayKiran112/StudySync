@@ -108,6 +108,7 @@ def apply_runtime_schema_guards() -> None:
         )
         _ensure_device_ledger_tables(conn)
         _ensure_holidays_table(conn)
+        _ensure_runtime_config_table(conn)
 
 
 def _ensure_device_ledger_tables(conn) -> None:
@@ -199,6 +200,55 @@ def _ensure_holidays_table(conn) -> None:
         )
         """
     )
+
+
+def _ensure_runtime_config_table(conn) -> None:
+    """
+    Create the runtime-config key/value store on databases that predate it
+    (schema.sql now ships it for fresh installs). Pure additive migration:
+    idempotent, never touches existing rows.
+
+    Holds small operator/system settings that must survive restarts but are
+    NOT environment config (which lives in app\\api\\.env, read-only for the
+    service account). Used by the ZKTeco discovery feature to remember the
+    device's current IP across restarts / update swaps.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_config (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
+def get_runtime_config(conn, key: str):
+    """Value for a runtime-config key, or None when it isn't set."""
+    row = conn.execute(
+        "SELECT value FROM runtime_config WHERE key = ?", (key,)
+    ).fetchone()
+    return row["value"] if row else None
+
+
+def set_runtime_config(conn, key: str, value: str) -> None:
+    """Upsert a runtime-config value (caller commits the transaction)."""
+    conn.execute(
+        """
+        INSERT INTO runtime_config (key, value, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        """,
+        (key, value),
+    )
+
+
+def delete_runtime_config(conn, key: str) -> None:
+    """Remove a runtime-config key (caller commits the transaction)."""
+    conn.execute("DELETE FROM runtime_config WHERE key = ?", (key,))
 
 
 def _add_column_if_missing(conn, table: str, column: str, ddl: str) -> None:

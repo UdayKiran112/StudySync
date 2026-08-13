@@ -124,8 +124,15 @@ bad times, etc.) with a reference back to the source row.
 
 The backend can pull attendance logs from a ZKTeco machine (e.g. the MB260)
 using the `pyzk` library and write them into the same `attendance` table the
-front desk uses. Configure the device **server-side** with environment
-variables (never via the client):
+front desk uses. Configure the device server-side in one of two ways:
+
+- **Settings page (recommended):** open Settings → "ZKTeco attendance device",
+  scan the network, and pick the machine. The selection is persisted in the
+  database (`runtime_config`), so it survives restarts and update swaps, and it
+  takes precedence over the `.env` value. The auto-heal poller also re-scans
+  and re-points itself automatically after repeated connect failures.
+- **Environment variables** (the seed / first-run value, used when discovery
+  has never selected a device):
 
 ```powershell
 $env:ZK_DEVICE_IP = "192.168.1.201"   # required -- IP/hostname of the scanner
@@ -158,11 +165,20 @@ header as every other staff endpoint:
 - `GET /api/zkteco/info` — name, firmware, serial number, MAC, time
 - `GET /api/zkteco/users` — users enrolled on the device
 - `GET /api/zkteco/attendance?since=YYYY-MM-DD` — raw swipe logs
+- `GET /api/zkteco/discover?subnet=CIDR` — scan the LAN for devices; confirmed
+  hits first (optionally restrict with `subnet`, e.g. `192.168.0.0/24`)
+- `GET /api/zkteco/device` — which device StudySync is set to (and why:
+  discovered / env / none)
+- `POST /api/zkteco/device` — `{"ip": "192.168.1.201"}` point StudySync at a
+  device (the Settings "use this IP" action)
+- `DELETE /api/zkteco/device` — forget the picked device, fall back to `.env`
 - `POST /api/zkteco/attendance/sync`
-  — pull the buffer, apply each swipe as a check-in or check-out, and clear
-  the device buffer. Returns a tally: `pulled`, `imported`, `duplicates`,
-  `unknown_students`, `incomplete` (always 0 — lone punches are stored as
-  open sessions, never dropped).
+  — pull the buffer and apply each swipe as a check-in or check-out. Returns a
+  tally: `pulled`, `imported`, `duplicates`, `unknown_students`, `incomplete`
+  (always 0 — lone punches are stored as open sessions, never dropped). The
+  device buffer is **not** cleared (StudySync only reads; the exactly-once
+  ledger makes re-reads no-ops). Explicit archive-and-clear is a separate
+  endpoint: `POST /api/zkteco/attendance/clear`.
 
 Device `user_id`s are matched to `students.student_id` numerically, so
 enroll students on the scanner with the same numeric ID they have in

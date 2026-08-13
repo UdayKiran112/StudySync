@@ -5,7 +5,7 @@ Pydantic response models for the ZKTeco device integration endpoints.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, field_validator
 
@@ -121,3 +121,40 @@ class ZkLiveStatus(BaseModel):
     last_payload: Optional[dict] = None
     last_outcome: Optional[str] = None
     last_error: Optional[str] = None
+
+
+class ZkDiscoveredDevice(BaseModel):
+    ip: str
+    port: int
+    serial: Optional[str] = None
+    device_name: Optional[str] = None
+    confirmed: bool
+
+
+class ZkDiscoveryResult(BaseModel):
+    scanned_subnets: List[str] = []
+    scanned_hosts: int = 0
+    devices: List[ZkDiscoveredDevice] = []
+    elapsed_ms: int = 0
+    error: Optional[str] = None
+
+
+class ZkDeviceSelection(BaseModel):
+    """Operator picks a discovered device (or types an IP) in Settings."""
+
+    ip: str
+    port: int = 4370
+    comm_key: int = 0
+
+
+class ZkDeviceConfigStatus(BaseModel):
+    """What device StudySync is currently configured to talk to."""
+
+    configured: bool
+    source: str  # "discovered" (runtime_config) | "env" (.env) | "none"
+    ip: Optional[str] = None
+    port: Optional[int] = None
+    discovered_ip: Optional[str] = None
+    discovered_serial: Optional[str] = None
+    env_ip: Optional[str] = None
+    last_scan_at: Optional[str] = None
