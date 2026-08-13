@@ -25,15 +25,28 @@ WHAT THIS LOADS, PER CLEANED CSV ROW
   Book ID + Book Name       -> books (auto-created master rows) and
                                 offline_library_usage.
 
-Book titles are run through a canonicalizer (common.Canonicalizer) that
-merges pure spelling/case/spacing variants and close typos of the same
-real title, so the books table doesn't grow a new row per typo (e.g.
-'Shine India' / 'Shine india' / 'Merit Mind' / 'Merit Minds' collapsing to
-one entry). Because the same book_id can legitimately show up with several
-genuinely DIFFERENT titles (book_id looks reused rather than a stable 1:1
-catalog key), every title seen per book_id is tallied and the majority
-title wins -- finalized only after the whole CSV has been read (see
-finalize_canonical_names()).
+Book titles are run through book_cleaner.clean_title -- a curated alias
+table for the abbreviations and short forms edit-distance can't bridge
+(e.g. 'Hiteck' -> 'Hi-Tech Vijaya Rahasyam', 'G Science' -> 'General
+Science'), then the generic common.Canonicalizer for pure spelling/case/
+spacing variants and close typos -- so the books table doesn't grow a new
+row per typo (e.g. 'Shine India' / 'Shine india' / 'Merit Mind' / 'Merit
+Minds' collapsing to one entry). Because the same book_id can legitimately
+show up with several genuinely DIFFERENT titles (book_id looks reused
+rather than a stable 1:1 catalog key), every title seen per book_id is
+tallied and the majority title wins -- finalized only after the whole CSV
+has been read (see finalize_canonical_names()).
+
+NEAR-DUPLICATE BOOK IDs ARE AUTO-MERGED
+-----------------------------------------
+Once every row has been read, the same book_id in the same book can also
+appear under typo'd/transposed/junk-suffixed IDs (e.g. '5Gtech' books
+recorded as '1680', '680', '168'). finalize_canonical_names() runs
+book_cleaner.plan_id_merges over the per-title ID tallies and rewrites any
+rare near-duplicate ID's usage rows onto the most-used ID for that title,
+deleting the orphaned books row. IDs that are frequent (genuinely distinct
+catalog entries) or too different to be a typo are logged for human review,
+never merged.
 
 BOOK ID WITH NO TITLE ON ITS OWN ROW -- BACKFILLED WHERE POSSIBLE
 ---------------------------------------------------------------------
@@ -83,9 +96,9 @@ from common import (
     collapse_ws,
     log_review_item,
     module_report_dir,
-    normalize_key,
     parse_date,
 )
+from book_cleaner import clean_title, plan_id_merges, plan_title_merges, _resolve_title
 
 
 def prescan_book_titles(rows):
@@ -115,6 +128,7 @@ class OfflineLibraryLoader:
             "book_title_merged": 0,
             "book_title_majority_vote": 0,
             "book_title_backfilled": 0,
+            "book_id_merged": 0,
         }
         self.autocorrections = []
         self.review_notes = []
@@ -122,6 +136,7 @@ class OfflineLibraryLoader:
         self.book_title_canon = Canonicalizer(
             self.log_auto, self.log_review, "book_title_merged"
         )
+        self.id_title_counts = {}  # cleaned_title -> {book_id: usage_rows}
 
     def log_auto(self, category, msg):
         self.autocorrection_counts[category] = (
@@ -133,12 +148,15 @@ class OfflineLibraryLoader:
         self.review_notes.append(msg)
 
     def get_or_create_book(self, book_id, title, line_no=None):
-        canonical_title = self.book_title_canon.canonicalize(
-            title, context=f"line {line_no}, book_id {book_id!r}"
+        canonical_title = clean_title(
+            title,
+            canon=self.book_title_canon,
+            context=f"line {line_no}, book_id {book_id!r}: ",
         )
-        key = normalize_key(collapse_ws(title))
         key_counts = self.book_id_title_key_counts.setdefault(book_id, {})
-        key_counts[key] = key_counts.get(key, 0) + 1
+        key_counts[canonical_title] = key_counts.get(canonical_title, 0) + 1
+        id_counts = self.id_title_counts.setdefault(canonical_title, {})
+        id_counts[book_id] = id_counts.get(book_id, 0) + 1
 
         if book_id in self.book_cache:
             return  # final title (majority vote) synced in finalize()
@@ -156,29 +174,49 @@ class OfflineLibraryLoader:
     def finalize_canonical_names(self):
         """book_id is reused across genuinely different titles often enough
         that "first title wins" would silently keep whichever one happened
-        to load first, so every (canonicalized) title seen per book_id is
-        tallied and the majority one kept, once the full CSV has been
-        read."""
+        to load first, so every (cleaned) title seen per book_id is tallied
+        and the majority one kept, once the full CSV has been read.
+
+        Then the whole-corpus title pass (book_cleaner.plan_title_merges)
+        collapses rare titles that are near-duplicates of a more common one
+        (word-order swaps, significant misspellings, phonetic homophones),
+        and finally rare near-duplicate book IDs are merged onto the
+        most-used ID for their title (book_cleaner.plan_id_merges)."""
         updated_books = 0
         conflicted_book_ids = 0
-        for book_id, key_counts in self.book_id_title_key_counts.items():
-            tallies = {}
-            for key, cnt in key_counts.items():
-                final_title = self.book_title_canon.key_to_canonical.get(key, key)
-                tallies[final_title] = tallies.get(final_title, 0) + cnt
+        for book_id, tallies in self.book_id_title_key_counts.items():
             winner = max(tallies, key=tallies.get)
             if len(tallies) > 1:
                 conflicted_book_ids += 1
                 total = sum(tallies.values())
+                ranked = sorted(tallies.items(), key=lambda kv: -kv[1])
                 breakdown = ", ".join(
                     f"{t!r} ({c}/{total})"
-                    for t, c in sorted(tallies.items(), key=lambda kv: -kv[1])
+                    for t, c in ranked
                 )
                 self.log_auto(
                     "book_title_majority_vote",
                     f"book_id {book_id!r}: seen with {len(tallies)} different titles "
                     f"-- {breakdown} -> kept {winner!r} (majority vote)",
                 )
+                # A significant runner-up share means either the ID is reused
+                # for different real books or some rows carry a wrong ID --
+                # surface it for review rather than silently voting it away.
+                runner_title, runner_count = ranked[1]
+                if runner_count >= 2 and runner_count / total >= 0.25:
+                    msg = (
+                        f"book_id {book_id!r}: title split {winner!r} ({ranked[0][1]}/{total}) "
+                        f"vs {runner_title!r} ({runner_count}/{total}) -- reused ID or wrong "
+                        f"ID on some rows, review"
+                    )
+                    self.review_notes.append(msg)
+                    log_review_item(
+                        {
+                            "table": "books",
+                            "problem": "book_id_title_split",
+                            "detail": msg,
+                        }
+                    )
             if winner != self.book_cache.get(book_id):
                 self.conn.execute(
                     "UPDATE books SET title = ? WHERE book_id = ?", (winner, book_id)
@@ -192,6 +230,92 @@ class OfflineLibraryLoader:
                 f"finalize: re-synced {updated_books} books.title row(s) to their "
                 f"final majority title ({conflicted_book_ids} book_id(s) had "
                 f"genuinely conflicting titles, not just spelling variants)",
+            )
+
+        # Whole-corpus title pass (after majority vote, so titles are stable).
+        rebuilt = {}
+        for book_id, tallies in self.book_id_title_key_counts.items():
+            winner = max(tallies, key=tallies.get)
+            rebuilt.setdefault(winner, {})[book_id] = sum(tallies.values())
+        title_totals = {t: sum(ids.values()) for t, ids in rebuilt.items()}
+        title_merges, title_reviews = plan_title_merges(title_totals)
+        title_remap = {m["variant"]: m["canonical"] for m in title_merges}
+
+        for book_id, tallies in self.book_id_title_key_counts.items():
+            winner = max(tallies, key=tallies.get)
+            target = _resolve_title(winner, title_remap)
+            if target != self.book_cache.get(book_id):
+                self.conn.execute(
+                    "UPDATE books SET title = ? WHERE book_id = ?", (target, book_id)
+                )
+                self.book_cache[book_id] = target
+
+        for m in title_merges:
+            self.log_auto(
+                "book_title_merged",
+                f"title {m['variant']!r} ({m['variant_count']} row(s)) -> "
+                f"{m['canonical']!r} ({m['canonical_count']} row(s)), similarity "
+                f"{m['score']} ({m['kind']}) -- near-duplicate title, auto-merged",
+            )
+        for tm in title_reviews:
+            msg = (
+                f"title {tm['variant']!r} ({tm['variant_count']} row(s)) vs "
+                f"{tm['canonical']!r} ({tm['canonical_count']} row(s)), similarity "
+                f"{tm['score']} ({tm['kind']}, phonetic {tm.get('phonetic_score')}) "
+                f"-- proposed spelling {tm['canonical']!r}, review"
+            )
+            self.review_notes.append(msg)
+            log_review_item(
+                {
+                    "table": "books",
+                    "problem": f"book_title_merge_review:{tm['kind']}",
+                    "detail": msg,
+                }
+            )
+
+        # ID merges run in the unified post-title-merge space.
+        rebuilt = {}
+        for book_id, tallies in self.book_id_title_key_counts.items():
+            winner = max(tallies, key=tallies.get)
+            target = _resolve_title(winner, title_remap)
+            rebuilt.setdefault(target, {})[book_id] = sum(tallies.values())
+
+        merges, reviews = plan_id_merges(rebuilt)
+        for m in merges:
+            self.conn.execute(
+                "UPDATE offline_library_usage SET book_id = ? WHERE book_id = ?",
+                (m["canonical_id"], m["variant_id"]),
+            )
+            self.conn.execute(
+                "DELETE FROM books WHERE book_id = ?", (m["variant_id"],)
+            )
+            self.log_auto(
+                "book_id_merged",
+                f"{m['title']!r}: book_id {m['variant_id']!r} "
+                f"({m['variant_count']} row(s)) -> {m['canonical_id']!r} "
+                f"({m['canonical_count']} row(s)) -- near-duplicate ID, auto-merged",
+            )
+        for r in reviews:
+            msg = (
+                f"{r['title']!r}: book_id {r['variant_id']!r} "
+                f"({r['variant_count']} row(s)) vs canonical {r['canonical_id']!r} "
+                f"({r['canonical_count']} row(s)) -> kept separate, review ({r['reason']})"
+            )
+            if r.get("suggest"):
+                msg += f"; suggested correction {r['suggest']!r}"
+            self.review_notes.append(msg)
+            log_review_item(
+                {
+                    "table": "books",
+                    "problem": f"book_id_merge_review:{r['reason']}",
+                    "detail": msg,
+                }
+            )
+        if merges:
+            self.log_auto(
+                "book_title_merged",
+                f"finalize: merged {len(merges)} near-duplicate book_id(s) onto their "
+                f"most-used sibling",
             )
 
     def load_book_usage(
