@@ -247,7 +247,7 @@ def list_students(
         params.append(f"%{search}%")
 
     if new_this_month:
-        query += " AND date(join_date) >= date('now', 'start of month')"
+        query += " AND date(join_date) >= date('now', 'start of month') AND date(join_date) <= date('now')"
     if expiring:
         query += f" AND status = 'Active' AND {VALID_UNTIL_EXPR} >= date('now') AND {VALID_UNTIL_EXPR} <= date('now', '+30 days')"
     if present_today:
@@ -281,7 +281,8 @@ def student_summary(
         f"""SELECT COUNT(*) AS total,
         SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END) AS active,
         SUM(CASE WHEN status = 'Inactive' THEN 1 ELSE 0 END) AS inactive,
-        SUM(CASE WHEN date(join_date) >= date('now', 'start of month') THEN 1 ELSE 0 END) AS new_this_month,
+        SUM(CASE WHEN date(join_date) >= date('now', 'start of month')
+                 AND date(join_date) <= date('now') THEN 1 ELSE 0 END) AS new_this_month,
         SUM(CASE WHEN status = 'Active' AND {VALID_UNTIL_EXPR} >= date('now')
                  AND {VALID_UNTIL_EXPR} <= date('now', '+30 days') THEN 1 ELSE 0 END) AS expiring
         FROM students{where}""",
@@ -301,6 +302,7 @@ def student_summary(
     monthly_rows = db.execute(
         f"""SELECT strftime('%Y-%m', join_date) AS month, COUNT(*) AS count
         FROM students{where}{" AND" if where else " WHERE"} date(join_date) >= date('now', '-5 months', 'start of month')
+        AND date(join_date) <= date('now')
         GROUP BY month ORDER BY month""",
         params,
     ).fetchall()
