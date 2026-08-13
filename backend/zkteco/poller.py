@@ -36,6 +36,7 @@ from attendance_punch import ledger_retention_days, prune_old_ledger_rows
 from zkteco.config import device_config, poll_interval
 from zkteco.device import ZkError
 from zkteco.sync import sync_attendance_from_device
+from typing import Optional
 
 logger = logging.getLogger("zkteco.poller")
 
@@ -46,8 +47,21 @@ PRUNE_INTERVAL_SECONDS = 3600
 _prune_due = time.monotonic()
 
 
+def _buffer_min_ts(db) -> Optional[str]:
+    """Oldest record currently on the device (device_state.oldest_buffer_ts)."""
+    row = db.execute(
+        "SELECT oldest_buffer_ts FROM device_state WHERE device_serial IS NOT NULL "
+        "ORDER BY last_reconcile_at DESC LIMIT 1"
+    ).fetchone()
+    return row["oldest_buffer_ts"] if row and row["oldest_buffer_ts"] else None
+
+
 def _prune_ledger_if_due(db) -> None:
-    """Delete retention-window-expired ledger rows, at most once an hour."""
+    """
+    Delete ledger rows the device can no longer re-serve (older than the
+    oldest record it still holds), at most once an hour. When the buffer is
+    empty/unknown the retention-window fallback applies instead.
+    """
     global _prune_due
     now = time.monotonic()
     if now - _prune_due < PRUNE_INTERVAL_SECONDS:
@@ -56,14 +70,20 @@ def _prune_ledger_if_due(db) -> None:
     try:
         deleted = 0
         while True:
-            batch = prune_old_ledger_rows(db, ledger_retention_days())
+            batch = prune_old_ledger_rows(
+                db,
+                ledger_retention_days(),
+                buffer_min_ts=_buffer_min_ts(db),
+            )
             deleted += batch
             if batch == 0:
                 break
         if deleted:
             logger.info(
-                "ZKTeco poll: pruned %s stale ledger rows (%s-day retention).",
+                "ZKTeco poll: pruned %s stale ledger rows (device-oldest=%s, "
+                "%s-day retention fallback).",
                 deleted,
+                _buffer_min_ts(db) or "none",
                 ledger_retention_days(),
             )
     except Exception:  # noqa: BLE001 -- a prune failure must not kill the cycle

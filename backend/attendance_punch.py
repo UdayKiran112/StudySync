@@ -310,39 +310,45 @@ def punch_debounce_minutes() -> int:
 
 def ledger_retention_days() -> int:
     """
-    Days of ledger history the retention pruner keeps (env var
-    ZK_LEDGER_RETENTION_DAYS, default 90, clamped to >= 1). Rows older than
-    this that are no longer needed for dedup/debounce are deleted by
-    prune_old_ledger_rows() (called from the poller and from any manual
+    Days of ledger history the retention pruner keeps as its safety window
+    (env var ZK_LEDGER_RETENTION_DAYS, default 30, clamped to >= 1). Rows
+    older than this that are no longer needed for dedup/debounce are deleted
+    by prune_old_ledger_rows() (called from the poller and from any manual
     housekeeping). The debounce/dedup windows are minutes-to-a-few-days
-    deep, so a 90-day default keeps a generous audit trail while bounding
-    the ledger's footprint. Lives here rather than zkteco/config.py for the
-    same reason as punch_debounce_minutes: it is a punch-application
-    setting shared by every transport.
+    deep, and the raw record now lives in the dated ATTLOG archives (see
+    zkteco/archive.py), so 30 days is a generous safety window in the main
+    DB. Lives here rather than zkteco/config.py for the same reason as
+    punch_debounce_minutes: it is a punch-application setting shared by
+    every transport.
     """
     try:
-        return max(1, int(os.getenv("ZK_LEDGER_RETENTION_DAYS", "90")))
+        return max(1, int(os.getenv("ZK_LEDGER_RETENTION_DAYS", "30")))
     except ValueError:
-        return 90
+        return 30
 
 
 def prune_old_ledger_rows(
     db: sqlite3.Connection,
     retention_days: int = None,
     batch_size: int = 2000,
+    buffer_min_ts: Optional[str] = None,
 ) -> int:
     """
-    Delete ledger rows that are no longer needed and past the retention
-    window. Returns the number of rows deleted, capped at ``batch_size``;
-    call repeatedly (until it returns 0) to drain a deep backlog.
+    Delete ledger rows that are no longer needed. Returns the number of
+    rows deleted, capped at ``batch_size``; call repeatedly (until it
+    returns 0) to drain a deep backlog.
 
     Exactly-once dedup and the double-tap debounce only need ledger rows for
-    punches the device could still re-serve, plus any still-'pending' open
-    check-in awaiting its check-out. Once a row is 'applied' or
-    'duplicate_*' and its punch is far in the past it is pure audit: the
-    attendance table already holds the real sessions and nightly backups
-    hold the raw record. Keeping it forever is what let the ledger grow to
-    ~100k rows / ~18 MB in production.
+    punches the device could STILL re-serve. Two rules, depending on what
+    the device currently holds:
+
+      * ``buffer_min_ts`` given (the oldest record currently on the device,
+        from device_state.oldest_buffer_ts): any applied/duplicate row with
+        punch_time older than it can never be re-served by the device and is
+        safe to delete -- the dated ATTLOG archive holds the raw record.
+      * ``buffer_min_ts`` None (device buffer empty or unknown, e.g. after a
+        verified clear): fall back to the retention window
+        (ZK_LEDGER_RETENTION_DAYS, default 30).
 
     Never deletes:
       * state = 'pending'  -- an open check-in still awaiting its check-out.
@@ -351,9 +357,12 @@ def prune_old_ledger_rows(
     """
     if retention_days is None:
         retention_days = ledger_retention_days()
-    cutoff = (
-        date.today() - timedelta(days=retention_days)
-    ).strftime("%Y-%m-%d") + " 00:00:00"
+    if buffer_min_ts:
+        cutoff = buffer_min_ts
+    else:
+        cutoff = (
+            date.today() - timedelta(days=retention_days)
+        ).strftime("%Y-%m-%d") + " 00:00:00"
     today = date.today().isoformat()
     cursor = db.execute(
         """

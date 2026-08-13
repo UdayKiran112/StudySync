@@ -10,6 +10,7 @@ connections at an arbitrary device. All failures are normalised to
 leaking pyzk tracebacks.
 """
 
+import time
 from contextlib import contextmanager
 from threading import Lock
 from typing import Iterator, List, Optional
@@ -189,6 +190,32 @@ def memory_usage(config: ZkDeviceConfig) -> dict:
             "records": conn.records,
             "records_capacity": conn.rec_cap,
         }
+
+
+def clear_attendance(
+    config: ZkDeviceConfig,
+    retries: int = 2,
+    retry_delay: float = 2.0,
+) -> int:
+    """
+    Wipe the device ATTLOG buffer, then CONFIRM the wipe took effect.
+
+    The caller must have already archived the buffer (see zkteco/archive.py)
+    and verified every record has a durable DB write: clearing is
+    destructive and pyzk offers no selective delete, so this is the point of
+    no return. Some firmware applies the clear asynchronously, so the
+    confirmation re-reads a couple of times with a short delay. Returns the
+    number of records still present (0 == fully cleared).
+    """
+    with zk_connection(config) as conn:
+        _safe(conn.clear_attendance, "Clearing device attendance buffer")
+        remaining = _safe(conn.get_attendance, "Confirming attendance buffer empty")
+        for _ in range(retries):
+            if not remaining:
+                break
+            time.sleep(retry_delay)
+            remaining = _safe(conn.get_attendance, "Confirming attendance buffer empty")
+        return len(remaining)
 
 
 def device_time(config: ZkDeviceConfig) -> Optional[any]:

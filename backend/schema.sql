@@ -404,5 +404,12 @@ CREATE TABLE device_state (
     last_reconcile_at TEXT,
     last_buffer_count INTEGER,
     ledger_pending    INTEGER,
-    last_result       TEXT
+    last_result       TEXT,
+    buffer_capacity   INTEGER,
+    buffer_status     TEXT,
+    oldest_buffer_ts  TEXT,
+    last_archive_path TEXT,
+    last_archive_count INTEGER,
+    last_clear_at     TEXT,
+    clear_failures    INTEGER
 );

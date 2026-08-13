@@ -159,10 +159,33 @@ def _ensure_device_ledger_tables(conn) -> None:
             last_reconcile_at TEXT,
             last_buffer_count INTEGER,
             ledger_pending    INTEGER,
-            last_result       TEXT
+            last_result       TEXT,
+            buffer_capacity   INTEGER,
+            buffer_status     TEXT,
+            oldest_buffer_ts  TEXT,
+            last_archive_path TEXT,
+            last_archive_count INTEGER,
+            last_clear_at     TEXT,
+            clear_failures    INTEGER
         )
         """
     )
+    # Additive migration: databases created before buffer management got
+    # these columns need them added (idempotent; safe on every startup).
+    _add_column_if_missing(conn, "device_state", "buffer_capacity", "buffer_capacity INTEGER")
+    _add_column_if_missing(conn, "device_state", "buffer_status", "buffer_status TEXT")
+    _add_column_if_missing(conn, "device_state", "oldest_buffer_ts", "oldest_buffer_ts TEXT")
+    _add_column_if_missing(conn, "device_state", "last_archive_path", "last_archive_path TEXT")
+    _add_column_if_missing(conn, "device_state", "last_archive_count", "last_archive_count INTEGER")
+    _add_column_if_missing(conn, "device_state", "last_clear_at", "last_clear_at TEXT")
+    _add_column_if_missing(conn, "device_state", "clear_failures", "clear_failures INTEGER")
+
+
+def _add_column_if_missing(conn, table: str, column: str, ddl: str) -> None:
+    """Add a column to an existing table when it isn't already present."""
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
 @contextmanager

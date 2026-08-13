@@ -451,11 +451,11 @@ class AttendancePunchTests(unittest.TestCase):
         saved = os.environ.get("ZK_LEDGER_RETENTION_DAYS")
         os.environ.pop("ZK_LEDGER_RETENTION_DAYS", None)
         try:
-            self.assertEqual(attendance_punch.ledger_retention_days(), 90)
+            self.assertEqual(attendance_punch.ledger_retention_days(), 30)
             os.environ["ZK_LEDGER_RETENTION_DAYS"] = "7"
             self.assertEqual(attendance_punch.ledger_retention_days(), 7)
             os.environ["ZK_LEDGER_RETENTION_DAYS"] = "garbage"
-            self.assertEqual(attendance_punch.ledger_retention_days(), 90)
+            self.assertEqual(attendance_punch.ledger_retention_days(), 30)
             os.environ["ZK_LEDGER_RETENTION_DAYS"] = "0"
             self.assertEqual(attendance_punch.ledger_retention_days(), 1)  # clamped
             from zkteco.config import ledger_retention_days as config_retention
@@ -528,6 +528,45 @@ class AttendancePunchTests(unittest.TestCase):
         self.assertEqual(
             self.db.execute("SELECT COUNT(*) FROM device_punches").fetchone()[0], 0
         )
+
+
+    def test_30_pruner_uses_buffer_min_ts_when_device_still_holds_records(self):
+        # When the device still holds records, every applied/duplicate row
+        # older than the oldest one on the device is safe to prune (a cleared
+        # buffer can never re-serve it; the archive holds the raw record).
+        # Rows NEWER than buffer_min_ts must survive for exactly-once dedup.
+        for day in ["2024-01-31", "2026-05-01", "2026-06-10"]:
+            self._punch(1001, day + " 09:00:00")
+            self._punch(1001, day + " 17:00:00")  # 6 applied rows
+        deleted = attendance_punch.prune_old_ledger_rows(
+            self.db, retention_days=30, buffer_min_ts="2026-06-10 09:00:00"
+        )
+        self.assertEqual(deleted, 4)  # 2024-01-31 pair + 2026-05-01 pair
+
+        rows = self.db.execute(
+            "SELECT punch_time FROM device_punches ORDER BY punch_id"
+        ).fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r["punch_time"].startswith("2026-06-10") for r in rows))
+
+    def test_31_pruner_buffer_min_ts_never_deletes_pending_or_today(self):
+        self._punch(1001, "2024-01-31 09:00:00")  # lone past-day check-in -> pending
+        self._punch(1001, "2024-02-01 09:00:00")
+        self._punch(1001, "2024-02-01 17:00:00")  # applied pair (2 rows)
+        today = _today()
+        self._punch(1001, today + " 09:00:00")  # pending (live presence)
+        deleted = attendance_punch.prune_old_ledger_rows(
+            self.db, retention_days=30, buffer_min_ts="2026-01-01 00:00:00"
+        )
+        # Only the applied pair is older than the device's oldest record; the
+        # pending lone check-in and today's punches are always protected.
+        self.assertEqual(deleted, 2)
+        remaining = self.db.execute(
+            "SELECT punch_time, state FROM device_punches ORDER BY punch_id"
+        ).fetchall()
+        self.assertEqual(len(remaining), 2)
+        self.assertTrue(all(r["state"] == "pending" for r in remaining))
+        self.assertTrue(any(r["punch_time"].startswith(today) for r in remaining))
 
 
 if __name__ == "__main__":

@@ -74,8 +74,8 @@ class ZkSyncResult(BaseModel):
 
 class ZkSyncReport(BaseModel):
     """Durable device sync health: ledger pending count, per-state ledger
-    breakdown, last reconcile, and whether the device buffer is fully
-    consumed."""
+    breakdown, last reconcile, buffer fill/clear state, and whether the
+    device buffer is fully consumed."""
 
     device_serial: Optional[str] = None
     last_reconcile_at: Optional[datetime] = None
@@ -90,7 +90,28 @@ class ZkSyncReport(BaseModel):
     open_sessions: int = 0
     last_verify_verified: int = 0
     last_verify_issue_count: int = 0
+    buffer_capacity: Optional[int] = None
+    buffer_status: Optional[str] = None
+    buffer_fill_percent: Optional[float] = None
+    oldest_buffer_ts: Optional[datetime] = None
+    last_archive_path: Optional[str] = None
+    last_archive_count: Optional[int] = None
+    last_clear_at: Optional[datetime] = None
+    clear_failures: int = 0
     fully_synced: bool = False
+
+
+class ZkBufferClearResult(BaseModel):
+    """Outcome of the explicit POST /api/zkteco/attendance/clear action."""
+
+    archived: bool
+    cleared: bool
+    archive_path: Optional[str] = None
+    archive_count: int = 0
+    remaining_records: int = 0
+    verify_verified: int = 0
+    verify_issue_count: int = 0
+    buffer_status: str = ""
 
 
 class ZkLiveStatus(BaseModel):

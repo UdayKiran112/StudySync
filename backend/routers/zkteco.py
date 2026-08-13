@@ -37,10 +37,15 @@ from security import require_api_key
 from zkteco import device
 from zkteco.config import attendance_mode, device_config
 from zkteco.live import get_live_status
-from zkteco.reconcile import current_sync_status, verify_pyzk_vs_db
+from zkteco.reconcile import (
+    archive_and_clear_attlog,
+    current_sync_status,
+    verify_pyzk_vs_db,
+)
 from zkteco.sync import sync_attendance_from_device
 from models.zkteco import (
     ZkAttendanceLog,
+    ZkBufferClearResult,
     ZkDeviceInfo,
     ZkDeviceStatus,
     ZkLiveStatus,
@@ -168,6 +173,51 @@ def zk_sync_attendance(
         return ZkSyncResult(**tally)
     except device.ZkError as e:
         _device_error(e)
+
+
+@router.post("/attendance/clear", response_model=ZkBufferClearResult)
+def zk_clear_attendance(
+    db: sqlite3.Connection = Depends(get_db_dependency),
+):
+    """
+    Explicitly archive the full ATTLOG buffer and clear the device.
+
+    Pulls every record, applies anything new to the ledger, verifies each
+    pulled record has a durable DB write, archives the buffer into today's
+    dated archive database (device_punches_YYYY-MM-DD.db), then clears the
+    device and confirms the buffer is empty. This is the operator's
+    explicit override, so it proceeds regardless of ZK_BUFFER_AUTO_CLEAR --
+    but it NEVER clears unless verification is clean: a record with no
+    durable write must not be destroyed. Returns the archive path, the
+    number of records archived, and the records remaining on the device
+    (0 means fully cleared).
+    """
+    config = _config_or_503()
+    try:
+        tally, logs = sync_attendance_from_device(
+            db, config, source="manual_clear", return_logs=True
+        )
+    except device.ZkError as e:
+        _device_error(e)
+    serial = device.device_serial(config)
+    verify = verify_pyzk_vs_db(db, logs, serial)
+    if verify["issue_count"]:
+        logger.warning(
+            "Manual clear: %s of %s records have no durable write; refusing to clear.",
+            verify["issue_count"],
+            tally["pulled"],
+        )
+    result = archive_and_clear_attlog(config, logs, serial, verify, force=True)
+    return ZkBufferClearResult(
+        archived=result["buffer_archived"],
+        cleared=result["buffer_cleared"],
+        archive_path=result["archive_path"],
+        archive_count=result["archive_count"],
+        remaining_records=result["remaining_records"],
+        verify_verified=verify["verified"],
+        verify_issue_count=verify["issue_count"],
+        buffer_status=result["buffer_status"],
+    )
 
 
 @router.get("/memory", response_model=ZkMemoryUsage)
