@@ -23,6 +23,7 @@ import { StudentPicker } from "../../components/ui/StudentPicker";
 import { IdTab, StatusTab, studentStatusTone } from "../../components/ui/Tabs";
 import { Table, Thead, Th, Tr, Td } from "../../components/ui/Table";
 import { useStudentDashboard } from "../../api/dashboard";
+import { useHolidays } from "../../api/holidays";
 import { extractErrorMessage } from "../../api/client";
 import { formatDate, formatDuration, formatClockHM } from "../../lib/format";
 import { computeHolidayAwareStats } from "../../lib/attendanceStats";
@@ -103,11 +104,23 @@ function Report({
   const { student, analytics } = dashboard;
 
   // The backend's attendance_rate/streak numbers don't know the library is
-  // closed on Sundays and the 2nd/4th/5th Saturday of each month — recompute
-  // both from the raw history so a holiday never counts against a student.
+  // closed on Sundays and the 2nd/4th/5th Saturday of each month (plus any
+  // one-off closure days staff have recorded) — recompute both from the raw
+  // history so a holiday never counts against a student.
+  const { data: holidays = [] } = useHolidays();
+  const extraHolidays = useMemo(
+    () => new Set(holidays.map((h) => h.holiday_date)),
+    [holidays],
+  );
   const holidayStats = useMemo(
-    () => computeHolidayAwareStats(dashboard.attendance_history),
-    [dashboard.attendance_history],
+    () =>
+      computeHolidayAwareStats(
+        dashboard.attendance_history,
+        30,
+        new Date(),
+        extraHolidays,
+      ),
+    [dashboard.attendance_history, extraHolidays],
   );
 
   return (
@@ -199,11 +212,15 @@ function Report({
         </div>
         <p className="mt-2 text-xs text-slate-light">
           Attendance rate and streak exclude library holidays (
-          {HOLIDAY_RULE_DESCRIPTION}).
+          {HOLIDAY_RULE_DESCRIPTION}) and any additional closure days recorded
+          under Holidays.
         </p>
 
         <div className="mt-4">
-          <AttendanceCalendar history={dashboard.attendance_history} />
+          <AttendanceCalendar
+            history={dashboard.attendance_history}
+            holidays={holidays}
+          />
         </div>
       </section>
 

@@ -413,3 +413,19 @@ CREATE TABLE device_state (
     last_clear_at     TEXT,
     clear_failures    INTEGER
 );
+
+-- ===================================
+-- HOLIDAYS (one-off library closures)
+-- ===================================
+-- Days the library is closed on top of the standing rule (Sundays and the
+-- 2nd/4th/5th Saturday of each month -- see frontend/src/lib/holidays.ts).
+-- Staff add one-off closures here (e.g. a festival, a power cut) so the
+-- analytics and attendance calendar never count a closed day against a
+-- student's attendance rate or streak.
+CREATE TABLE holidays (
+    holiday_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    holiday_date DATE NOT NULL UNIQUE,
+    name         TEXT NOT NULL CHECK(length(trim(name)) > 0),
+    notes        TEXT,
+    created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

@@ -49,6 +49,7 @@ from routers import (
     offline_library,
     books,
     exams,
+    holidays,
     quizzes,
     dashboard,
     coaching,
@@ -252,6 +253,7 @@ app.include_router(offline_library.router)
 app.include_router(books.router)
 app.include_router(exams.router)
 app.include_router(exams.marks_router)
+app.include_router(holidays.router)
 app.include_router(quizzes.router)
 app.include_router(quizzes.scores_router)
 app.include_router(dashboard.router)

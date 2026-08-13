@@ -1,4 +1,4 @@
-import { isLibraryHoliday, toIsoDate } from "./holidays";
+import { isLibraryClosed, toIsoDate } from "./holidays";
 import type { Attendance } from "../api/types";
 
 export interface HolidayAwareAttendanceStats {
@@ -17,11 +17,14 @@ export interface HolidayAwareAttendanceStats {
  * Recomputes attendance rate and streak the way the library actually runs:
  * Sundays and the 2nd/4th/5th Saturday of each month don't count against a
  * student either way, since the library isn't open for them to attend.
+ * `extraHolidays` adds one-off closure dates recorded by staff (holidays API)
+ * to the same logic.
  */
 export function computeHolidayAwareStats(
   history: Attendance[],
   windowDays = 30,
-  referenceDate: Date = new Date()
+  referenceDate: Date = new Date(),
+  extraHolidays: ReadonlySet<string> = new Set()
 ): HolidayAwareAttendanceStats {
   const today = new Date(referenceDate);
   today.setHours(0, 0, 0, 0);
@@ -33,7 +36,7 @@ export function computeHolidayAwareStats(
   for (let i = 0; i < windowDays; i++) {
     const d = new Date(today);
     d.setDate(d.getDate() - i);
-    if (isLibraryHoliday(d)) continue;
+    if (isLibraryClosed(d, extraHolidays)) continue;
     openDays += 1;
     if (attendedDates.has(toIsoDate(d))) attendedDays += 1;
   }
@@ -44,7 +47,7 @@ export function computeHolidayAwareStats(
   const todayIso = toIsoDate(today);
   const cursor = new Date(today);
   for (let guard = 0; guard < 3650; guard++) {
-    if (isLibraryHoliday(cursor)) {
+    if (isLibraryClosed(cursor, extraHolidays)) {
       cursor.setDate(cursor.getDate() - 1);
       continue;
     }

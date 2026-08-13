@@ -15,6 +15,7 @@ const NAV_ACTIONS = [
   { to: "/coaching-classes", label: "Open coaching classes" },
   { to: "/other-activities", label: "Open other activities" },
   { to: "/analytics", label: "Open student analytics" },
+  { to: "/holidays", label: "Manage holidays" },
 ];
 
 interface NavAction {

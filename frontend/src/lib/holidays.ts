@@ -37,4 +37,21 @@ export function isLibraryHoliday(input: Date | string): boolean {
   return false;
 }
 
+const NO_EXTRA_HOLIDAYS: ReadonlySet<string> = new Set();
+
+/**
+ * Is the library closed on this date? One-off closures recorded by staff
+ * (the holidays API, e.g. a festival) are checked first, then the standing
+ * rule above. This is the single predicate every analytics/calendar call
+ * should use.
+ */
+export function isLibraryClosed(
+  input: Date | string,
+  extraHolidays: ReadonlySet<string> = NO_EXTRA_HOLIDAYS,
+): boolean {
+  const date = typeof input === "string" ? parseLocalDate(input) : input;
+  if (extraHolidays.has(toIsoDate(date))) return true;
+  return isLibraryHoliday(date);
+}
+
 export const HOLIDAY_RULE_DESCRIPTION = "Sundays, and the 2nd, 4th & 5th Saturdays of each month";

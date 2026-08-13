@@ -107,6 +107,7 @@ def apply_runtime_schema_guards() -> None:
             """
         )
         _ensure_device_ledger_tables(conn)
+        _ensure_holidays_table(conn)
 
 
 def _ensure_device_ledger_tables(conn) -> None:
@@ -179,6 +180,25 @@ def _ensure_device_ledger_tables(conn) -> None:
     _add_column_if_missing(conn, "device_state", "last_archive_count", "last_archive_count INTEGER")
     _add_column_if_missing(conn, "device_state", "last_clear_at", "last_clear_at TEXT")
     _add_column_if_missing(conn, "device_state", "clear_failures", "clear_failures INTEGER")
+
+
+def _ensure_holidays_table(conn) -> None:
+    """
+    Create the one-off holidays table on databases that predate it
+    (schema.sql now ships it for fresh installs). Pure additive migration:
+    idempotent, never touches existing rows.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS holidays (
+            holiday_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            holiday_date DATE NOT NULL UNIQUE,
+            name         TEXT NOT NULL CHECK(length(trim(name)) > 0),
+            notes        TEXT,
+            created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
 
 
 def _add_column_if_missing(conn, table: str, column: str, ddl: str) -> None:

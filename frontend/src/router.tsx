@@ -22,6 +22,7 @@ const CoachingClassDetail = lazy(() => import("./pages/coaching/CoachingClassDet
 const OtherActivitiesPage = lazy(() => import("./pages/other-activities/OtherActivitiesPage").then((m) => ({ default: m.OtherActivitiesPage })));
 const OtherActivityDetail = lazy(() => import("./pages/other-activities/OtherActivityDetail").then((m) => ({ default: m.OtherActivityDetail })));
 const StudentAnalyticsPage = lazy(() => import("./pages/analytics/StudentAnalyticsPage").then((m) => ({ default: m.StudentAnalyticsPage })));
+const HolidaysPage = lazy(() => import("./pages/holidays/HolidaysPage").then((m) => ({ default: m.HolidaysPage })));
 
 function LazyPage({ children }: { children: ReactNode }) {
   return (
@@ -49,6 +50,7 @@ export const router = createBrowserRouter([
       { path: "quizzes/:quizId", element: <LazyPage><QuizDetail /></LazyPage> },
       { path: "analytics", element: <LazyPage><StudentAnalyticsPage /></LazyPage> },
       { path: "analytics/:studentId", element: <LazyPage><StudentAnalyticsPage /></LazyPage> },
+      { path: "holidays", element: <LazyPage><HolidaysPage /></LazyPage> },
       { path: "settings", element: <LazyPage><SettingsPage /></LazyPage> },
       { path: "coaching-classes", element: <LazyPage><CoachingClassesPage /></LazyPage> },
       { path: "coaching-classes/:classId", element: <LazyPage><CoachingClassDetail /></LazyPage> },

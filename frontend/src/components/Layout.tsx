@@ -16,6 +16,7 @@ import {
   Settings as SettingsIcon,
   CircleAlert,
   BarChart3,
+  CalendarDays,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
@@ -123,7 +124,10 @@ const NAV_SECTIONS = [
   },
   {
     label: "Reports",
-    items: [{ to: "/analytics", icon: BarChart3, label: "Student analytics" }],
+    items: [
+      { to: "/analytics", icon: BarChart3, label: "Student analytics" },
+      { to: "/holidays", icon: CalendarDays, label: "Holidays" },
+    ],
   },
 ];
 

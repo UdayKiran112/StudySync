@@ -175,6 +175,23 @@ export interface SubscriptionSummary {
   usage_by_subscription: { name: string; count: number }[];
 }
 
+/** One-off library closure recorded by staff (see api/holidays.ts). */
+export interface Holiday {
+  holiday_id: number;
+  holiday_date: string;
+  name: string;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface HolidayCreateInput {
+  holiday_date: string;
+  name: string;
+  notes?: string | null;
+}
+
+export type HolidayUpdateInput = Partial<HolidayCreateInput>;
+
 export interface Book {
   book_id: string;
   title: string;

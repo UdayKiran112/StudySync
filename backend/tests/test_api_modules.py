@@ -339,6 +339,68 @@ class ApiModuleTests(unittest.TestCase):
         response = self.request("GET", "/api/sync/history")
         self.assertEqual(response.status_code, 429)
 
+    def test_15_holidays_module(self):
+        # CRUD for one-off library closure days. Duplicate dates are rejected
+        # (UNIQUE on holiday_date); range filters and rename/move work.
+        created = self.request(
+            "POST",
+            "/api/holidays",
+            json={"holiday_date": "2026-10-20", "name": "Test Closure", "notes": "Power cut"},
+        )
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.json()["name"], "Test Closure")
+
+        # The same date cannot be booked twice.
+        duplicate = self.request(
+            "POST",
+            "/api/holidays",
+            json={"holiday_date": "2026-10-20", "name": "Second Booking"},
+        )
+        self.assertEqual(duplicate.status_code, 409)
+
+        listed = self.request("GET", "/api/holidays").json()
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["holiday_date"], "2026-10-20")
+
+        # Range filter keeps only dates inside the window.
+        out_of_range = self.request(
+            "POST",
+            "/api/holidays",
+            json={"holiday_date": "2027-01-01", "name": "New Year"},
+        )
+        self.assertEqual(out_of_range.status_code, 201)
+        filtered = self.request(
+            "GET", "/api/holidays?from_date=2026-01-01&to_date=2026-12-31"
+        ).json()
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["name"], "Test Closure")
+
+        # Rename and move a holiday; moving onto a booked date conflicts.
+        holiday_id = listed[0]["holiday_id"]
+        renamed = self.request(
+            "PATCH",
+            f"/api/holidays/{holiday_id}",
+            json={"name": "Renamed Closure", "holiday_date": "2026-10-21"},
+        )
+        self.assertEqual(renamed.status_code, 200)
+        self.assertEqual(renamed.json()["name"], "Renamed Closure")
+        self.assertEqual(renamed.json()["holiday_date"], "2026-10-21")
+        conflict = self.request(
+            "PATCH", f"/api/holidays/{holiday_id}", json={"holiday_date": "2027-01-01"}
+        )
+        self.assertEqual(conflict.status_code, 409)
+
+        # Empty updates and unknown ids are rejected cleanly.
+        self.assertEqual(self.request("PATCH", f"/api/holidays/{holiday_id}", json={}).status_code, 400)
+        self.assertEqual(self.request("GET", "/api/holidays/999999").status_code, 404)
+        self.assertEqual(self.request("DELETE", "/api/holidays/999999").status_code, 404)
+
+        # Delete both recorded holidays; the list empties out.
+        self.assertEqual(self.request("DELETE", f"/api/holidays/{holiday_id}").status_code, 204)
+        new_year_id = out_of_range.json()["holiday_id"]
+        self.assertEqual(self.request("DELETE", f"/api/holidays/{new_year_id}").status_code, 204)
+        self.assertEqual(self.request("GET", "/api/holidays").json(), [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
