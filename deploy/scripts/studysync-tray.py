@@ -7,7 +7,7 @@ Runs persistently in the notification area. The icon color reflects overall
 health (green = all services running, amber = starting/pending, red = a
 service stopped). Clicking the icon opens a small status window that lists
 every backend service with its live state and a Restart button for each; the
-tray menu also has "Restart All Stopped".
+tray menu also has "Restart All Stopped" and "Stop All Services".
 
 Performance design
 ------------------
@@ -123,6 +123,11 @@ def restart_service(name: str) -> None:
     run_cmd(["sc", "stop", name])
     time.sleep(2)
     run_cmd(["sc", "start", name])
+
+
+def stop_service(name: str) -> None:
+    _log(f"Stop requested for {name}")
+    run_cmd(["sc", "stop", name])
 
 
 def _display_state(raw: str) -> str:
@@ -362,6 +367,20 @@ def _restart_all_worker(monitor: Monitor) -> None:
     monitor.request_refresh()
 
 
+def stop_all(monitor: Monitor):
+    threading.Thread(target=_stop_all_worker, args=(monitor,), daemon=True).start()
+
+
+def _stop_all_worker(monitor: Monitor) -> None:
+    # Only the services that are actually up need stopping; the others are
+    # already where we want them. Runs in a worker thread, never on the UI.
+    snap = monitor.snapshot()["states"]
+    names = [name for name, _, _ in SERVICES if snap.get(name) == "RUNNING"]
+    for name in names:
+        run_cmd(["sc", "stop", name])
+    monitor.request_refresh()
+
+
 def build_menu(monitor: Monitor) -> Menu:
     snap = monitor.snapshot()
     states = snap["states"]
@@ -381,6 +400,7 @@ def build_menu(monitor: Monitor) -> Menu:
     items.append(MenuItem(mdns_label, None, enabled=False))
     items.append(Menu.SEPARATOR)
     items.append(MenuItem("Restart All Stopped", lambda icon, item: restart_all(monitor)))
+    items.append(MenuItem("Stop All Services", lambda icon, item: stop_all(monitor)))
     items.append(MenuItem("Exit", lambda icon, item: quit_app()))
     return Menu(*items)
 
@@ -444,6 +464,8 @@ class StatusWindow:
         tk.Button(footer, text="Refresh", font=("Segoe UI", 9), command=self.refresh).pack(side="left")
         tk.Button(footer, text="Restart All Stopped", font=("Segoe UI", 9),
                   command=lambda: restart_all(self.monitor)).pack(side="left", padx=6)
+        tk.Button(footer, text="Stop All Services", font=("Segoe UI", 9),
+                  command=lambda: stop_all(self.monitor)).pack(side="left", padx=6)
         tk.Button(footer, text="Close", font=("Segoe UI", 9), command=self.hide).pack(side="right")
 
     def _restart_one(self, name: str) -> None:
