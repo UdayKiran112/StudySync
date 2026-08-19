@@ -50,12 +50,6 @@ router = APIRouter(
 # between endpoints (or with database.py's per-connection status sync).
 VALID_UNTIL_EXPR = "date(join_date, '+' || (renewal_count + 1) || ' years')"
 
-# Cap on how many whole years one attendance event may auto-renew. Guards
-# against a pathological join_date (e.g. a data-entry typo from the 1990s)
-# turning into an unbounded loop; one iteration per missing year is already
-# far more than any real membership needs.
-MAX_AUTO_RENEWS = 365
-
 
 def auto_renew_if_expired(
     db: sqlite3.Connection, student_id: int, today: Optional[date] = None
@@ -66,11 +60,10 @@ def auto_renew_if_expired(
     call this before recording presence.
 
     If the student's membership is expired by ``today``, auto-renew it by
-    incrementing ``renewal_count`` in whole-year steps -- anchored to
-    ``join_date``, exactly the VALID_UNTIL_EXPR formula -- until
-    ``valid_until`` covers ``today``, then set status back to 'Active'.
-    Returns True if a renewal was applied, False if the student was already
-    valid (or doesn't exist).
+    computing the exact number of whole years needed to cover ``today``
+    (anchored to ``join_date`` via ``VALID_UNTIL_EXPR``) and applying them
+    in a single UPDATE -- no loop required.  Returns True if a renewal was
+    applied, False if the student was already valid (or doesn't exist).
 
     Unlike the manual renew endpoint (one year per click), an attendance
     event is a show-up: the student is physically at the desk, so their
@@ -87,22 +80,18 @@ def auto_renew_if_expired(
     if row is None or row["valid_until"] >= today_iso:
         return False
 
-    for _ in range(MAX_AUTO_RENEWS):
-        db.execute(
-            "UPDATE students SET renewal_count = renewal_count + 1 WHERE student_id = ?",
-            (student_id,),
-        )
-        row = db.execute(
-            f"SELECT {VALID_UNTIL_EXPR} AS valid_until FROM students WHERE student_id = ?",
-            (student_id,),
-        ).fetchone()
-        if row["valid_until"] >= today_iso:
-            break
-    # Reuse the shared formula for status so a cap-exhausted (pathological)
-    # student can't end up 'Active' while the validity math says otherwise.
+    # Compute the exact number of whole years needed to cover today in one
+    # shot.  CEIL(gap_days / 365.25) gives the minimum integer delta that
+    # makes valid_until >= today, where gap_days is the shortfall between
+    # today and the current valid_until.  The old loop incremented one year
+    # at a time (up to MAX_AUTO_RENEWS iterations); this is a single SQL
+    # statement that produces the identical result without round-trips.
     db.execute(
         f"""UPDATE students
-        SET status = CASE WHEN {VALID_UNTIL_EXPR} < ? THEN 'Inactive' ELSE 'Active' END
+        SET renewal_count = renewal_count + MAX(1,
+                CAST(CEIL((julianday(?) - julianday({VALID_UNTIL_EXPR})) / 365.25) AS INTEGER)
+            ),
+            status = 'Active'
         WHERE student_id = ?""",
         (today_iso, student_id),
     )

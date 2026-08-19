@@ -51,6 +51,7 @@ from zkteco.config import (
     buffer_auto_clear_enabled,
     buffer_clear_percent,
     effective_device_config,
+    invalidate_effective_device_config,
     reconcile_interval,
 )
 from zkteco.device import (
@@ -497,6 +498,7 @@ async def zkteco_reconcile_loop(stop_event: asyncio.Event) -> None:
             await asyncio.to_thread(reconcile_once)
         except ZkError as e:
             # Device unreachable -- nothing to do but retry next cycle.
+            invalidate_effective_device_config()
             logger.warning("ZKTeco reconcile failed (device unreachable?): %s", e)
         except Exception:  # never let one bad cycle kill the loop
             logger.exception("ZKTeco reconcile crashed; retrying next cycle.")

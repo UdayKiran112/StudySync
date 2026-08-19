@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from database import get_db_dependency
+from database import get_db_dependency, ensure_active_student
 from models.exams import (
     ExamCreate,
     ExamMarkCreate,
@@ -37,16 +37,6 @@ def _get_exam(db: sqlite3.Connection, exam_id: int) -> sqlite3.Row:
     if not row:
         raise HTTPException(status_code=404, detail=f"Exam {exam_id} not found")
     return row
-
-
-def _ensure_active_student(db: sqlite3.Connection, student_id: int) -> None:
-    row = db.execute(
-        "SELECT student_id, status FROM students WHERE student_id = ?", (student_id,)
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
-    if row["status"] != "Active":
-        raise HTTPException(status_code=400, detail=f"Student {student_id} is inactive")
 
 
 def _ensure_marks_within_max(
@@ -190,7 +180,7 @@ def create_exam_mark(
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     exam = _get_exam(db, exam_id)
-    _ensure_active_student(db, mark.student_id)
+    ensure_active_student(db, mark.student_id)
     _ensure_marks_within_max(db, exam_id, mark.marks_obtained, exam["max_marks"])
     try:
         cursor = db.execute(

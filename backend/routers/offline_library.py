@@ -20,7 +20,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 
-from database import get_db_dependency
+from database import get_db_dependency, ensure_active_student
 from models.offline_library import (
     OfflineLibraryCreate,
     OfflineLibraryUpdate,
@@ -38,16 +38,6 @@ router = APIRouter(
     tags=["Offline Library"],
     dependencies=[Depends(require_api_key)],
 )
-
-
-def _ensure_student_exists(db: sqlite3.Connection, student_id: int) -> None:
-    row = db.execute(
-        "SELECT student_id, status FROM students WHERE student_id = ?", (student_id,)
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
-    if row["status"] != "Active":
-        raise HTTPException(status_code=400, detail=f"Student {student_id} is inactive")
 
 
 def _ensure_book_exists(db: sqlite3.Connection, book_id: str) -> None:
@@ -72,7 +62,7 @@ def create_offline_usage(
     If this entry has a book_id (not a self-study entry) and auto-created
     self-study records exist for this date, they will be cleaned up.
     """
-    _ensure_student_exists(db, payload.student_id)
+    ensure_active_student(db, payload.student_id)
 
     if payload.book_id is not None:
         _ensure_book_exists(db, payload.book_id)

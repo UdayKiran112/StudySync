@@ -17,12 +17,26 @@ The Google Sheet must be shared with the service-account email
 (found inside the JSON key file) with Editor access.
 """
 
+import logging
 import os
+import time
+from typing import Optional
 
 import gspread
 from google.oauth2.service_account import Credentials
 
+logger = logging.getLogger("studysync.sheets")
+
 _DEFAULT_MAX_CELLS_PER_REQUEST = 100_000
+
+# Credentials are loaded once and cached.  Google service-account tokens
+# are valid for ~1 hour; we re-read the JSON key file at most once per 30
+# minutes so a rotated key takes effect without a restart, while avoiding
+# 8 redundant file parses per full-sync cycle.
+_CREDS_CACHE_TTL_SECONDS = 1800
+_cached_creds: Optional[Credentials] = None
+_cached_spreadsheet_id: str = ""
+_cached_creds_loaded_at: float = 0.0
 
 
 class SheetsConfigError(Exception):
@@ -36,12 +50,27 @@ _SCOPES = [
 
 
 def _get_credentials() -> tuple[Credentials, str]:
-    """Load credentials and return (creds, spreadsheet_id)."""
+    """Load credentials (cached) and return (creds, spreadsheet_id).
+
+    The JSON key file is read at most once every 30 minutes.  Between
+    refreshes the cached object is returned directly, eliminating 7
+    redundant file parses per 8-tab sync cycle.
+    """
+    global _cached_creds, _cached_spreadsheet_id, _cached_creds_loaded_at
+
     spreadsheet_id = os.environ.get("GOOGLE_SPREADSHEET_ID", "")
     if not spreadsheet_id:
         raise SheetsConfigError(
             "GOOGLE_SPREADSHEET_ID environment variable is not set."
         )
+
+    now = time.monotonic()
+    if (
+        _cached_creds is not None
+        and _cached_spreadsheet_id == spreadsheet_id
+        and (now - _cached_creds_loaded_at) < _CREDS_CACHE_TTL_SECONDS
+    ):
+        return _cached_creds, spreadsheet_id
 
     creds_file = os.environ.get("GOOGLE_CREDS_FILE", "credentials.json")
     if not os.path.isfile(creds_file):
@@ -51,6 +80,10 @@ def _get_credentials() -> tuple[Credentials, str]:
         )
 
     creds = Credentials.from_service_account_file(creds_file, scopes=_SCOPES)
+    _cached_creds = creds
+    _cached_spreadsheet_id = spreadsheet_id
+    _cached_creds_loaded_at = now
+    logger.debug("Google Sheets credentials loaded from %s", creds_file)
     return creds, spreadsheet_id
 
 

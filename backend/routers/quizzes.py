@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from database import get_db_dependency
+from database import get_db_dependency, ensure_active_student
 from models.quizzes import (
     QuizCreate,
     QuizResponse,
@@ -37,16 +37,6 @@ def _get_quiz(db: sqlite3.Connection, quiz_id: int) -> sqlite3.Row:
     if not row:
         raise HTTPException(status_code=404, detail=f"Quiz {quiz_id} not found")
     return row
-
-
-def _ensure_active_student(db: sqlite3.Connection, student_id: int) -> None:
-    row = db.execute(
-        "SELECT student_id, status FROM students WHERE student_id = ?", (student_id,)
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
-    if row["status"] != "Active":
-        raise HTTPException(status_code=400, detail=f"Student {student_id} is inactive")
 
 
 def _ensure_score_within_max(score: float, max_marks: float) -> None:
@@ -162,7 +152,7 @@ def create_quiz_score(
     db: sqlite3.Connection = Depends(get_db_dependency),
 ):
     quiz = _get_quiz(db, quiz_id)
-    _ensure_active_student(db, score.student_id)
+    ensure_active_student(db, score.student_id)
     _ensure_score_within_max(score.score, quiz["max_marks"])
     try:
         cursor = db.execute(

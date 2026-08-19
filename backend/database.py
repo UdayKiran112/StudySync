@@ -9,11 +9,14 @@ Without it, your CHECK constraints tying account_type/subscription_id
 together will still work, but FK ON DELETE RESTRICT will not.
 """
 
+import logging
 import os
 import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
 from datetime import date
+
+logger = logging.getLogger("studysync.database")
 
 # Path to the SQLite database file. Overridable via STUDYSYNC_DB_PATH so
 # production deployments can keep data (and WAL files) in a separate data
@@ -34,44 +37,64 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA journal_mode = WAL")
-    # Membership lasts one year from join_date, extended by one more year
-    # per renewal (join_date itself never changes -- see routers/students.py
-    # renew_student). This runs for every API connection so the stored
-    # status always matches the validity formula, even between server
-    # restarts. Attendance is the one deliberate exception: an expired
-    # student who shows up at the desk (or swipes the ZKTeco device) is
-    # auto-renewed on check-in instead of blocked -- see
-    # routers/students.py auto_renew_if_expired.
+    return conn
+
+
+def sync_student_statuses(conn) -> None:
+    """
+    Synchronise stored ``status`` columns to the current date so every
+    read reflects whether the membership/subscription is still valid.
+
+    Runs as a periodic background task (see main.py lifespan) instead of
+    on every API connection.  This avoids two full-table UPDATE scans
+    (students + subscriptions) plus an unconditional commit on every
+    request, which was the single biggest per-request cost and a source
+    of WAL writer lock contention under concurrent access.
+
+    Attendance is the one deliberate exception: an expired student who
+    shows up at the desk (or swipes the ZKTeco device) is auto-renewed
+    on check-in instead of blocked -- see
+    routers/students.py auto_renew_if_expired.
+    """
+    today = date.today().isoformat()
     conn.execute(
         """UPDATE students
         SET status = CASE WHEN date(join_date, '+' || (renewal_count + 1) || ' years') < ? THEN 'Inactive' ELSE 'Active' END
         WHERE status != CASE WHEN date(join_date, '+' || (renewal_count + 1) || ' years') < ? THEN 'Inactive' ELSE 'Active' END""",
-        (date.today().isoformat(), date.today().isoformat()),
+        (today, today),
     )
-    # Same idea for subscriptions: valid until start_date + validity_days.
-    # Only touches rows that actually HAVE a validity_days set AND a
-    # start_date -- a subscription with no defined validity period
-    # (validity_days IS NULL) or no start_date yet keeps whatever status
-    # staff set manually, since there's no date math to base an automatic
-    # decision on.
     conn.execute(
         """UPDATE subscriptions
         SET status = CASE WHEN date(start_date, '+' || validity_days || ' days') < ? THEN 'Expired' ELSE 'Active' END
         WHERE validity_days IS NOT NULL
           AND start_date IS NOT NULL
           AND status != CASE WHEN date(start_date, '+' || validity_days || ' days') < ? THEN 'Expired' ELSE 'Active' END""",
-        (date.today().isoformat(), date.today().isoformat()),
+        (today, today),
     )
-    # Commit the status refresh immediately so the connection does NOT start
-    # inside a write transaction. Otherwise any caller that performs slow I/O
-    # while holding this connection (e.g. a pyzk device read that can block
-    # for ZK_DEVICE_TIMEOUT seconds) keeps the WAL writer lock for the whole
-    # call, and every other connection fails with "database is locked" after
-    # the 5s busy_timeout. Committing here just persists the same bookkeeping
-    # the caller's final commit would have, so behaviour is unchanged for
-    # everyone else.
     conn.commit()
-    return conn
+
+
+def _status_sync_loop(interval: int = 30, stop_event=None) -> None:
+    """
+    Background thread that keeps stored statuses in sync with the current
+    date.  Sleeps for *interval* seconds between passes.  Called from
+    main.py lifespan so it runs for the lifetime of the process.
+    """
+    import time
+
+    while True:
+        try:
+            conn = get_connection()
+            try:
+                sync_student_statuses(conn)
+            finally:
+                conn.close()
+        except Exception:
+            logger.exception("Background status sync failed; retrying next cycle.")
+        if stop_event is not None and stop_event.wait(timeout=interval):
+            break
+        elif stop_event is None:
+            time.sleep(interval)
 
 
 def apply_runtime_schema_guards() -> None:
@@ -256,6 +279,25 @@ def _add_column_if_missing(conn, table: str, column: str, ddl: str) -> None:
     columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
+def ensure_active_student(conn, student_id: int) -> None:
+    """Raise 404 if *student_id* doesn't exist, 400 if its status is not Active.
+
+    Shared by digital_library, offline_library, exams, quizzes, and any
+    other router that gates write operations on an active student record.
+    Centralising this avoids four identical copies that would otherwise
+    drift independently.
+    """
+    from fastapi import HTTPException
+
+    row = conn.execute(
+        "SELECT student_id, status FROM students WHERE student_id = ?", (student_id,)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
+    if row["status"] != "Active":
+        raise HTTPException(status_code=400, detail=f"Student {student_id} is inactive")
 
 
 @contextmanager

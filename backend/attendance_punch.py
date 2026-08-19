@@ -445,6 +445,53 @@ def _find_conflicting_session(
     ).fetchone()
 
 
+def _log_and_delete_conflicting_session(
+    db: sqlite3.Connection,
+    student_id: int,
+    day: str,
+    final_session: str,
+    device_check_in: str,
+    device_check_out: str,
+    conflicting,
+) -> None:
+    """
+    Shared helper for both the UPDATE-path (``_resolve_session_conflict``)
+    and the INSERT-path (``_drop_conflicting_session``) conflict
+    resolution.  Logs the full diagnostic warning and deletes the stale
+    pre-existing row so the device-derived row can take its place.
+    """
+    punches = db.execute(
+        """SELECT punch_time, state FROM device_punches
+           WHERE student_id = ? AND punch_time LIKE ? AND punch_time != ''
+           ORDER BY punch_time""",
+        (student_id, day + "%"),
+    ).fetchall()
+
+    logger.warning(
+        "Session conflict reconciled: student %s on %s -- the device punch "
+        "stream derives session=%s (check_in=%s, check_out=%s) but an existing "
+        "row already claims that session (attendance_id=%s, session=%s, "
+        "check_in=%s, check_out=%s). PyZK device data is authoritative, so the "
+        "obsolete pre-existing row is removed and the device-derived row is "
+        "kept. Device punches recorded for the day: %s",
+        student_id,
+        day,
+        final_session,
+        device_check_in,
+        device_check_out,
+        conflicting["attendance_id"],
+        conflicting["session"],
+        conflicting["check_in"],
+        conflicting["check_out"],
+        [(p["punch_time"], p["state"]) for p in punches],
+    )
+
+    db.execute(
+        "DELETE FROM attendance WHERE attendance_id = ?",
+        (conflicting["attendance_id"],),
+    )
+
+
 def _resolve_session_conflict(
     db: sqlite3.Connection,
     student_id: int,
@@ -481,36 +528,9 @@ def _resolve_session_conflict(
     )
     if conflicting is None:
         return
-
-    punches = db.execute(
-        """SELECT punch_time, state FROM device_punches
-           WHERE student_id = ? AND punch_time LIKE ? AND punch_time != ''
-           ORDER BY punch_time""",
-        (student_id, day + "%"),
-    ).fetchall()
-
-    logger.warning(
-        "Session conflict reconciled: student %s on %s -- the device punch "
-        "stream derives session=%s (check_in=%s, check_out=%s) but an existing "
-        "row already claims that session (attendance_id=%s, session=%s, "
-        "check_in=%s, check_out=%s). PyZK device data is authoritative, so the "
-        "obsolete pre-existing row is removed and the device-derived row is "
-        "kept. Device punches recorded for the day: %s",
-        student_id,
-        day,
-        final_session,
-        keep_check_in,
-        keep_check_out,
-        conflicting["attendance_id"],
-        conflicting["session"],
-        conflicting["check_in"],
-        conflicting["check_out"],
-        [(p["punch_time"], p["state"]) for p in punches],
-    )
-
-    db.execute(
-        "DELETE FROM attendance WHERE attendance_id = ?",
-        (conflicting["attendance_id"],),
+    _log_and_delete_conflicting_session(
+        db, student_id, day, final_session,
+        keep_check_in, keep_check_out, conflicting,
     )
 
 
@@ -584,36 +604,9 @@ def _drop_conflicting_session(
     )
     if conflicting is None:
         return
-
-    punches = db.execute(
-        """SELECT punch_time, state FROM device_punches
-           WHERE student_id = ? AND punch_time LIKE ? AND punch_time != ''
-           ORDER BY punch_time""",
-        (student_id, day + "%"),
-    ).fetchall()
-
-    logger.warning(
-        "Session conflict reconciled: student %s on %s -- the device punch "
-        "stream derives session=%s (check_in=%s, check_out=%s) but an existing "
-        "row already claims that session (attendance_id=%s, session=%s, "
-        "check_in=%s, check_out=%s). PyZK device data is authoritative, so the "
-        "obsolete pre-existing row is removed and the device-derived row is "
-        "kept. Device punches recorded for the day: %s",
-        student_id,
-        day,
-        final_session,
-        check_in,
-        check_out,
-        conflicting["attendance_id"],
-        conflicting["session"],
-        conflicting["check_in"],
-        conflicting["check_out"],
-        [(p["punch_time"], p["state"]) for p in punches],
-    )
-
-    db.execute(
-        "DELETE FROM attendance WHERE attendance_id = ?",
-        (conflicting["attendance_id"],),
+    _log_and_delete_conflicting_session(
+        db, student_id, day, final_session,
+        check_in, check_out, conflicting,
     )
 
 

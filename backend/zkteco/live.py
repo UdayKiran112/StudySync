@@ -84,7 +84,7 @@ from typing import Optional
 
 from database import get_connection
 from attendance_punch import capture_and_apply
-from zkteco.config import effective_device_config, live_reconnect_seconds
+from zkteco.config import effective_device_config, invalidate_effective_device_config, live_reconnect_seconds
 from zkteco.device import build_zk
 
 logger = logging.getLogger("zkteco.live")
@@ -202,6 +202,7 @@ def _run_until_stopped(stop_event: threading.Event) -> None:
                 e,
                 backoff,
             )
+            invalidate_effective_device_config()
             _set_state(connected=False, last_error=str(e))
             stop_event.wait(backoff)
             continue

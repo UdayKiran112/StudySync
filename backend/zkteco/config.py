@@ -88,6 +88,7 @@ the operator wires the machine up.
 """
 
 import os
+import threading
 from dataclasses import dataclass
 from typing import Optional
 
@@ -108,11 +109,22 @@ class ZkDeviceConfig:
     timeout: int
 
 
-def device_config() -> Optional[ZkDeviceConfig]:
-    """Return the device config from the environment, or None if no IP set."""
-    ip = os.getenv("ZK_DEVICE_IP", "").strip()
-    if not ip:
-        return None
+# ---------------------------------------------------------------------------
+# In-memory cache for the effective device configuration.
+#
+# Once a device has been discovered (or the operator picked one) and a
+# successful connection has been established, there is no need to re-read
+# the ``runtime_config`` table on every poll / reconcile / live cycle.
+# The cached value is reused until ``invalidate_effective_device_config()``
+# is called -- which only happens when a connection attempt fails, so a
+# new scan or operator pick takes effect immediately while the happy path
+# avoids the DB round-trip entirely.
+# ---------------------------------------------------------------------------
+_effective_config_cache: Optional[ZkDeviceConfig] = None
+_effective_config_lock = threading.Lock()
+
+
+def _build_config(ip: str) -> ZkDeviceConfig:
     return ZkDeviceConfig(
         ip=ip,
         port=int(os.getenv("ZK_DEVICE_PORT", "4370")),
@@ -121,23 +133,40 @@ def device_config() -> Optional[ZkDeviceConfig]:
     )
 
 
+def device_config() -> Optional[ZkDeviceConfig]:
+    """Return the device config from the environment, or None if no IP set."""
+    ip = os.getenv("ZK_DEVICE_IP", "").strip()
+    if not ip:
+        return None
+    return _build_config(ip)
+
+
 def effective_device_config(db=None) -> Optional[ZkDeviceConfig]:
     """
     The device StudySync should talk to right now.
 
     Precedence:
-      1. ``runtime_config.zk.device_ip`` -- the device the discovery feature
+      1. In-memory cache (fast path -- no DB round-trip).
+      2. ``runtime_config.zk.device_ip`` -- the device the discovery feature
          auto-healed to, or the operator explicitly selected in Settings.
          Persisted in the database (writable by the service account), so it
          survives restarts and update swaps.
-      2. ``ZK_DEVICE_IP`` in the environment -- the .env value, used as the
+      3. ``ZK_DEVICE_IP`` in the environment -- the .env value, used as the
          seed/first-run config and when discovery has never run.
 
     The runtime value wins because it is always the freshest known-good
     address: an auto-heal only records an IP after a successful connect,
     and a DHCP re-lease (the MB360 moving from .101 to .100, say) is exactly
     the case where the .env value goes stale.
+
+    Call ``invalidate_effective_device_config()`` to clear the cache (e.g.
+    after a connection failure triggers a new scan).
     """
+    global _effective_config_cache
+    with _effective_config_lock:
+        if _effective_config_cache is not None:
+            return _effective_config_cache
+
     from database import get_connection
     from zkteco.discovery import discovered_device_config
 
@@ -149,9 +178,22 @@ def effective_device_config(db=None) -> Optional[ZkDeviceConfig]:
     finally:
         if owns_db:
             db.close()
-    if discovered is not None:
-        return discovered
-    return device_config()
+    cfg = discovered if discovered is not None else device_config()
+
+    with _effective_config_lock:
+        _effective_config_cache = cfg
+    return cfg
+
+
+def invalidate_effective_device_config() -> None:
+    """Drop the cached config so the next call re-reads from the database.
+
+    Called after a connection failure so a fresh scan or operator pick
+    takes effect on the next cycle without waiting for a restart.
+    """
+    global _effective_config_cache
+    with _effective_config_lock:
+        _effective_config_cache = None
 
 
 def poll_interval() -> int:

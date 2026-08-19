@@ -22,7 +22,7 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 
-from database import get_db_dependency
+from database import get_db_dependency, ensure_active_student
 from models.digital_library import (
     DigitalLibraryCheckIn,
     DigitalLibraryCheckOut,
@@ -42,16 +42,6 @@ router = APIRouter(
 def _current_time_hhmm() -> str:
     """Server's current time as HH:MM, used when a request omits it."""
     return datetime.now().strftime("%H:%M")
-
-
-def _ensure_student_exists(db: sqlite3.Connection, student_id: int) -> None:
-    row = db.execute(
-        "SELECT student_id, status FROM students WHERE student_id = ?", (student_id,)
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
-    if row["status"] != "Active":
-        raise HTTPException(status_code=400, detail=f"Student {student_id} is inactive")
 
 
 def _find_open_session(
@@ -105,7 +95,7 @@ def check_in(
     open session (any date). For 'Library Subscription' accounts, 404 if
     the subscription_id doesn't exist, 400 if it's Expired.
     """
-    _ensure_student_exists(db, payload.student_id)
+    ensure_active_student(db, payload.student_id)
 
     open_session = _find_open_session(db, payload.student_id)
     if open_session:

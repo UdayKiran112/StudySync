@@ -36,7 +36,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from database import get_db_dependency
 from security import require_api_key
 from zkteco import device
-from zkteco.config import attendance_mode, effective_device_config
+from zkteco.config import attendance_mode, effective_device_config, invalidate_effective_device_config
 from zkteco.discovery import (
     cache_device,
     cached_device_ip,
@@ -185,6 +185,7 @@ def zk_set_device(
     except Exception:  # never let a probe failure block the operator's pick
         logger.debug("Serial probe for %s failed; storing IP without serial.", ip)
     cache_device(db, ip, serial)
+    invalidate_effective_device_config()
     logger.info("ZKTeco device set by operator: %s", ip)
     return _device_config_status(db)
 
@@ -196,6 +197,7 @@ def zk_clear_device(db: sqlite3.Connection = Depends(get_db_dependency)):
     the .env ZK_DEVICE_IP (or to "not configured").
     """
     clear_cached_device(db)
+    invalidate_effective_device_config()
     logger.info("ZKTeco runtime device config cleared (back to .env / unconfigured).")
     return _device_config_status(db)
 

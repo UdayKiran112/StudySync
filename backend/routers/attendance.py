@@ -112,56 +112,49 @@ def _has_other_activity_on_date(
     - Offline library with book (not auto-created self-study)
 
     Returns True if any of these exist, False if only attendance or nothing.
+    All four checks are folded into a single UNION ALL query so only one
+    round-trip is needed instead of up to four separate SELECTs.
     """
-    # Check digital library
-    has_digital = db.execute(
-        "SELECT 1 FROM digital_library_usage WHERE student_id = ? AND date = ? LIMIT 1",
-        (student_id, session_date),
+    row = db.execute(
+        """SELECT 1 FROM (
+            SELECT 1 FROM digital_library_usage
+             WHERE student_id = ? AND date = ?
+             LIMIT 1
+           UNION ALL
+           SELECT 1 FROM coaching_enrollments ce
+            JOIN coaching_classes cc ON ce.class_id = cc.class_id
+            WHERE (ce.student_id = ? OR
+                   (ce.external_participant_id IS NOT NULL AND
+                    ce.external_participant_id IN (
+                      SELECT external_participant_id FROM external_participants
+                      WHERE student_id IS NULL
+                    )))
+              AND cc.class_date = ?
+            LIMIT 1
+           UNION ALL
+           SELECT 1 FROM other_activities_attendance oa
+            JOIN other_activities o ON oa.activity_id = o.activity_id
+            WHERE (oa.student_id = ? OR
+                   (oa.external_participant_id IS NOT NULL AND
+                    oa.external_participant_id IN (
+                      SELECT external_participant_id FROM external_participants
+                      WHERE student_id IS NULL
+                    )))
+              AND o.session_date = ?
+            LIMIT 1
+           UNION ALL
+           SELECT 1 FROM offline_library_usage
+            WHERE student_id = ? AND date = ? AND book_id IS NOT NULL
+            LIMIT 1
+        ) LIMIT 1""",
+        (
+            student_id, session_date,
+            student_id, session_date,
+            student_id, session_date,
+            student_id, session_date,
+        ),
     ).fetchone()
-    if has_digital:
-        return True
-
-    # Check coaching classes on that date
-    has_coaching = db.execute(
-        """SELECT 1 FROM coaching_enrollments ce
-           JOIN coaching_classes cc ON ce.class_id = cc.class_id
-           WHERE (ce.student_id = ? OR 
-                  (ce.external_participant_id IS NOT NULL AND 
-                   ce.external_participant_id IN (
-                     SELECT external_participant_id FROM external_participants 
-                     WHERE student_id IS NULL
-                   )))
-           AND cc.class_date = ? LIMIT 1""",
-        (student_id, session_date),
-    ).fetchone()
-    if has_coaching:
-        return True
-
-    # Check other activities attendance on that date
-    has_other_activities = db.execute(
-        """SELECT 1 FROM other_activities_attendance oa
-           JOIN other_activities o ON oa.activity_id = o.activity_id
-           WHERE (oa.student_id = ? OR 
-                  (oa.external_participant_id IS NOT NULL AND 
-                   oa.external_participant_id IN (
-                     SELECT external_participant_id FROM external_participants 
-                     WHERE student_id IS NULL
-                   )))
-           AND o.session_date = ? LIMIT 1""",
-        (student_id, session_date),
-    ).fetchone()
-    if has_other_activities:
-        return True
-
-    # Check offline library with actual book (not auto-created NULL entries)
-    has_offline_book = db.execute(
-        "SELECT 1 FROM offline_library_usage WHERE student_id = ? AND date = ? AND book_id IS NOT NULL LIMIT 1",
-        (student_id, session_date),
-    ).fetchone()
-    if has_offline_book:
-        return True
-
-    return False
+    return row is not None
 
 
 def _auto_fill_offline_if_needed(
@@ -220,13 +213,12 @@ def _cleanup_auto_filled_offline_if_needed(
     on the same day, they don't also get a "self-study with own material" record.
     """
     try:
-        # Find auto-created offline entries (book_id is NULL)
-        auto_entries = db.execute(
-            "SELECT usage_id FROM offline_library_usage WHERE student_id = ? AND date = ? AND book_id IS NULL",
+        # Check if there are any auto-created offline entries at all
+        has_auto = db.execute(
+            "SELECT 1 FROM offline_library_usage WHERE student_id = ? AND date = ? AND book_id IS NULL LIMIT 1",
             (student_id, session_date),
-        ).fetchall()
-
-        if not auto_entries:
+        ).fetchone()
+        if not has_auto:
             return
 
         # Check if there are now multiple activities for this date
@@ -259,12 +251,12 @@ def _cleanup_auto_filled_offline_if_needed(
         ).fetchone()
 
         if has_other_activity:
-            # Delete all auto-created self-study entries for this date
-            for entry in auto_entries:
-                db.execute(
-                    "DELETE FROM offline_library_usage WHERE usage_id = ?",
-                    (entry["usage_id"],),
-                )
+            # Delete all auto-created self-study entries for this date in
+            # one statement instead of looping over individual rows.
+            db.execute(
+                "DELETE FROM offline_library_usage WHERE student_id = ? AND date = ? AND book_id IS NULL",
+                (student_id, session_date),
+            )
     except sqlite3.Error:
         logger.exception(
             "Cleanup auto-filled offline records failed for student %s on %s",

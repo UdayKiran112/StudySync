@@ -33,7 +33,7 @@ import time
 
 from database import get_connection
 from attendance_punch import ledger_retention_days, prune_old_ledger_rows
-from zkteco.config import effective_device_config, poll_interval
+from zkteco.config import effective_device_config, invalidate_effective_device_config, poll_interval
 from zkteco.device import ZkError
 from zkteco.discovery import discovered_device_config, scan_and_cache
 from zkteco.sync import sync_attendance_from_device
@@ -174,6 +174,7 @@ def _poll_once() -> None:
                 e,
                 _consecutive_failures,
             )
+            invalidate_effective_device_config()
             if _consecutive_failures >= SCAN_AFTER_FAILURES:
                 _try_heal(db, e)
     finally:

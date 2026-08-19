@@ -1417,10 +1417,10 @@ def _frag_title_similarity(a, b):
 
 def _offline_catalog_reference(df):
     """Build the file-level reference a corrupted Book ID cell is checked
-    against: the set of valid numeric catalog ids and each id's majority
-    title, derived ONLY from well-formed rows (a single numeric Book ID and a
-    single non-empty Book Name), so the noisy multi-book rows can't pollute
-    the mapping."""
+    against: the set of valid numeric catalog ids, each id's majority title,
+    and each id's full known-title tally, derived ONLY from well-formed rows
+    (a single numeric Book ID and a single non-empty Book Name), so the noisy
+    multi-book rows can't pollute the mapping."""
     valid_ids = set()
     title_counts = {}
     for _, row in df.iterrows():
@@ -1436,7 +1436,75 @@ def _offline_catalog_reference(df):
     id_to_title = {
         bid: max(counts, key=counts.get) for bid, counts in title_counts.items()
     }
-    return valid_ids, id_to_title
+    return valid_ids, id_to_title, title_counts
+
+
+# A catalog id that could plausibly be real on its own: 1-6 digit number
+# with no leading zero, or a canonical P-periodical id. Longer pure-digit
+# runs are concatenations of jammed fragments, never real catalog ids.
+VERIFIED_ID_SHAPE = re.compile(r"^[1-9]\d{0,5}$|^P-\d+$")
+
+
+def _verified_offline_ids(df):
+    """Ids that appear in the raw file as a COMPLETE single-id cell (not as a
+    fragment of a comma-juggled or multi-id cell) and look like real catalog
+    ids. This is the ground truth that separates a genuine short id (e.g.
+    '30' Reasoning, recorded alone) from a leftover fragment ('16', '17',
+    '091') that only ever shows up inside a corrupted cell."""
+    verified = set()
+    for _, row in df.iterrows():
+        cell = str(row["Book ID"]).strip()
+        if not cell:
+            continue
+        # A complete single-id cell is exactly one token with no separators.
+        if any(sep in cell for sep in ",;"):
+            continue
+        if " " in cell:
+            continue
+        cand = _canonical_offline_id(cell)
+        if VERIFIED_ID_SHAPE.match(cand):
+            verified.add(cand)
+    return verified
+
+
+# A bare-numeric id that is NOT in the verified set and looks like a
+# fragment: too short to be a catalog id, too long to be one id, or carrying
+# a leading zero. These are leftovers of corrupted cells that no repair could
+# confidently reconstruct.
+FRAGMENT_SHAPE = re.compile(r"^0\d{1,5}$|^\d{1,2}$|^\d{7,}$")
+
+
+def _blank_unverified_fragment_ids(records, verified_ids, log):
+    """Post-pass over the offline records that drops Book IDs which the
+    whole-file repair could not reconstruct and that are demonstrably not
+    real catalog ids: a bare-numeric id never seen as a complete single-id
+    cell anywhere in the file (so '16'/'17'/'091'/'1377936' fragments, not
+    genuine ids) whose shape is fragment-like. The Book ID is blanked so the
+    loader records the visit as an un-catalogued item instead of creating a
+    junk books row; the row is surfaced in the review log with the student
+    and date so it can be resolved by hand. Returns the filtered records."""
+    kept = []
+    for rec in records:
+        bid = rec["Book ID"]
+        if bid and not bid.startswith("P-") and re.fullmatch(r"\d+", bid):
+            if bid not in verified_ids and FRAGMENT_SHAPE.match(bid):
+                log.add(
+                    "offline_library",
+                    "review",
+                    rec["Serial No."],
+                    rec["Serial No."],
+                    rec["Student ID"],
+                    rec["Student Name"],
+                    f"Book ID {bid!r} is a leftover fragment of a corrupted "
+                    f"multi-book cell (never seen as a complete catalog id "
+                    f"anywhere in the file) - id blanked so no junk book is "
+                    f"created; title {rec['Book Name']!r} kept as an "
+                    f"un-catalogued item",
+                    bid,
+                )
+                rec["Book ID"] = ""
+        kept.append(rec)
+    return kept
 
 
 def _all_segmentations(digits, valid_ids, max_pieces, cap=24):
@@ -1465,21 +1533,25 @@ def _all_segmentations(digits, valid_ids, max_pieces, cap=24):
     return results
 
 
-def _repair_fragmented_book_id_cell(cell, book_names, valid_ids, id_to_title):
+def _repair_fragmented_book_id_cell(cell, book_names, valid_ids, id_to_titles):
     """Detect a comma-juggled Book ID cell -- where a repeated or multi-book
     id got its digits scrambled and re-comma'd, e.g. '16,801,680' written for
-    '1680,1680' or '16,301,625' for '1630,1625' -- and reconstruct the real
-    ids. Returns the repaired comma-joined id string, or None when there is
-    no confident repair.
+    '1680,1680' or '16,301,625' for '1630,1625' or '17,091,631' for
+    '1709,1631' -- and reconstruct the real ids. Returns the repaired
+    comma-joined id string, or None when there is no confident repair.
 
-    Confidence rules: every comma fragment must be pure digits; the
+    Confidence rules: every comma fragment must be pure digits (a leading
+    zero in a fragment is itself the corruption, e.g. '091'); the
     concatenated digit run must re-segment into valid catalog ids seen
     elsewhere in the file (well-formed rows only); the reconstruction must
     produce exactly as many ids as recorded book names; and every id's known
-    title must agree with the corresponding recorded name. If the best
-    reconstruction is ambiguous (a close runner-up) it is left alone."""
+    title(s) must agree with the corresponding recorded name -- an id is
+    matched against its FULL known-title tally, not just the majority title,
+    so 'SSC' still validates an id whose majority title is 'SSC Maths'. If
+    the best reconstruction is ambiguous (a close runner-up) it is left
+    alone."""
     fragments = [t.strip() for t in re.split(r"[,;]", cell) if t.strip()]
-    if len(fragments) < 2 or not all(FRAGMENT_ID_PIECE.match(f) for f in fragments):
+    if len(fragments) < 2 or not all(re.fullmatch(r"\d{1,6}", f) for f in fragments):
         return None
     digits = "".join(fragments)
     if len(digits) < 4 or len(digits) > 16:
@@ -1495,12 +1567,16 @@ def _repair_fragmented_book_id_cell(cell, book_names, valid_ids, id_to_title):
     if not candidates:
         return None
 
+    def title_matches(pid, name):
+        info = id_to_titles.get(pid)
+        if not info:
+            return 0.0
+        if isinstance(info, str):
+            return _frag_title_similarity(info, name)
+        return max(_frag_title_similarity(t, name) for t in info)
+
     def score(seg):
-        sims = []
-        for i, pid in enumerate(seg):
-            nm = book_names[i] if i < len(book_names) else ""
-            ttl = id_to_title.get(pid, "")
-            sims.append(_frag_title_similarity(ttl, nm))
+        sims = [title_matches(pid, book_names[i]) for i, pid in enumerate(seg)]
         return (min(sims) if sims else 0.0, -len(seg))
 
     scored = sorted(candidates, key=score, reverse=True)
@@ -1544,7 +1620,8 @@ def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
     mask = (df["Book ID"] != "") | (df["Reference Book"] != "")
     sub = df.loc[mask].copy()
 
-    valid_ids, id_to_title = _offline_catalog_reference(df)
+    valid_ids, _id_to_title, id_to_titles = _offline_catalog_reference(df)
+    verified_ids = _verified_offline_ids(df)
 
     records = []
     for idx, row in sub.iterrows():
@@ -1576,7 +1653,7 @@ def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
         # its digits scrambled and re-comma'd ("16,801,680" for "1680,1680",
         # "16,611,661" for "1661,1661"), and reconstruct the real ids.
         repaired_id = _repair_fragmented_book_id_cell(
-            normalized_id, book_names, valid_ids, id_to_title
+            normalized_id, book_names, valid_ids, id_to_titles
         )
         if repaired_id is not None:
             log.add(
@@ -1635,7 +1712,7 @@ def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
             # normal pattern with no Book ID - just one row per named item.
             # If a name uniquely matches a known catalog title, attach its id.
             for bname in book_names:
-                resolved = _resolve_id_from_book_name(bname, id_to_title)
+                resolved = _resolve_id_from_book_name(bname, _id_to_title)
                 if resolved is not None:
                     log.add(
                         "offline_library",
@@ -1644,7 +1721,7 @@ def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
                         row["Sl.No"],
                         row["ID NO"],
                         row["Name of the Student"],
-                        f"Book Name {bname!r} matched catalog id {resolved!r} (title {id_to_title[resolved]!r}) - Book ID filled in",
+                        f"Book Name {bname!r} matched catalog id {resolved!r} (title {_id_to_title[resolved]!r}) - Book ID filled in",
                         raw_book_name,
                     )
                     add_record(resolved, bname)
@@ -1688,6 +1765,7 @@ def build_offline_library(df: pd.DataFrame, log: ErrorLog) -> pd.DataFrame:
                 add_record(bid, bname)
 
     records = normalize_offline_book_ids(records, log)
+    records = _blank_unverified_fragment_ids(records, verified_ids, log)
 
     return pd.DataFrame(
         records,

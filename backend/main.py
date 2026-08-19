@@ -26,6 +26,7 @@ import contextlib
 import logging
 import os
 import socket
+import threading
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -36,7 +37,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from database import apply_runtime_schema_guards
+from database import apply_runtime_schema_guards, _status_sync_loop
 from rate_limit import limiter
 
 logger = logging.getLogger("studysync")
@@ -134,6 +135,17 @@ async def lifespan(_: FastAPI):
     # "off by default until configured", not the only one.
     stop_event = asyncio.Event()
     zkteco_tasks = []
+    # Background thread that keeps stored student/subscription statuses in
+    # sync with the current date (runs every 30 s instead of on every
+    # connection -- see database.py sync_student_statuses).
+    status_sync_stop = threading.Event()
+    status_sync_thread = threading.Thread(
+        target=_status_sync_loop,
+        args=(30, status_sync_stop),
+        daemon=True,
+        name="status-sync",
+    )
+    status_sync_thread.start()
     if pyzk_enabled:
         mode = attendance_mode()
         # mode "poll" (default): periodic buffer pulls. mode "live":
@@ -159,6 +171,7 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         stop_event.set()
+        status_sync_stop.set()
         for task in zkteco_tasks:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
